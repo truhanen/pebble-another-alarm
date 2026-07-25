@@ -115,3 +115,113 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
     used += (size_t)written;
   }
 }
+
+// ================================= cron mode =================================
+
+// Parses an unsigned decimal integer starting at *p, advancing *p past the
+// digits consumed. Returns true and sets *out on success (at least one
+// digit); false (leaving *p unchanged) if *p doesn't start with a digit.
+// Naturally stops at any non-digit (comma, '-', '/', NUL), so callers don't
+// need to separately bound it to a token's end.
+static bool cron_parse_uint(const char **p, int *out) {
+  const char *s = *p;
+  if (*s < '0' || *s > '9') { return false; }
+  int v = 0;
+  while (*s >= '0' && *s <= '9') {
+    v = v * 10 + (*s - '0');
+    s++;
+  }
+  *out = v;
+  *p = s;
+  return true;
+}
+
+// Parses one already-isolated (no commas) token — "*", "*/N", "N", "N-M", or
+// "N-M/N2" — spanning exactly [tok, tok+len), OR-ing its matches into *mask.
+// Returns false on any malformed syntax (out-of-range value, N>M, step<=0,
+// trailing garbage that doesn't reach the token's end, empty token).
+static bool cron_parse_token(const char *tok, int len, int min_val, int max_val, uint64_t *mask) {
+  if (len <= 0) { return false; }
+  const char *p = tok;
+  const char *end = tok + len;
+
+  int range_lo, range_hi;
+  if (*p == '*') {
+    p++;
+    range_lo = min_val; range_hi = max_val;
+  } else {
+    if (!cron_parse_uint(&p, &range_lo)) { return false; }
+    if (range_lo < min_val || range_lo > max_val) { return false; }
+    range_hi = range_lo;
+    if (p < end && *p == '-') {
+      p++;
+      if (!cron_parse_uint(&p, &range_hi)) { return false; }
+      if (range_hi < min_val || range_hi > max_val || range_hi < range_lo) { return false; }
+    }
+  }
+  int step = 1;
+  if (p < end && *p == '/') {
+    p++;
+    if (!cron_parse_uint(&p, &step)) { return false; }
+    if (step <= 0) { return false; }
+  }
+  if (p != end) { return false; }   // trailing garbage that never reached the token's end
+
+  for (int v = range_lo; v <= range_hi; v += step) {
+    *mask |= (1ULL << v);
+  }
+  return true;
+}
+
+bool ac_cron_parse_field(const char *text, int min_val, int max_val, uint64_t *out_mask) {
+  if (!text || !*text) { return false; }
+  uint64_t mask = 0;
+  const char *p = text;
+  while (1) {
+    const char *tok_start = p;
+    while (*p && *p != ',') { p++; }
+    if (!cron_parse_token(tok_start, (int)(p - tok_start), min_val, max_val, &mask)) { return false; }
+    if (!*p) { break; }
+    p++;   // skip the comma; the next loop iteration's len==0 check catches a trailing comma
+  }
+  *out_mask = mask;
+  return true;
+}
+
+int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask,
+                              int now_wday, int now_hour, int now_min,
+                              int *out_hour, int *out_minute) {
+  if (min_mask == 0 || hour_mask == 0 || dow_mask == 0) { return -1; }
+  for (int off = 0; off <= 7; off++) {
+    int wday = (now_wday + off) % 7;
+    if (!(dow_mask & AC_DAY_BIT(wday))) { continue; }
+    int start_hour = (off == 0) ? now_hour : 0;
+    for (int hour = start_hour; hour <= 23; hour++) {
+      if (!(hour_mask & (1u << hour))) { continue; }
+      int start_min = (off == 0 && hour == now_hour) ? now_min + 1 : 0;
+      for (int minute = start_min; minute <= 59; minute++) {
+        if (min_mask & (1ULL << minute)) {
+          if (out_hour) { *out_hour = hour; }
+          if (out_minute) { *out_minute = minute; }
+          return off;
+        }
+      }
+    }
+  }
+  return -1;
+}
+
+bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask, bool enabled,
+                     int now_wday, int now_hour, int now_min,
+                     int32_t now_epoch_min, int32_t last_fired_min) {
+  if (!enabled) { return false; }
+  if (last_fired_min == now_epoch_min) { return false; }   // already handled this exact minute
+  if (!(dow_mask & AC_DAY_BIT(now_wday))) { return false; }
+  if (!(hour_mask & (1u << now_hour))) { return false; }
+  if (!(min_mask & (1ULL << now_min))) { return false; }
+  return true;
+}
+
+void ac_format_cron_summary(char *buf, size_t n, const char *min_str, const char *hour_str, const char *dow_str) {
+  snprintf(buf, n, "%s %s %s", min_str ? min_str : "*", hour_str ? hour_str : "*", dow_str ? dow_str : "*");
+}

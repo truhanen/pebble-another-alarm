@@ -131,6 +131,11 @@ trusting a mental model of the numbering.
 | `TestAlarmSnoozeInSec` | 10019 | int | Seconds from *now* until the snooze deadline — an offset, not an absolute epoch, so a test harness doesn't need to know the device's clock. 0 clears/means not snoozed. |
 | `TestAlarmLastFiredToday` | 10020 | int 0/1 | Stamps the opaque `last_fired_day` with today's day id (simulates "this alarm's regular occurrence already fired today") or clears it to "never" — a state otherwise only reachable by waiting for real time to cross the alarm's hour:minute. |
 | `TestAlarmPending` | 10021 | int 0/1 | Forces `alarm_pending`, jumping straight to "ring screen should show" without waiting for a real due transition. |
+| `TestAlarmIsCron` | 10022 | int 0/1 | Switches the alarm to cron mode (see "Cron-syntax alarms" below). |
+| `TestAlarmCronMinute` | 10023 | string | Raw cron minute field (e.g. `"*/20"`), parsed into `cron_min_mask`. Logs a warning (field left as previously set) if unparseable. |
+| `TestAlarmCronHour` | 10024 | string | Raw cron hour field, parsed into `cron_hour_mask`. |
+| `TestAlarmCronDow` | 10025 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
+| `TestAlarmCronFiredNow` | 10026 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -146,9 +151,12 @@ as every other alarm-mutating code path.
   (day-offset and cross-alarm "which fires soonest" math, operating on
   caller-supplied wall-clock fields — no `<time.h>` calendar calls, so it's
   fully testable with plain ints), `ac_mark_fired` (advances a fired alarm's
-  schedule: one-time alarms auto-disable, a set `skip_next` is consumed), and
-  the `ac_format_time`/`ac_format_repeat_summary` display helpers. No Pebble
-  SDK dependency — `tests/test_alarm_calc.c` links it directly.
+  schedule: one-time alarms auto-disable, a set `skip_next` is consumed), the
+  `ac_format_time`/`ac_format_repeat_summary` display helpers, and the
+  parallel `ac_cron_*` family (`ac_cron_parse_field`/`ac_cron_next_offset_days`/
+  `ac_cron_is_due`/`ac_format_cron_summary`) for cron-syntax alarms — see
+  "Cron-syntax alarms" below. No Pebble SDK dependency —
+  `tests/test_alarm_calc.c` links it directly.
 - **`alarm_store.c`/`.h`** — persistence only: one `Alarm` per persist key
   (`PERSIST_KEY_ALARM_BASE + i`), plus scalar keys for schema/count/wakeup id
   and the phone-configured globals (first day of week, vibe pattern, default
@@ -156,10 +164,10 @@ as every other alarm-mutating code path.
 - **`main.c`** — the monolithic UI/controller (mirrors
   `pebble-another-timer`'s `main.c` structure): the main list `MenuLayer`,
   the wakeup scheduling (`rearm_wakeup`/`compute_next_fire_time`/
-  `sweep_due_alarms`), the full-screen ring window, three reusable
-  field-editor windows (time, repeat/weekday, snooze), a generic 2-choice
-  confirm window, the per-alarm edit menu, and the "+ New alarm" creation
-  wizard. State lives in static globals (`s_alarms`, `s_count`,
+  `sweep_due_alarms`), the full-screen ring window, four reusable
+  field-editor windows (time, repeat/weekday, snooze, cron), a generic
+  2-choice confirm window, the per-alarm edit menu, and the "+ New alarm"
+  creation wizard. State lives in static globals (`s_alarms`, `s_count`,
   `s_snooze_deadline`/`s_snooze_count` — the latter two in-memory only, not
   persisted, per the snooze-reset rule below).
 - **`multitap_keyboard/`** is a vendored third-party widget (Apache-2.0,
@@ -429,12 +437,87 @@ even though its wire value isn't split across them — never assume
   but has no UI row and no push logic — pushing a real Pebble timeline pin
   needs a server-side API key this repo doesn't have (see `SPEC.md` §9.2).
 
+## Cron-syntax alarms
+
+A third alarm schedule shape, alongside the fixed hour:minute+`repeat_days`
+legacy mode: `is_cron` alarms are defined by three independent cron-style
+fields — minute (0-59), hour (0-23), day-of-week (0-6) — each written as
+`*`, `N`, `N-M`, `*/N`, `N-M/N2`, or a comma-list of these (e.g. `"*/20"`,
+`"9-17/2"`, `"1,5,10-15"`), parsed by `ac_cron_parse_field` into a bitmask.
+Deliberately **3 fields only** (no day-of-month/month — this app has no
+calendar-date concept anywhere, and building one just for this feature was
+rejected in favor of reusing the weekday-bitmask model already in place).
+
+- **True multi-fire semantics, a deliberate departure from every other
+  alarm in the app**: a cron alarm can ring many times a day if its pattern
+  matches many times (e.g. `*/20` rings every 20 minutes). There is
+  **no suppression window** after stopping/snoozing a firing — the very
+  next matching minute fires again. This is intentional, not a bug to later
+  "fix" (see the comment at `sweep_due_alarms()`'s cron branch, `main.c`).
+- **Day-of-week reuses `repeat_days`/`AC_DAY_BIT`** — no separate field:
+  when `is_cron`, `repeat_days` holds the parsed cron dow mask instead of
+  the legacy weekly-repeat days, and `repeats`/`skip_next` are unused
+  (forced false/ignored). Every legacy code path touching those fields must
+  branch on `is_cron` — missing a guard silently corrupts a cron alarm's
+  display or scheduling. The one non-obvious spot: the edit menu's
+  ENABLE-row re-enable handler used to call
+  `resync_last_fired_for_schedule_change()` (which reads `repeat_days` under
+  legacy semantics) unconditionally — it now branches on `is_cron` first.
+- **No eager-fire guard needed on create/edit**, unlike legacy's
+  `resync_last_fired_for_schedule_change`: for cron, "the pattern currently
+  matches right now" **is** the real, immediate next occurrence, so every
+  cron create/edit path just sets `cron_last_fired_min = -1`. `main.c`'s
+  `sweep_due_alarms()` dedups on exact epoch-minute
+  (`ac_cron_is_due`/`cron_last_fired_min`) rather than `last_fired_day`'s
+  whole-day dedup, since a cron alarm can genuinely fire many times a day.
+- **Secret UP+DOWN chord on the time editor** switches it to cron entry.
+  Detected via `window_raw_click_subscribe` held-flags (`s_time_up_held`/
+  `s_time_down_held` in `main.c`) added *alongside* the time editor's
+  existing `window_single_repeating_click_subscribe` UP/DOWN — confirmed
+  against the Pebble SDK header that raw click has no documented conflict
+  with single-repeating-click on a different button (unlike single-click vs
+  single-repeating-click on the *same* button, which do conflict), so this
+  adds zero latency to a normal single click. `time_edit_window_push` gained
+  a 5th `on_chord` callback parameter for this.
+- **One `cron_edit_window_push()` window serves every call site** — the "+
+  New alarm" wizard (chord replaces the Time+Repeat steps, skipping straight
+  to Snooze), converting an existing normal alarm (chord on its edit menu's
+  Time row — `edit_cron_convert_cancel` is a real no-op cancel, not `NULL`,
+  since there's no prior cron state to revert to), and re-editing an
+  existing cron alarm (its edit menu's Cron row — real `NULL`
+  snapshot-revert cancel semantics apply here). `MenuLayer`-based: row 0
+  "Submit", rows 1-3 the three fields (each opens the shared multitap
+  keyboard to edit its raw text; live "(invalid)" annotation if
+  `ac_cron_parse_field` currently fails, checked on every draw but never
+  blocking typing — only Submit is gated on all three parsing cleanly).
+  BACK follows the same on_cancel-vs-snapshot-revert convention as the
+  time/repeat/snooze editors. Long-press SELECT submits outright regardless
+  of cursor position; long-press BACK is a no-op.
+- **Edit menu display**: `edit_build_rows()` builds the ordered row-kind
+  list for the current alarm (collapsing Time+Repeat into one `EDIT_ROW_CRON`
+  row when `is_cron`) so `edit_num_rows`/`edit_draw_row`/`edit_select` share
+  one source of truth for "which row is at this menu position" without
+  scattering `is_cron` checks through each of them individually.
+- **Main list display**: the bold time slot shows "Cron" instead of a
+  formatted time; the summary line below shows the three raw cron fields
+  space-joined (`ac_format_cron_summary`) instead of the repeat summary.
+  Sort key (`cron_sort_key`, display/tie-breaking only, not used for actual
+  scheduling): lowest set bit in `cron_hour_mask`/`cron_min_mask` converted
+  to `hour*60+minute`, same units as the legacy sort key, so cron and legacy
+  alarms interleave in one time-ordered list.
+- **`CRON_FIELD_LEN` (28)** caps each raw field string at 27 usable chars —
+  comfortably fits comma-lists like `"0-59/5,10,20-25/3"`.
+
 ## Tests
 
 - `tests/test_alarm_calc.c` — plain `assert`-based C program, no framework,
   links `alarm_calc.c` directly (see build command above). Covers one-time/
   repeating occurrence math (today/tomorrow/no-day-this-week/wraparound),
-  `skip_next`, `ac_mark_fired`, and the format helpers.
+  `skip_next`, `ac_mark_fired`, the format helpers, and the `ac_cron_*`
+  family (field parsing incl. every malformed-syntax case, next-occurrence
+  math incl. multi-fire progression across successive calls, due-check incl.
+  the older-`last_fired_min`-still-due multi-fire case, and summary
+  formatting).
 - `tests/dict.test.js` — Node's built-in `node:test` + `node:assert`, run
   against **compiled** `src/pkjs/dict.js` (not `src/ts` directly), which is
   why `npm test` has a `pretest: tsc` step.

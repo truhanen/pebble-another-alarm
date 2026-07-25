@@ -26,6 +26,14 @@ install_emulator:
 install_cloudpebble:
 	pebble install --cloudpebble
 
+# Simulates a long press (past this app's 500ms long-click threshold, e.g.
+# the cron/repeat editors' long-press-SELECT/BACK shortcuts) on the running
+# emulator. Usage: make long_press_emulator BUTTON=select
+BUTTON ?= select
+.PHONY: long_press_emulator
+long_press_emulator:
+	pebble emu-button --duration 700 click $(BUTTON)
+
 .PHONY: build_and_install_emulator
 build_and_install_emulator: build install_emulator
 

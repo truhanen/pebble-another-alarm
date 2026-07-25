@@ -15,7 +15,8 @@
 #define PERSIST_KEY_DEFAULT_VIBRATION_ENABLED 10
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 4   // bumped: Alarm gained persisted last_fired_day
+#define STORE_SCHEMA 5   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+                          // cron_last_fired_min, cron_min/hour/dow strings)
 
 // Loads alarms into out (capacity MAX_ALARMS); returns count, or 0 if none/old schema.
 int store_load(Alarm *out);

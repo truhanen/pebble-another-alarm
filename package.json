@@ -39,7 +39,12 @@
       "TestAlarmName",
       "TestAlarmSnoozeInSec",
       "TestAlarmLastFiredToday",
-      "TestAlarmPending"
+      "TestAlarmPending",
+      "TestAlarmIsCron",
+      "TestAlarmCronMinute",
+      "TestAlarmCronHour",
+      "TestAlarmCronDow",
+      "TestAlarmCronFiredNow"
     ],
     "resources": {
       "media": [

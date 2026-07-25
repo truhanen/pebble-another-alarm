@@ -63,6 +63,19 @@ static void persist_all(void) {
   store_save_default_sound_enabled(s_default_sound_enabled);
 }
 
+// Display-only sort key for a cron alarm: lowest set bit in cron_hour_mask/
+// cron_min_mask converted to hour*60+minute, same units as the legacy key,
+// so cron and legacy alarms interleave in one list ordered by "earliest
+// matching time-of-day, ignoring day-of-week" -- a deliberately simple
+// internal tie-breaker for display/sort convenience only, never used for
+// actual scheduling (compute_next_fire_time uses the real cron math).
+static int cron_sort_key(const Alarm *a) {
+  int hour = 0, minute = 0;
+  for (int h = 0; h <= 23; h++) { if (a->cron_hour_mask & (1u << h)) { hour = h; break; } }
+  for (int m = 0; m <= 59; m++) { if (a->cron_min_mask & (1ULL << m)) { minute = m; break; } }
+  return hour * 60 + minute;
+}
+
 // display order: ascending by raw clock time (hour:minute), ties by index
 // (stable).
 static void rebuild_order(void) {
@@ -70,7 +83,7 @@ static void rebuild_order(void) {
   for (int i = 0; i < s_count; i++) {
     const Alarm *a = &s_alarms[i];
     s_order[i] = i;
-    minutes_of_day[i] = a->hour * 60 + a->minute;
+    minutes_of_day[i] = a->is_cron ? cron_sort_key(a) : (a->hour * 60 + a->minute);
   }
   for (int i = 1; i < s_count; i++) {
     int key = s_order[i];
@@ -174,7 +187,8 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   int time_x = 6;
 
   char time_buf[16];
-  ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style());
+  if (a->is_cron) { snprintf(time_buf, sizeof(time_buf), "Cron"); }
+  else { ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style()); }
   graphics_draw_text(ctx, time_buf, tf, GRect(time_x, ty, b.size.w - time_x - 4, th),
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
   GSize tw = graphics_text_layout_get_content_size(time_buf, tf,
@@ -185,9 +199,10 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
 
-  // Line 2: repeat summary.
+  // Line 2: repeat summary (or the raw cron field triple for cron alarms).
   char repeat_buf[48];
-  ac_format_repeat_summary(repeat_buf, sizeof(repeat_buf), a->repeats, a->repeat_days, s_first_day_of_week);
+  if (a->is_cron) { ac_format_cron_summary(repeat_buf, sizeof(repeat_buf), a->cron_min, a->cron_hour, a->cron_dow); }
+  else { ac_format_repeat_summary(repeat_buf, sizeof(repeat_buf), a->repeats, a->repeat_days, s_first_day_of_week); }
   graphics_draw_text(ctx, repeat_buf, lf,
                      GRect(time_x, ty + th, b.size.w - time_x - 4, line2_h),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -260,16 +275,22 @@ static void ml_select_long(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
 
 // ================================= scheduling =================================
 
-// Converts a (idx, day_offset) pair from ac_next_occurrence into a real
-// time_t via localtime/mktime, which normalizes month/year rollover and DST.
-static time_t occurrence_to_epoch(const Alarm *a, int day_offset) {
+// Converts a (day_offset, hour, minute) triple into a real time_t via
+// localtime/mktime, which normalizes month/year rollover and DST. Shared by
+// both legacy alarms (fixed hour/minute) and cron alarms (a computed match),
+// which is why it takes hour/minute directly rather than an Alarm*.
+static time_t occurrence_to_epoch_hm(int day_offset, int hour, int minute) {
   time_t t = time(NULL);
   struct tm tm = *localtime(&t);
   tm.tm_mday += day_offset;
-  tm.tm_hour = a->hour;
-  tm.tm_min = a->minute;
+  tm.tm_hour = hour;
+  tm.tm_min = minute;
   tm.tm_sec = 0;
   return mktime(&tm);
+}
+
+static time_t occurrence_to_epoch(const Alarm *a, int day_offset) {
+  return occurrence_to_epoch_hm(day_offset, a->hour, a->minute);
 }
 
 // Picks the soonest instant across (a) any currently-snoozed alarm's deadline
@@ -290,11 +311,13 @@ static bool compute_next_fire_time(int64_t *out_time, int *out_idx) {
   now_wall(&wday, &hour, &min);
   // Alarms with an active snooze deadline are excluded from the regular
   // occurrence scan below (their schedule is paused until the snooze fires).
+  // Cron alarms are also excluded here (ac_next_occurrence reads a->hour/
+  // a->minute, meaningless for is_cron) and scanned separately below instead.
   Alarm scan[MAX_ALARMS];
   int scan_map[MAX_ALARMS];
   int scan_count = 0;
   for (int i = 0; i < s_count; i++) {
-    if (s_alarms[i].snooze_until > 0) { continue; }
+    if (s_alarms[i].snooze_until > 0 || s_alarms[i].is_cron) { continue; }
     scan[scan_count] = s_alarms[i];
     scan_map[scan_count] = i;
     scan_count++;
@@ -315,6 +338,17 @@ static bool compute_next_fire_time(int64_t *out_time, int *out_idx) {
     int day_offset = ac_next_offset_days(winner, wday, hour, min);
     time_t candidate = occurrence_to_epoch(winner, day_offset);
     if (!found || (int64_t)candidate < best) { best = (int64_t)candidate; best_idx = scan_map[idx_in_scan]; found = true; }
+  }
+
+  for (int i = 0; i < s_count; i++) {
+    const Alarm *a = &s_alarms[i];
+    if (!a->is_cron || !a->enabled || a->snooze_until > 0) { continue; }
+    int oh, om;
+    int off = ac_cron_next_offset_days(a->cron_min_mask, a->cron_hour_mask, a->repeat_days,
+                                        wday, hour, min, &oh, &om);
+    if (off < 0) { continue; }
+    time_t candidate = occurrence_to_epoch_hm(off, oh, om);
+    if (!found || (int64_t)candidate < best) { best = (int64_t)candidate; best_idx = i; found = true; }
   }
 
   if (!found) { return false; }
@@ -366,6 +400,7 @@ static bool sweep_due_alarms(void) {
   int wday, hour, min;
   now_wall(&wday, &hour, &min);
   int32_t today = now_day_id();
+  int32_t epoch_min = (int32_t)(now / 60);
   bool any = false;
   for (int i = 0; i < s_count; i++) {
     Alarm *a = &s_alarms[i];
@@ -376,6 +411,19 @@ static bool sweep_due_alarms(void) {
         a->snooze_until = 0;
         any = true;
       }
+      continue;
+    }
+    if (a->is_cron) {
+      if (!ac_cron_is_due(a->cron_min_mask, a->cron_hour_mask, a->repeat_days, a->enabled,
+                           wday, hour, min, epoch_min, a->cron_last_fired_min)) { continue; }
+      // Multi-fire, deliberately no suppression window beyond the exact-
+      // minute dedup above: the very next matching minute (e.g. every
+      // minute for "*") fires again right after this one is stopped/
+      // snoozed — intended cron behavior, not a bug.
+      a->cron_last_fired_min = epoch_min;
+      a->snooze_count = 0;
+      a->alarm_pending = true;
+      any = true;
       continue;
     }
     if (!ac_is_due(a, wday, hour, min, today)) { continue; }
@@ -612,7 +660,16 @@ static void trigger_alarm(int idx, int count) {
   if (idx < 0 || idx >= s_count) { return; }
   const Alarm *a = &s_alarms[idx];
   char time_buf[16];
-  ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style());
+  if (a->is_cron) {
+    // A cron alarm has no single fixed hour/minute to show -- its own
+    // fields are unused/stale (see alarm_calc.h's is_cron doc comment), so
+    // show the actual instant it's ringing at instead.
+    int wday, hour, min;
+    now_wall(&wday, &hour, &min);
+    ac_format_time(time_buf, sizeof(time_buf), (uint8_t)hour, (uint8_t)min, clock_is_24h_style());
+  } else {
+    ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style());
+  }
   if (a->name[0]) { snprintf(s_alarm_title_buf, sizeof(s_alarm_title_buf), "%s", a->name); }
   else { snprintf(s_alarm_title_buf, sizeof(s_alarm_title_buf), "%s", time_buf); }
   if (count > 1) { snprintf(s_alarm_sub_buf, sizeof(s_alarm_sub_buf), "+%d more", count - 1); }
@@ -797,7 +854,9 @@ static uint8_t s_time_hour, s_time_minute;
 static int s_time_field;   // 0 = hour, 1 = minute
 static void (*s_time_on_confirm)(uint8_t hour, uint8_t minute, void *ctx);
 static void (*s_time_on_cancel)(void *ctx);
+static void (*s_time_on_chord)(void *ctx);
 static void *s_time_ctx;
+static bool s_time_up_held, s_time_down_held;
 
 static void time_layer_update(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
@@ -852,11 +911,39 @@ static void time_back(ClickRecognizerRef r, void *ctx) {
   window_stack_pop(true);
   if (cb) { cb(c); }
 }
+// Secret UP+DOWN chord: switches the time editor over to cron-syntax
+// entry. Detected via raw click held-flags (not single/single-repeating,
+// which only conflict with each other on the SAME button per the SDK
+// header -- raw click on one button is undocumented-safe alongside
+// single-repeating-click on another), so it adds zero latency to a normal
+// single click; whichever button's down-edge completes the chord may also
+// fire its ordinary time_up/time_down handler once, which is harmless since
+// the chord immediately abandons the staged hour/minute anyway.
+static void time_chord_trigger(void) {
+  s_time_up_held = false;
+  s_time_down_held = false;
+  void *c = s_time_ctx;
+  void (*cb)(void *) = s_time_on_chord;
+  window_stack_pop(true);
+  if (cb) { cb(c); }
+}
+static void time_up_raw_down(ClickRecognizerRef r, void *ctx) {
+  s_time_up_held = true;
+  if (s_time_down_held) { time_chord_trigger(); }
+}
+static void time_up_raw_up(ClickRecognizerRef r, void *ctx) { s_time_up_held = false; }
+static void time_down_raw_down(ClickRecognizerRef r, void *ctx) {
+  s_time_down_held = true;
+  if (s_time_up_held) { time_chord_trigger(); }
+}
+static void time_down_raw_up(ClickRecognizerRef r, void *ctx) { s_time_down_held = false; }
 static void time_click_config(void *ctx) {
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 70, time_up);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 70, time_down);
   window_single_click_subscribe(BUTTON_ID_SELECT, time_select);
   window_single_click_subscribe(BUTTON_ID_BACK, time_back);
+  window_raw_click_subscribe(BUTTON_ID_UP, time_up_raw_down, time_up_raw_up, NULL);
+  window_raw_click_subscribe(BUTTON_ID_DOWN, time_down_raw_down, time_down_raw_up, NULL);
 }
 static void time_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
@@ -868,9 +955,12 @@ static void time_window_unload(Window *w) {
   layer_destroy(s_time_layer); s_time_layer = NULL;
 }
 static void time_edit_window_push(uint8_t hour, uint8_t minute,
-    void (*on_confirm)(uint8_t, uint8_t, void *), void (*on_cancel)(void *), void *ctx) {
+    void (*on_confirm)(uint8_t, uint8_t, void *), void (*on_cancel)(void *),
+    void (*on_chord)(void *), void *ctx) {
   s_time_hour = hour; s_time_minute = minute; s_time_field = 0;
-  s_time_on_confirm = on_confirm; s_time_on_cancel = on_cancel; s_time_ctx = ctx;
+  s_time_on_confirm = on_confirm; s_time_on_cancel = on_cancel;
+  s_time_on_chord = on_chord; s_time_ctx = ctx;
+  s_time_up_held = false; s_time_down_held = false;
   if (!s_time_window) {
     s_time_window = window_create();
     window_set_window_handlers(s_time_window, (WindowHandlers){
@@ -878,6 +968,188 @@ static void time_edit_window_push(uint8_t hour, uint8_t minute,
     window_set_click_config_provider(s_time_window, time_click_config);
   }
   window_stack_push(s_time_window, true);
+}
+
+// ============================ cron field editor ============================
+//
+// One MenuLayer-based window, reused verbatim across every call site that
+// needs cron entry (creation wizard, converting an existing normal alarm via
+// the chord, re-editing an existing cron alarm) -- callers only differ in
+// which on_confirm/on_cancel they pass in, same convention as every other
+// editor window in this file.
+
+#define CRON_ROW_SUBMIT  0
+#define CRON_ROW_MINUTE  1
+#define CRON_ROW_HOUR    2
+#define CRON_ROW_DOW     3
+#define CRON_ROW_COUNT   4
+
+static Window *s_cron_window;
+static MenuLayer *s_cron_menu;
+static char s_cron_min[CRON_FIELD_LEN], s_cron_hour[CRON_FIELD_LEN], s_cron_dow[CRON_FIELD_LEN];
+static void (*s_cron_on_confirm)(const char *min_str, const char *hour_str, const char *dow_str, void *ctx);
+static void (*s_cron_on_cancel)(void *ctx);
+static void *s_cron_ctx;
+
+static uint16_t cron_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return CRON_ROW_COUNT; }
+static int16_t cron_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
+
+// A field's raw text is validated live (for the "(invalid)" annotation) but
+// never blocks typing -- only Submit is gated on all three parsing cleanly.
+static bool cron_field_valid(const char *text, int min_val, int max_val) {
+  uint64_t mask;
+  return ac_cron_parse_field(text, min_val, max_val, &mask);
+}
+
+static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
+  GRect b = layer_get_bounds(cell_layer);
+  const char *key = "";
+  char value[CRON_FIELD_LEN + 12] = "";
+  switch (cell_index->row) {
+    case CRON_ROW_SUBMIT:
+      graphics_draw_text(ctx, "Submit", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                         GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                         GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+      return;
+    case CRON_ROW_MINUTE:
+      key = "Minute";
+      snprintf(value, sizeof(value), "%s%s", s_cron_min, cron_field_valid(s_cron_min, 0, 59) ? "" : " (invalid)");
+      break;
+    case CRON_ROW_HOUR:
+      key = "Hour";
+      snprintf(value, sizeof(value), "%s%s", s_cron_hour, cron_field_valid(s_cron_hour, 0, 23) ? "" : " (invalid)");
+      break;
+    case CRON_ROW_DOW:
+      key = "Day";
+      snprintf(value, sizeof(value), "%s%s", s_cron_dow, cron_field_valid(s_cron_dow, 0, 6) ? "" : " (invalid)");
+      break;
+  }
+  graphics_draw_text(ctx, key, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, value, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+}
+
+static void cron_field_done(const char *text, void *ctx) {
+  int row = (int)(intptr_t)ctx;
+  if (text) {
+    char *dst = (row == CRON_ROW_MINUTE) ? s_cron_min : (row == CRON_ROW_HOUR) ? s_cron_hour : s_cron_dow;
+    strncpy(dst, text, CRON_FIELD_LEN - 1);
+    dst[CRON_FIELD_LEN - 1] = '\0';
+  }
+  if (s_cron_menu) { menu_layer_reload_data(s_cron_menu); }
+}
+
+static void cron_submit(void) {
+  if (!cron_field_valid(s_cron_min, 0, 59)) { return; }
+  if (!cron_field_valid(s_cron_hour, 0, 23)) { return; }
+  if (!cron_field_valid(s_cron_dow, 0, 6)) { return; }
+  char min_str[CRON_FIELD_LEN], hour_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN];
+  strncpy(min_str, s_cron_min, sizeof(min_str)); min_str[sizeof(min_str) - 1] = '\0';
+  strncpy(hour_str, s_cron_hour, sizeof(hour_str)); hour_str[sizeof(hour_str) - 1] = '\0';
+  strncpy(dow_str, s_cron_dow, sizeof(dow_str)); dow_str[sizeof(dow_str) - 1] = '\0';
+  void *c = s_cron_ctx;
+  void (*cb)(const char *, const char *, const char *, void *) = s_cron_on_confirm;
+  window_stack_pop(true);
+  if (cb) { cb(min_str, hour_str, dow_str, c); }
+}
+
+static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
+  switch (cell_index->row) {
+    case CRON_ROW_SUBMIT: cron_submit(); break;
+    case CRON_ROW_MINUTE:
+      multitap_keyboard_window_push_ex(cron_field_done, s_cron_min, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_MINUTE);
+      break;
+    case CRON_ROW_HOUR:
+      multitap_keyboard_window_push_ex(cron_field_done, s_cron_hour, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_HOUR);
+      break;
+    case CRON_ROW_DOW:
+      multitap_keyboard_window_push_ex(cron_field_done, s_cron_dow, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_DOW);
+      break;
+  }
+}
+
+// BACK follows the same convention as time/repeat/snooze editors: on_cancel
+// != NULL means "abort the whole flow" (call it, discard staged fields);
+// NULL means "revert to the snapshot this screen was opened with, then
+// still call on_confirm with that unchanged snapshot" so callers reusing
+// this window for in-place editing never have to special-case cancel.
+static char s_cron_snapshot_min[CRON_FIELD_LEN], s_cron_snapshot_hour[CRON_FIELD_LEN], s_cron_snapshot_dow[CRON_FIELD_LEN];
+static void cron_back(ClickRecognizerRef r, void *ctx) {
+  if (s_cron_on_cancel) {
+    void *c = s_cron_ctx;
+    void (*cb)(void *) = s_cron_on_cancel;
+    window_stack_pop(true);
+    if (cb) { cb(c); }
+    return;
+  }
+  char min_str[CRON_FIELD_LEN], hour_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN];
+  strncpy(min_str, s_cron_snapshot_min, sizeof(min_str)); min_str[sizeof(min_str) - 1] = '\0';
+  strncpy(hour_str, s_cron_snapshot_hour, sizeof(hour_str)); hour_str[sizeof(hour_str) - 1] = '\0';
+  strncpy(dow_str, s_cron_snapshot_dow, sizeof(dow_str)); dow_str[sizeof(dow_str) - 1] = '\0';
+  void *c = s_cron_ctx;
+  void (*cb)(const char *, const char *, const char *, void *) = s_cron_on_confirm;
+  window_stack_pop(true);
+  if (cb) { cb(min_str, hour_str, dow_str, c); }
+}
+// Long-press SELECT submits outright regardless of cursor position; long-
+// press BACK is an explicit no-op (matches the repeat editor's convention).
+static void cron_select_long(ClickRecognizerRef r, void *ctx) { cron_submit(); }
+static void cron_back_long(ClickRecognizerRef r, void *ctx) { }
+static void cron_select_click(ClickRecognizerRef r, void *ctx) {
+  MenuIndex idx = menu_layer_get_selected_index(s_cron_menu);
+  cron_select(s_cron_menu, &idx, ctx);
+}
+static void cron_up_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_cron_menu, true, MenuRowAlignCenter, true);
+}
+static void cron_down_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_cron_menu, false, MenuRowAlignCenter, true);
+}
+// A fully custom provider (not menu_layer_set_click_config_onto_window,
+// which owns the whole window's click config and leaves no room to also
+// intercept BACK) so this window can implement the on_cancel/snapshot-
+// revert BACK convention shared with every other editor in this file.
+static void cron_click_config(void *ctx) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, cron_select_click);
+  window_single_click_subscribe(BUTTON_ID_UP, cron_up_click);
+  window_single_click_subscribe(BUTTON_ID_DOWN, cron_down_click);
+  window_single_click_subscribe(BUTTON_ID_BACK, cron_back);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, cron_select_long, NULL);
+  window_long_click_subscribe(BUTTON_ID_BACK, 500, cron_back_long, NULL);
+}
+static void cron_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  s_cron_menu = menu_layer_create(layer_get_bounds(root));
+  menu_layer_set_callbacks(s_cron_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = cron_num_rows, .get_cell_height = cron_cell_height,
+    .draw_row = cron_draw_row, .select_click = cron_select });
+  menu_layer_set_normal_colors(s_cron_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_cron_menu, GColorBlack, GColorWhite);
+  layer_add_child(root, menu_layer_get_layer(s_cron_menu));
+  window_set_click_config_provider(w, cron_click_config);
+}
+static void cron_window_unload(Window *w) {
+  menu_layer_destroy(s_cron_menu); s_cron_menu = NULL;
+}
+static void cron_edit_window_push(const char *min_str, const char *hour_str, const char *dow_str,
+    void (*on_confirm)(const char *min_str, const char *hour_str, const char *dow_str, void *ctx),
+    void (*on_cancel)(void *ctx), void *ctx) {
+  strncpy(s_cron_min, min_str ? min_str : "*", CRON_FIELD_LEN - 1); s_cron_min[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_cron_hour, hour_str ? hour_str : "*", CRON_FIELD_LEN - 1); s_cron_hour[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_cron_dow, dow_str ? dow_str : "*", CRON_FIELD_LEN - 1); s_cron_dow[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_cron_snapshot_min, s_cron_min, CRON_FIELD_LEN);
+  strncpy(s_cron_snapshot_hour, s_cron_hour, CRON_FIELD_LEN);
+  strncpy(s_cron_snapshot_dow, s_cron_dow, CRON_FIELD_LEN);
+  s_cron_on_confirm = on_confirm; s_cron_on_cancel = on_cancel; s_cron_ctx = ctx;
+  if (!s_cron_window) {
+    s_cron_window = window_create();
+    window_set_window_handlers(s_cron_window, (WindowHandlers){
+      .load = cron_window_load, .unload = cron_window_unload });
+  }
+  window_stack_push(s_cron_window, true);
 }
 
 // ============================ repeat / weekday editor ============================
@@ -1257,13 +1529,40 @@ static int s_edit_idx = -1;
 #define EDIT_ROW_ENABLE   1
 #define EDIT_ROW_TIME     2
 #define EDIT_ROW_REPEAT   3
-#define EDIT_ROW_SNOOZE   4
-#define EDIT_ROW_VIBE     5
-#define EDIT_ROW_SOUND    6
-#define EDIT_ROW_DELETE   7
-#define EDIT_ROW_COUNT    8
+#define EDIT_ROW_CRON     4
+#define EDIT_ROW_SNOOZE   5
+#define EDIT_ROW_VIBE     6
+#define EDIT_ROW_SOUND    7
+#define EDIT_ROW_DELETE   8
+#define EDIT_ROW_MAX_COUNT 8   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/SOUND/DELETE
 
-static uint16_t edit_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return EDIT_ROW_COUNT; }
+// Builds the ordered list of row "kinds" for the current alarm's mode into
+// out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
+// Collapses EDIT_ROW_TIME + EDIT_ROW_REPEAT into one EDIT_ROW_CRON slot when
+// is_cron, so cell_index->row still maps 1:1 to a list position without
+// scattering is_cron checks through draw/select.
+static int edit_build_rows(int *out_kinds, bool is_cron) {
+  int n = 0;
+  out_kinds[n++] = EDIT_ROW_LABEL;
+  out_kinds[n++] = EDIT_ROW_ENABLE;
+  if (is_cron) {
+    out_kinds[n++] = EDIT_ROW_CRON;
+  } else {
+    out_kinds[n++] = EDIT_ROW_TIME;
+    out_kinds[n++] = EDIT_ROW_REPEAT;
+  }
+  out_kinds[n++] = EDIT_ROW_SNOOZE;
+  out_kinds[n++] = EDIT_ROW_VIBE;
+  out_kinds[n++] = EDIT_ROW_SOUND;
+  out_kinds[n++] = EDIT_ROW_DELETE;
+  return n;
+}
+
+static uint16_t edit_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
+  int kinds[EDIT_ROW_MAX_COUNT];
+  bool is_cron = (s_edit_idx >= 0 && s_edit_idx < s_count) && s_alarms[s_edit_idx].is_cron;
+  return (uint16_t)edit_build_rows(kinds, is_cron);
+}
 // 34px row height, GOTHIC_24_BOLD text: matches timer's itemized "detail"
 // menu row (dl_cell_height/dl_draw_row, pebble-another-timer/src/c/
 // main.c:1197,1253). No header row — the label lives in its own menu entry
@@ -1277,10 +1576,12 @@ static int16_t edit_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { retu
 static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   const Alarm *a = &s_alarms[s_edit_idx];
+  int kinds[EDIT_ROW_MAX_COUNT];
+  edit_build_rows(kinds, a->is_cron);
   GRect b = layer_get_bounds(cell_layer);
   const char *key = "";
   char value[48] = "";
-  switch (cell_index->row) {
+  switch (kinds[cell_index->row]) {
     case EDIT_ROW_LABEL:
       key = "Label";
       snprintf(value, sizeof(value), "%s", a->name[0] ? a->name : "<none>");
@@ -1303,6 +1604,10 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case EDIT_ROW_REPEAT:
       key = "Repeat";
       ac_format_repeat_summary(value, sizeof(value), a->repeats, a->repeat_days, s_first_day_of_week);
+      break;
+    case EDIT_ROW_CRON:
+      key = "Cron";
+      ac_format_cron_summary(value, sizeof(value), a->cron_min, a->cron_hour, a->cron_dow);
       break;
     case EDIT_ROW_SNOOZE:
       key = "Snooze";
@@ -1377,6 +1682,45 @@ static void edit_on_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
   if (s_edit_menu) { menu_layer_reload_data(s_edit_menu); }
 }
 
+// edit_on_cron_confirm serves two call sites: converting an existing normal
+// alarm to cron (chord on its Time row) and re-editing an existing cron
+// alarm (its Cron row) -- both just need the alarm's schedule fields
+// replaced with a fresh parse, so one function handles both.
+static void edit_on_cron_confirm(const char *min_str, const char *hour_str, const char *dow_str, void *ctx) {
+  if (s_edit_idx >= 0 && s_edit_idx < s_count) {
+    Alarm *a = &s_alarms[s_edit_idx];
+    a->is_cron = true;
+    a->repeats = false;
+    // Defensive fallback to "*"/full-mask on a parse failure -- Submit
+    // already validated in cron_edit_window_push, so this only guards
+    // against ever persisting an unparseable field.
+    if (!ac_cron_parse_field(min_str, 0, 59, &a->cron_min_mask)) { ac_cron_parse_field("*", 0, 59, &a->cron_min_mask); }
+    uint64_t hour_mask64 = 0;
+    if (!ac_cron_parse_field(hour_str, 0, 23, &hour_mask64)) { ac_cron_parse_field("*", 0, 23, &hour_mask64); }
+    a->cron_hour_mask = (uint32_t)hour_mask64;
+    uint64_t dow_mask = 0;
+    if (!ac_cron_parse_field(dow_str, 0, 6, &dow_mask)) { ac_cron_parse_field("*", 0, 6, &dow_mask); }
+    a->repeat_days = (uint8_t)dow_mask;
+    strncpy(a->cron_min, min_str, CRON_FIELD_LEN - 1); a->cron_min[CRON_FIELD_LEN - 1] = '\0';
+    strncpy(a->cron_hour, hour_str, CRON_FIELD_LEN - 1); a->cron_hour[CRON_FIELD_LEN - 1] = '\0';
+    strncpy(a->cron_dow, dow_str, CRON_FIELD_LEN - 1); a->cron_dow[CRON_FIELD_LEN - 1] = '\0';
+    // No eager-fire guard needed (see alarm_calc.h's is_cron doc comment):
+    // firing right away if the freshly-edited pattern currently matches is
+    // correct multi-fire cron behavior, not a bug to suppress.
+    a->cron_last_fired_min = -1;
+    persist_all(); rearm_wakeup(); reload_ui();
+  }
+  if (s_edit_menu) { menu_layer_reload_data(s_edit_menu); }
+}
+// Chord on an existing NORMAL alarm's Time row: there's no prior cron state
+// to revert to, so cancelling must leave the alarm as a normal,
+// unconverted alarm -- a real no-op callback, not NULL (NULL would mean
+// "revert to the */*/* snapshot", which doesn't apply here).
+static void edit_cron_convert_cancel(void *ctx) { }
+static void edit_on_time_chord(void *ctx) {
+  cron_edit_window_push("*", "*", "*", edit_on_cron_confirm, edit_cron_convert_cancel, NULL);
+}
+
 static void edit_on_repeat_confirm(bool repeats, uint8_t repeat_days, void *ctx) {
   if (s_edit_idx >= 0 && s_edit_idx < s_count) {
     Alarm *a = &s_alarms[s_edit_idx];
@@ -1421,7 +1765,9 @@ static void edit_on_delete_choice(int choice, void *ctx) {
 static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
-  switch (cell_index->row) {
+  int kinds[EDIT_ROW_MAX_COUNT];
+  edit_build_rows(kinds, a->is_cron);
+  switch (kinds[cell_index->row]) {
     case EDIT_ROW_LABEL:
       multitap_keyboard_window_push_ex(edit_on_label_done, a->name, NAME_LEN, NULL);
       break;
@@ -1439,16 +1785,28 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
         // has already passed today, that same unconditional clear makes it
         // look immediately due the instant the app is reopened — resync
         // instead, which correctly waits for its real next occurrence.
-        if (!was_enabled && a->enabled) { resync_last_fired_for_schedule_change(a); }
+        if (!was_enabled && a->enabled) {
+          // resync_last_fired_for_schedule_change reads repeat_days under
+          // LEGACY (weekly-repeat weekday) semantics -- a cron alarm
+          // repurposes repeat_days as its day-of-week mask, so it must take
+          // the "no eager-fire guard needed" cron path instead (see
+          // alarm_calc.h's is_cron doc comment): the pattern currently
+          // matching right now IS the real next occurrence for cron.
+          if (a->is_cron) { a->cron_last_fired_min = -1; }
+          else { resync_last_fired_for_schedule_change(a); }
+        }
         persist_all(); rearm_wakeup(); reload_ui();
         menu_layer_reload_data(s_edit_menu);
       }
       break;
     case EDIT_ROW_TIME:
-      time_edit_window_push(a->hour, a->minute, edit_on_time_confirm, NULL, NULL);
+      time_edit_window_push(a->hour, a->minute, edit_on_time_confirm, NULL, edit_on_time_chord, NULL);
       break;
     case EDIT_ROW_REPEAT:
       repeat_edit_window_push(a->repeats, a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
+      break;
+    case EDIT_ROW_CRON:
+      cron_edit_window_push(a->cron_min, a->cron_hour, a->cron_dow, edit_on_cron_confirm, NULL, NULL);
       break;
     case EDIT_ROW_SNOOZE:
       snooze_edit_window_push(a->snooze_minutes, a->snooze_max, edit_on_snooze_confirm, NULL, NULL);
@@ -1548,6 +1906,30 @@ static void new_alarm_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
                           new_alarm_wizard_cancel, NULL);
 }
 
+// Chord on the wizard's Time screen: the draft becomes a cron alarm instead,
+// and Repeat is skipped entirely (day-of-week now lives in the cron dow
+// field) -- straight on to Snooze.
+static void new_alarm_cron_confirm(const char *min_str, const char *hour_str, const char *dow_str, void *ctx) {
+  s_draft.is_cron = true;
+  s_draft.repeats = false;
+  ac_cron_parse_field(min_str, 0, 59, &s_draft.cron_min_mask);
+  uint64_t hour_mask64 = 0;
+  ac_cron_parse_field(hour_str, 0, 23, &hour_mask64);
+  s_draft.cron_hour_mask = (uint32_t)hour_mask64;
+  uint64_t dow_mask = 0;
+  ac_cron_parse_field(dow_str, 0, 6, &dow_mask);
+  s_draft.repeat_days = (uint8_t)dow_mask;
+  strncpy(s_draft.cron_min, min_str, CRON_FIELD_LEN - 1); s_draft.cron_min[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_draft.cron_hour, hour_str, CRON_FIELD_LEN - 1); s_draft.cron_hour[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_draft.cron_dow, dow_str, CRON_FIELD_LEN - 1); s_draft.cron_dow[CRON_FIELD_LEN - 1] = '\0';
+  s_draft.cron_last_fired_min = -1;
+  snooze_edit_window_push(s_draft.snooze_minutes, s_draft.snooze_max, new_alarm_snooze_confirm,
+                          new_alarm_wizard_cancel, NULL);
+}
+static void new_alarm_time_chord(void *ctx) {
+  cron_edit_window_push("*", "*", "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
+}
+
 static void start_new_alarm_flow(void) {
   memset(&s_draft, 0, sizeof(s_draft));
   s_draft.last_fired_day = -1;   // never fired
@@ -1564,7 +1946,8 @@ static void start_new_alarm_flow(void) {
   if (min >= 60) { min = 0; hour = (hour + 1) % 24; }
   s_draft.hour = (uint8_t)hour;
   s_draft.minute = (uint8_t)min;
-  time_edit_window_push(s_draft.hour, s_draft.minute, new_alarm_time_confirm, new_alarm_wizard_cancel, NULL);
+  time_edit_window_push(s_draft.hour, s_draft.minute, new_alarm_time_confirm, new_alarm_wizard_cancel,
+                        new_alarm_time_chord, NULL);
 }
 
 // ================================= main window =================================
@@ -1761,6 +2144,41 @@ static bool handle_test_message(DictionaryIterator *iter) {
         changed = true;
       }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmPending))) { a->alarm_pending = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmIsCron))) { a->is_cron = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronMinute))) {
+        strncpy(a->cron_min, t->value->cstring, CRON_FIELD_LEN - 1);
+        a->cron_min[CRON_FIELD_LEN - 1] = '\0';
+        if (!ac_cron_parse_field(a->cron_min, 0, 59, &a->cron_min_mask)) {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmCronMinute %s", a->cron_min);
+        }
+        changed = true;
+      }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronHour))) {
+        strncpy(a->cron_hour, t->value->cstring, CRON_FIELD_LEN - 1);
+        a->cron_hour[CRON_FIELD_LEN - 1] = '\0';
+        uint64_t hour_mask64 = 0;
+        if (!ac_cron_parse_field(a->cron_hour, 0, 23, &hour_mask64)) {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmCronHour %s", a->cron_hour);
+        }
+        a->cron_hour_mask = (uint32_t)hour_mask64;
+        changed = true;
+      }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronDow))) {
+        strncpy(a->cron_dow, t->value->cstring, CRON_FIELD_LEN - 1);
+        a->cron_dow[CRON_FIELD_LEN - 1] = '\0';
+        uint64_t dow_mask = 0;
+        if (!ac_cron_parse_field(a->cron_dow, 0, 6, &dow_mask)) {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmCronDow %s", a->cron_dow);
+        }
+        a->repeat_days = (uint8_t)dow_mask;
+        changed = true;
+      }
+      // Minute-granularity sibling of TestAlarmLastFiredToday, for cron's
+      // exact-epoch-minute dedup (ac_cron_is_due) rather than day dedup.
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronFiredNow))) {
+        a->cron_last_fired_min = (t->value->int32 != 0) ? (int32_t)(now_s() / 60) : -1;
+        changed = true;
+      }
     }
   }
 

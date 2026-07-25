@@ -241,6 +241,156 @@ static void test_format_repeat_summary(void) {
   assert(strcmp(buf, "Sat, Sun") == 0);
 }
 
+// ================================= cron mode =================================
+
+static void test_cron_parse_field_star(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("*", 0, 59, &m));
+  for (int i = 0; i <= 59; i++) { assert(m & (1ULL << i)); }
+  assert(!(m & (1ULL << 60)));
+}
+
+static void test_cron_parse_field_step_from_star(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m));
+  assert(m == ((1ULL << 0) | (1ULL << 20) | (1ULL << 40)));
+}
+
+static void test_cron_parse_field_single(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("12", 0, 59, &m));
+  assert(m == (1ULL << 12));
+}
+
+static void test_cron_parse_field_range(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("1-2", 0, 59, &m));
+  assert(m == ((1ULL << 1) | (1ULL << 2)));
+}
+
+static void test_cron_parse_field_stepped_range(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("4-45/10", 0, 59, &m));
+  assert(m == ((1ULL << 4) | (1ULL << 14) | (1ULL << 24) | (1ULL << 34) | (1ULL << 44)));
+}
+
+static void test_cron_parse_field_comma_union(void) {
+  uint64_t m = 0;
+  assert(ac_cron_parse_field("1,5,10-15", 0, 59, &m));
+  uint64_t expect = (1ULL << 1) | (1ULL << 5);
+  for (int i = 10; i <= 15; i++) { expect |= (1ULL << i); }
+  assert(m == expect);
+}
+
+static void test_cron_parse_field_invalid(void) {
+  uint64_t m;
+  assert(!ac_cron_parse_field("", 0, 59, &m));
+  assert(!ac_cron_parse_field("abc", 0, 59, &m));
+  assert(!ac_cron_parse_field("-5", 0, 59, &m));
+  assert(!ac_cron_parse_field("60", 0, 59, &m));    // out of range for minute
+  assert(!ac_cron_parse_field("5-3", 0, 59, &m));   // reversed range
+  assert(!ac_cron_parse_field("*/0", 0, 59, &m));   // zero step
+  assert(!ac_cron_parse_field("12x", 0, 59, &m));   // trailing garbage
+  assert(!ac_cron_parse_field("1,", 0, 59, &m));    // trailing comma -> empty token
+  assert(!ac_cron_parse_field("1,,2", 0, 59, &m));  // empty token in the middle
+}
+
+static void test_cron_next_offset_days_matches_now_reports_next_future(void) {
+  uint64_t min_all, hour_all;
+  assert(ac_cron_parse_field("*", 0, 59, &min_all));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh = -1, om = -1;
+  // Every minute matches; "now" itself doesn't count -- next hit is the very next minute.
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 30, &oh, &om);
+  assert(off == 0 && oh == 10 && om == 31);
+}
+
+static void test_cron_next_offset_days_later_same_day(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh = -1, om = -1;
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 5, &oh, &om);
+  assert(off == 0 && oh == 10 && om == 20);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 45, &oh, &om);
+  assert(off == 0 && oh == 11 && om == 0);   // rolls into next matching hour
+}
+
+static void test_cron_next_offset_days_tomorrow_when_dow_skips_today(void) {
+  uint64_t min_all, hour_all;
+  assert(ac_cron_parse_field("*", 0, 59, &min_all));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh = -1, om = -1;
+  // Today is Wed (3); only Mon (1) matches -> 5 days out.
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_MON, 3, 10, 30, &oh, &om);
+  assert(off == 5);
+}
+
+// Demonstrates multi-fire at the pure-math level: a */20 minute pattern
+// produces multiple distinct hits across successive calls as "now" advances,
+// unlike a legacy alarm's single fixed hour:minute.
+static void test_cron_next_offset_days_multi_fire_progression(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh, om;
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 23, 45, &oh, &om);
+  assert(off == 1 && oh == 0 && om == 0);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 0, 0, &oh, &om);
+  assert(off == 0 && oh == 0 && om == 20);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 0, 20, &oh, &om);
+  assert(off == 0 && oh == 0 && om == 40);
+}
+
+static void test_cron_is_due_matches_and_not_yet_fired_this_minute(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 10, 20, 1000, 999) == true);
+}
+
+static void test_cron_is_due_already_fired_this_exact_minute(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 10, 20, 1000, 1000) == false);
+}
+
+// Multi-fire: an older last_fired_min doesn't block the CURRENT match, unlike
+// ac_is_due's whole-day guard.
+static void test_cron_is_due_older_last_fired_still_due(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 10, 20, 1000, 980) == true);
+}
+
+static void test_cron_is_due_field_mismatch(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 10, 21, 1000, 999) == false);   // minute mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_MON, true, 3, 10, 20, 1000, 999) == false);   // dow mismatch
+  uint64_t hour9;
+  assert(ac_cron_parse_field("9", 0, 23, &hour9));
+  assert(ac_cron_is_due(m20, (uint32_t)hour9, AC_DAY_ALL, true, 3, 10, 20, 1000, 999) == false);      // hour mismatch
+}
+
+static void test_cron_is_due_disabled_never(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 10, 20, 1000, 999) == false);
+}
+
+static void test_format_cron_summary(void) {
+  char buf[64];
+  ac_format_cron_summary(buf, sizeof(buf), "*/20", "*", "1-5");
+  assert(strcmp(buf, "*/20 * 1-5") == 0);
+  ac_format_cron_summary(buf, sizeof(buf), NULL, NULL, NULL);
+  assert(strcmp(buf, "* * *") == 0);
+}
+
 int main(void) {
   test_disabled();
   test_one_time_today();
@@ -269,6 +419,23 @@ int main(void) {
   test_mark_fired_repeating_no_skip_next_unchanged();
   test_format_time();
   test_format_repeat_summary();
+  test_cron_parse_field_star();
+  test_cron_parse_field_step_from_star();
+  test_cron_parse_field_single();
+  test_cron_parse_field_range();
+  test_cron_parse_field_stepped_range();
+  test_cron_parse_field_comma_union();
+  test_cron_parse_field_invalid();
+  test_cron_next_offset_days_matches_now_reports_next_future();
+  test_cron_next_offset_days_later_same_day();
+  test_cron_next_offset_days_tomorrow_when_dow_skips_today();
+  test_cron_next_offset_days_multi_fire_progression();
+  test_cron_is_due_matches_and_not_yet_fired_this_minute();
+  test_cron_is_due_already_fired_this_exact_minute();
+  test_cron_is_due_older_last_fired_still_due();
+  test_cron_is_due_field_mismatch();
+  test_cron_is_due_disabled_never();
+  test_format_cron_summary();
   printf("all alarm_calc tests passed\n");
   return 0;
 }
