@@ -42,3 +42,11 @@ void multitap_keyboard_window_push(MultitapKeyboardResultHandler handler,
 void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context);
+
+// As push_ex, but restricted to the fixed digits layout with the bottom-left
+// key repurposed to cycle "*"/"-"/"/"/"," — for structured numeric/symbol
+// fields (e.g. cron syntax) rather than free text. See
+// multitap_keyboard_set_numeric_mode() for the underlying behavior.
+void multitap_keyboard_window_push_numeric(MultitapKeyboardResultHandler handler,
+                                const char *initial_text, int max_len,
+                                void *context);

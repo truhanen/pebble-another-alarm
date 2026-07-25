@@ -16,6 +16,7 @@ static char        s_initial[256];   // copied starting text
 static bool        s_has_initial;
 static int         s_max_len;        // byte cap on entry (0 = unlimited)
 static bool        s_done;            // guard: deliver the result exactly once
+static bool        s_numeric_mode;    // set by multitap_keyboard_window_push_numeric
 
 // Tap vs. hold disambiguation, identical to the verified PebbleOS touch flow.
 static GPoint    s_touch_pt;
@@ -160,6 +161,7 @@ static void prv_load(Window *window) {
   GRect bounds = layer_get_bounds(root);
 
   s_keyboard = multitap_keyboard_create(bounds, prv_kb_done, NULL);
+  if (s_numeric_mode) multitap_keyboard_set_numeric_mode(s_keyboard, true);
   layer_add_child(root, multitap_keyboard_get_layer(s_keyboard));
   settings_load_and_apply(s_keyboard);
   if (s_max_len > 0) multitap_keyboard_set_max_len(s_keyboard, s_max_len);
@@ -180,20 +182,19 @@ static void prv_unload(Window *window) {
   s_window = NULL;
 }
 
-void multitap_keyboard_window_push(MultitapKeyboardResultHandler handler,
-                             const char *initial_text, void *context) {
-  multitap_keyboard_window_push_ex(handler, initial_text, 0, context);
-}
-
-void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
-                                const char *initial_text, int max_len,
-                                void *context) {
+// Shared setup for every push variant below. `numeric` is always set
+// explicitly (never left over from a prior push) since s_window/s_keyboard
+// are single static instances reused across the app's lifetime.
+static void prv_push_internal(MultitapKeyboardResultHandler handler,
+                               const char *initial_text, int max_len,
+                               void *context, bool numeric) {
   if (s_window) return;                    // single instance
 
   s_handler = handler;
   s_context = context;
   s_done = false;
   s_max_len = max_len;
+  s_numeric_mode = numeric;
   s_has_initial = (initial_text != NULL);
   if (s_has_initial) {
     strncpy(s_initial, initial_text, sizeof(s_initial) - 1);
@@ -208,4 +209,21 @@ void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
     .unload = prv_unload,
   });
   window_stack_push(s_window, true);
+}
+
+void multitap_keyboard_window_push(MultitapKeyboardResultHandler handler,
+                             const char *initial_text, void *context) {
+  prv_push_internal(handler, initial_text, 0, context, false);
+}
+
+void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
+                                const char *initial_text, int max_len,
+                                void *context) {
+  prv_push_internal(handler, initial_text, max_len, context, false);
+}
+
+void multitap_keyboard_window_push_numeric(MultitapKeyboardResultHandler handler,
+                                const char *initial_text, int max_len,
+                                void *context) {
+  prv_push_internal(handler, initial_text, max_len, context, true);
 }

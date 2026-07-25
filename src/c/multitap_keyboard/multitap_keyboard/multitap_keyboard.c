@@ -54,6 +54,13 @@ static const char *const *const PAGE_KEY[PAGE_COUNT][9] = {
 };
 static const char *const PAGE_IND[PAGE_COUNT] = { "ABC", "123", "#+=" };
 
+// Fixed 4-symbol cycle for the bottom-left key in numeric_mode (see
+// multitap_keyboard_set_numeric_mode) — covers every token
+// ac_cron_parse_field-style cron fields need: "*" (wildcard), "-" (range),
+// "/" (step), "," (list).
+static const char *const CRON_SYMS[] = { "*", "-", "/", "," };
+#define CRON_SYM_COUNT 4
+
 // Toggleable extended (non-ASCII) characters. Each is appended to a base key's
 // cycle when enabled, and hidden from the key labels. All enabled by default.
 // To extend the set, add entries here (glyph + which alpha key 0..8 it joins)
@@ -110,6 +117,9 @@ struct MultitapKeyboard {
   int  max_len;             // byte cap on buffer (0 = only BUFFER_CAP limits)
   int  page;
   int  shift;               // ShiftState (explicit, user-driven)
+  bool numeric_mode;        // fixed to PAGE_NUMBERS; bottom-left key cycles
+                            // */-/,/  instead of Shift/layout-cycle. Set via
+                            // multitap_keyboard_set_numeric_mode().
 
   bool pending_active;
   int  pending_key;
@@ -192,6 +202,10 @@ static int prv_next_shift(MultitapKeyboard *kb) {
 static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
                           const char **out, int cap) {
   int n = 0;
+  if (key == KEY_SHIFT && kb->numeric_mode) {
+    for (int j = 0; j < CRON_SYM_COUNT && n < cap; j++) out[n++] = CRON_SYMS[j];
+    return n;
+  }
   const char *const *base = PAGE_KEY[page][key];
   for (int j = 0; base[j] && n < cap; j++) out[n++] = base[j];
   if (page == PAGE_ALPHA) {
@@ -284,6 +298,7 @@ static void prv_arm_commit_timer(MultitapKeyboard *kb) {
 }
 
 static void prv_cycle_page(MultitapKeyboard *kb) {
+  if (kb->numeric_mode) return;   // locked to the digits page in this mode
   prv_commit_pending(kb);
   kb->page = (kb->page + 1) % PAGE_COUNT;
   layer_mark_dirty(kb->layer);
@@ -361,7 +376,9 @@ static void prv_press_key(MultitapKeyboard *kb, int key) {
   prv_caret_wake(kb);
 
   if (key == KEY_SHIFT) {
-    if (kb->page != PAGE_ALPHA) {
+    if (kb->numeric_mode) {
+      prv_press_char_key(kb, KEY_SHIFT);   // cycles */-/,/ like any other key
+    } else if (kb->page != PAGE_ALPHA) {
       prv_cycle_page(kb);                  // doubles as the layout-cycle button
     } else if (kb->shift == SHIFT_OFF && kb->settings.auto_caps &&
                kb->autocap_armed && !kb->autocap_suppressed) {
@@ -477,7 +494,7 @@ void multitap_keyboard_handle_hold(MultitapKeyboard *kb, GPoint point) {
 // rest, so a pressed key stays capital while the others fall back to lowercase.
 static void prv_key_label(MultitapKeyboard *kb, int i, int shift, char *out, size_t cap) {
   out[0] = '\0';
-  if (i == KEY_SHIFT) {
+  if (i == KEY_SHIFT && !kb->numeric_mode) {
     if (kb->page != PAGE_ALPHA) {                        // layout-cycle button
       strncpy(out, PAGE_IND[(kb->page + 1) % PAGE_COUNT], cap - 1);
       out[cap - 1] = '\0'; return;
@@ -485,6 +502,9 @@ static void prv_key_label(MultitapKeyboard *kb, int i, int shift, char *out, siz
     const char *s = (shift == SHIFT_OFF) ? "ab" : (shift == SHIFT_ONCE) ? "Ab" : "AB";
     strncpy(out, s, cap - 1); out[cap - 1] = '\0'; return;
   }
+  // numeric_mode: falls through to the generic glyph-concatenation loop
+  // below, which (via prv_eff_glyphs' KEY_SHIFT special case) renders the
+  // cycled "*-/," symbols exactly like any other multi-glyph key.
   if (i == KEY_DEL)   { strncpy(out, "DEL", cap - 1); out[cap - 1] = '\0'; return; }
   if (i == KEY_SPACE) { strncpy(out, (kb->page == PAGE_NUMBERS) ? "0" : "space", cap - 1);
                         out[cap - 1] = '\0'; return; }
@@ -937,6 +957,13 @@ void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes) {
   if (!kb) return;
   kb->max_len = (max_bytes > 0 && max_bytes < BUFFER_CAP) ? max_bytes : 0;
   prv_clamp_to_max(kb);
+  layer_mark_dirty(kb->layer);
+}
+
+void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled) {
+  if (!kb) return;
+  kb->numeric_mode = enabled;
+  if (enabled) kb->page = PAGE_NUMBERS;
   layer_mark_dirty(kb->layer);
 }
 

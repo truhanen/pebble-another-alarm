@@ -91,6 +91,14 @@ void multitap_keyboard_set_text(MultitapKeyboard *kb, const char *text);
 // glyph. Pass 0 (the default) for no limit beyond the internal buffer.
 void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes);
 
+// Restricts entry to the fixed digits layout (PAGE_NUMBERS) for structured
+// numeric/symbol fields (e.g. cron syntax): no ABC/symbols page reachable via
+// Down or the bottom-left key, which is instead repurposed to multi-tap-cycle
+// "*"/"-"/"/"/"," the same way any other key cycles its glyphs. Call once,
+// right after creating the keyboard (or via
+// multitap_keyboard_window_push_numeric() for the full-screen wrapper).
+void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled);
+
 // Behavior settings.
 void multitap_keyboard_get_settings(MultitapKeyboard *kb, MultitapSettings *out);
 void multitap_keyboard_set_settings(MultitapKeyboard *kb, const MultitapSettings *settings);

@@ -1060,13 +1060,13 @@ static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   switch (cell_index->row) {
     case CRON_ROW_SUBMIT: cron_submit(); break;
     case CRON_ROW_MINUTE:
-      multitap_keyboard_window_push_ex(cron_field_done, s_cron_min, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_MINUTE);
+      multitap_keyboard_window_push_numeric(cron_field_done, s_cron_min, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_MINUTE);
       break;
     case CRON_ROW_HOUR:
-      multitap_keyboard_window_push_ex(cron_field_done, s_cron_hour, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_HOUR);
+      multitap_keyboard_window_push_numeric(cron_field_done, s_cron_hour, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_HOUR);
       break;
     case CRON_ROW_DOW:
-      multitap_keyboard_window_push_ex(cron_field_done, s_cron_dow, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_DOW);
+      multitap_keyboard_window_push_numeric(cron_field_done, s_cron_dow, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_DOW);
       break;
   }
 }

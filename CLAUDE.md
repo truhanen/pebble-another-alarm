@@ -507,6 +507,22 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   alarms interleave in one time-ordered list.
 - **`CRON_FIELD_LEN` (28)** caps each raw field string at 27 usable chars —
   comfortably fits comma-lists like `"0-59/5,10,20-25/3"`.
+- **Cron field entry uses a fixed numeric keyboard**, not the vendored
+  `multitap_keyboard` widget's default ABC layout: `cron_select()` (`main.c`)
+  pushes each field via `multitap_keyboard_window_push_numeric()` instead of
+  the general-purpose `multitap_keyboard_window_push_ex()` every other
+  text-entry call site (the alarm label editor) still uses. This is a
+  genuinely new, opt-in *behavior* mode added to the vendored widget itself
+  (`multitap_keyboard_set_numeric_mode()`) — not a restyle of it, so it
+  doesn't conflict with the "treat it as upstream" note above: it's gated by
+  one `bool numeric_mode` field defaulting to `false` (zero effect on every
+  other call site), which locks the keyboard to its existing `PAGE_NUMBERS`
+  layout (page-cycling via Down or the bottom-left key becomes a no-op —
+  `prv_cycle_page`'s single choke point just early-returns) and repurposes
+  the bottom-left key (normally Shift) to multi-tap-cycle `*`/`-`/`/`/`,`
+  through the same `prv_eff_glyphs`/pending-key/commit machinery every other
+  key already uses, rather than a parallel code path — so it inherits the
+  usual multi-tap highlight/underline/commit-on-timeout behavior for free.
 
 ## Tests
 
