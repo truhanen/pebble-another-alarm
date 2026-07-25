@@ -449,6 +449,16 @@ even though its wire value isn't split across them — never assume
     condition exactly). Drawn in the row's existing `fg` tint, with the
     time text shifted right 16px to make room; line 2 is unaffected and
     stays flush-left.
+  - A one-alarm hint (`main_hint_update_proc`) is a direct adaptation of
+    timer's `empty_hint_update_proc` (its `s_count == 1` branch): an overlay
+    `Layer` (`s_main_hint_layer`) the same size as the `MenuLayer`, added on
+    top of it, that draws "- Short-press to toggle\n- Long-press to edit"
+    centered in the blank space below the list — only when there's exactly
+    one alarm (so exactly the alarm row + the trailing "+ New alarm" row,
+    at the fixed `ML_ROW_H` each this app uses, unlike timer's variable
+    per-row heights). Kept in sync via a single `layer_mark_dirty` call
+    added to `reload_ui()`, since every alarm-count/state change already
+    funnels through it.
   - The main window has a bottom bar (`draw_bottom_bar`/
     `bottom_bar_rect_for_bounds`), a direct port of timer's own bottom bar:
     a thin divider line + black strip pinned to the bottom, reducing the

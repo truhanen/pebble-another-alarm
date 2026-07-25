@@ -31,6 +31,7 @@ static int32_t now_day_id(void) {
 // ---- global state ----
 static Window *s_window;
 static MenuLayer *s_menu;
+static Layer *s_main_hint_layer;   // one-alarm hint, see main_hint_update_proc
 static bool s_launched_by_wakeup;   // this process exists only because a
                                     // wakeup relaunched a closed app --
                                     // see alarm_finish_ring().
@@ -103,6 +104,7 @@ static void rebuild_order(void) {
 static void reload_ui(void) {
   rebuild_order();
   if (s_menu) { menu_layer_reload_data(s_menu); }
+  if (s_main_hint_layer) { layer_mark_dirty(s_main_hint_layer); }
 }
 
 // ---- forward decls (defined further down) ----
@@ -120,8 +122,10 @@ static uint16_t ml_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
   return (uint16_t)(s_count + 1);   // +1 for the trailing "+ New alarm" row
 }
 
+#define ML_ROW_H 58   // taller now that line 2 matches timer's detail-row font size (24pt, not 18pt)
+
 static int16_t ml_cell_height(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
-  return 58;   // taller now that line 2 matches timer's detail-row font size (24pt, not 18pt)
+  return ML_ROW_H;
 }
 
 // Row tint by state, same "state tints the row, selected row gets a
@@ -2133,6 +2137,37 @@ static void main_bottom_bar_update_proc(Layer *l, GContext *ctx) {
   draw_bottom_bar(ctx, layer_get_bounds(l));
 }
 
+// One-alarm hint, adapted from pebble-another-timer's empty_hint_update_proc
+// (its s_count == 1 branch): drawn into the blank space below the list's
+// two rows (the alarm + trailing "+ New alarm"), centered, word-wrapped,
+// with the same GOTHIC optical-rise nudge timer uses. This app's
+// ml_cell_height() is a fixed ML_ROW_H (unlike timer's variable per-row
+// heights), so free space always starts at a fixed 2 * ML_ROW_H here.
+static void main_hint_update_proc(Layer *layer, GContext *ctx) {
+  if (s_count != 1) { return; }
+  GRect b = layer_get_bounds(layer);
+  if (b.size.h <= 32) { return; }
+  const GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  const char *msg = "- Short-press to toggle\n- Long-press to edit";
+  int free_top = ML_ROW_H * (s_count + 1);   // bottom of the "+ New alarm" row
+  GRect area = GRect(8, free_top, b.size.w - 16, b.size.h - free_top);
+  if (area.size.h <= 20) { return; }
+  GSize sz = graphics_text_layout_get_content_size(
+    msg, f, GRect(0, 0, area.size.w, 200), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+  int w = sz.w;
+  if (w > area.size.w) { w = area.size.w; }
+  int x = area.origin.x + (area.size.w - w) / 2;
+  // GOTHIC reserves headroom above the caps, so a measured content box
+  // still sits low when centered; lift it back to the optical middle (same
+  // constant/rationale as timer's empty_hint_update_proc).
+  const int rise = 4;
+  int y = area.origin.y + (area.size.h - sz.h) / 2 - rise;
+  if (y < area.origin.y) { y = area.origin.y; }
+  GRect hint = GRect(x, y, w, sz.h);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, msg, f, hint, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+}
+
 static void main_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
@@ -2146,6 +2181,10 @@ static void main_window_load(Window *w) {
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
 
+  s_main_hint_layer = layer_create(menu_bounds);
+  layer_set_update_proc(s_main_hint_layer, main_hint_update_proc);
+  layer_add_child(root, s_main_hint_layer);
+
   s_bottom_bar_layer = layer_create(bottom_bar_rect_for_bounds(bounds));
   layer_set_update_proc(s_bottom_bar_layer, main_bottom_bar_update_proc);
   layer_add_child(root, s_bottom_bar_layer);
@@ -2153,6 +2192,7 @@ static void main_window_load(Window *w) {
 
 static void main_window_unload(Window *w) {
   menu_layer_destroy(s_menu); s_menu = NULL;
+  layer_destroy(s_main_hint_layer); s_main_hint_layer = NULL;
   layer_destroy(s_bottom_bar_layer); s_bottom_bar_layer = NULL;
 }
 
