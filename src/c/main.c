@@ -264,7 +264,7 @@ static void ml_enable_choice(int choice, void *ctx) {
   int idx = (int)(intptr_t)ctx;
   if (idx < 0 || idx >= s_count) { return; }
   Alarm *a = &s_alarms[idx];
-  if (choice == 0) { a->enabled = false; }
+  if (choice == 0) { a->enabled = false; a->skip_next = false; }
   else { a->skip_next = !a->skip_next; }
   persist_all(); rearm_wakeup(); reload_ui();
 }
@@ -289,6 +289,7 @@ static void ml_toggle_enable(int idx) {
   bool was_enabled = a->enabled;
   a->enabled = !a->enabled;
   if (!was_enabled && a->enabled) { resync_last_fired_for_schedule_change(a); }
+  if (!a->enabled) { a->skip_next = false; }
   persist_all(); rearm_wakeup(); reload_ui();
 }
 
@@ -1835,7 +1836,7 @@ static void edit_on_enable_choice(int choice, void *ctx) {
   // undone the same way it was set.
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
-  if (choice == 0) { a->enabled = false; }
+  if (choice == 0) { a->enabled = false; a->skip_next = false; }
   else { a->skip_next = !a->skip_next; }
   persist_all(); rearm_wakeup(); reload_ui();
   if (s_edit_menu) { menu_layer_reload_data(s_edit_menu); }
@@ -1883,6 +1884,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
           if (a->is_cron) { a->cron_last_fired_min = -1; }
           else { resync_last_fired_for_schedule_change(a); }
         }
+        if (!a->enabled) { a->skip_next = false; }
         persist_all(); rearm_wakeup(); reload_ui();
         menu_layer_reload_data(s_edit_menu);
       }
