@@ -31,6 +31,9 @@ static int32_t now_day_id(void) {
 // ---- global state ----
 static Window *s_window;
 static MenuLayer *s_menu;
+static bool s_launched_by_wakeup;   // this process exists only because a
+                                    // wakeup relaunched a closed app --
+                                    // see alarm_finish_ring().
 
 static Alarm s_alarms[MAX_ALARMS];
 static int s_count = 0;
@@ -536,6 +539,24 @@ static void alarm_cancel_auto_stop(void) {
   if (s_alarm_auto_stop_timer) { app_timer_cancel(s_alarm_auto_stop_timer); s_alarm_auto_stop_timer = NULL; }
 }
 
+// Called once a ring screen has nothing left to chain to (see
+// show_next_pending_alarm) after a Stop/Snooze/auto-stop. If this whole app
+// process only exists because a wakeup relaunched it while it wasn't
+// already open, exit back out entirely (window_stack_pop_all -- the same
+// "closest thing to never having opened it" mechanism this app has used
+// before) instead of leaving the main list on screen, since the user never
+// asked to open the app for this. A wakeup firing while the app was
+// already foregrounded leaves s_launched_by_wakeup false, so that case is
+// unaffected and still returns to the main list.
+static void alarm_finish_ring(void) {
+  if (show_next_pending_alarm()) { return; }
+  if (s_launched_by_wakeup) {
+    window_stack_pop_all(false);
+  } else {
+    window_stack_remove(s_alarm_window, true);
+  }
+}
+
 static void alarm_do_stop(void) {
   alarm_cancel_auto_stop();
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
@@ -544,8 +565,7 @@ static void alarm_do_stop(void) {
     s_alarms[s_alarm_idx].snooze_count = 0;
     persist_all(); rearm_wakeup(); reload_ui();
   }
-  if (show_next_pending_alarm()) { return; }
-  window_stack_remove(s_alarm_window, true);
+  alarm_finish_ring();
 }
 static void alarm_stop(ClickRecognizerRef rec, void *ctx) { alarm_do_stop(); }
 
@@ -576,8 +596,7 @@ static void alarm_snooze(ClickRecognizerRef rec, void *ctx) {
     a->snooze_count++;
     persist_all(); rearm_wakeup(); reload_ui();
   }
-  if (show_next_pending_alarm()) { return; }
-  window_stack_remove(s_alarm_window, true);
+  alarm_finish_ring();
 }
 
 // Explicitly subscribed as a no-op: an UNBOUND back button pops the window by
@@ -2288,7 +2307,8 @@ static void init(void) {
 
   // If launched by a wakeup, the firing event was already consumed.
   WakeupId wid; int32_t cookie;
-  if (wakeup_get_launch_event(&wid, &cookie)) { store_save_wakeup_id(-1); }
+  s_launched_by_wakeup = wakeup_get_launch_event(&wid, &cookie);
+  if (s_launched_by_wakeup) { store_save_wakeup_id(-1); }
   bool fired = sweep_due_alarms();
   if (fired) { persist_all(); }
   rearm_wakeup();

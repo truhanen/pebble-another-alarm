@@ -334,6 +334,24 @@ even though its wire value isn't split across them — never assume
   the edit menu's `EDIT_ROW_AUTO_STOP` ("Auto-stop" On/Off) row, alongside
   Vibration/Sound; no wizard step, defaults to off (like every other bool
   field not driven by a phone-config default).
+- **Dismissing an alarm exits straight to the watchface if the app wasn't
+  already open**: `s_launched_by_wakeup` (`main.c`, set in `init()` from
+  `wakeup_get_launch_event()`'s return value) is true only when this whole
+  app process exists purely because a wakeup relaunched it from closed —
+  not when it was manually opened, and not when a wakeup instead fires
+  while the app is already foregrounded (`handle_wakeup_event`, which never
+  touches this flag). `alarm_do_stop()`/`alarm_snooze()` both funnel through
+  one shared `alarm_finish_ring()` tail: once `show_next_pending_alarm()`
+  says there's nothing left to chain to, it calls `window_stack_pop_all()`
+  (exiting the app back to the watchface — the same "closest thing to
+  never having opened it" mechanism used elsewhere) instead of the usual
+  `window_stack_remove(s_alarm_window, true)` (which falls back to the main
+  list) when `s_launched_by_wakeup` is set. This applies to Stop, Snooze,
+  and an `auto_stop` alarm's timer-driven auto-dismiss alike, since all
+  three now route through `alarm_do_stop()`/`alarm_finish_ring()`. Multiple
+  alarms due in the same wakeup-launched session still chain through their
+  ring screens one at a time as before — the exit only happens once the
+  *last* one is dismissed.
 - **`repeats` (bool) is separate from `repeat_days` (bitmask)**: `repeats`
   says whether the alarm recurs weekly forever or fires once; `repeat_days`
   says which day(s) apply in either case. This lets a *non-repeating* alarm
