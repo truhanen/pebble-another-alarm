@@ -136,6 +136,7 @@ trusting a mental model of the numbering.
 | `TestAlarmCronHour` | 10024 | string | Raw cron hour field, parsed into `cron_hour_mask`. |
 | `TestAlarmCronDow` | 10025 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
 | `TestAlarmCronFiredNow` | 10026 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
+| `TestAlarmAutoStop` | 10027 | int 0/1 | Sets `auto_stop` (see "Key design points" below). |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -314,6 +315,25 @@ even though its wire value isn't split across them — never assume
   0-100, 0=disabled) is the *only* gate; here it's a **global** volume
   (`s_audio_volume`, phone-configured via `AudioVolume`) layered under each
   alarm's own `sound_enabled` toggle — both must allow sound for it to play.
+- **`auto_stop` alarms still show the ring screen, but only briefly**:
+  `trigger_alarm()` branches on `a->auto_stop` — an auto-stop alarm fires
+  vibration/sound (via its own existing `vibration_enabled`/`sound_enabled`
+  toggles) **exactly once** instead of calling `alarm_buzz_start()`'s
+  repeating 4s cadence, and arms a one-shot `s_alarm_auto_stop_timer`
+  (`ALARM_AUTO_STOP_MS`, ~2s) that calls `alarm_do_stop()` — the same
+  end state as the user pressing Stop — instead of waiting indefinitely.
+  `alarm_stop`/`alarm_snooze` are refactored so `alarm_stop` is a thin
+  wrapper around `alarm_do_stop()` (shared by the timer callback
+  `alarm_auto_stop_cb`), and manually pressing Stop or Snooze during that
+  couple-second window cancels the pending timer first
+  (`alarm_cancel_auto_stop()`, also called from `alarm_window_unload` as a
+  safety net, and defensively at the top of every `trigger_alarm()` call so
+  a stale timer can never fire against whichever alarm gets shown next) —
+  otherwise it could fire moments later and clobber a snooze the user just
+  set, or re-run the "show next pending" chain a second time. Toggled via
+  the edit menu's `EDIT_ROW_AUTO_STOP` ("Auto-stop" On/Off) row, alongside
+  Vibration/Sound; no wizard step, defaults to off (like every other bool
+  field not driven by a phone-config default).
 - **`repeats` (bool) is separate from `repeat_days` (bitmask)**: `repeats`
   says whether the alarm recurs weekly forever or fires once; `repeat_days`
   says which day(s) apply in either case. This lets a *non-repeating* alarm
@@ -423,7 +443,7 @@ even though its wire value isn't split across them — never assume
     exactly timer's simpler "detail window" pattern (`dl_draw_row`), not the
     main list's per-row tinting. `edit_window` has no header — the label is
     its own "Label: <name>" row (opens the multitap keyboard) alongside
-    State/Time/Repeat/Snooze/Vibration/Sound/Delete.
+    State/Time/Repeat/Snooze/Vibration/Sound/Auto-stop/Delete.
   - The time and snooze editors both render through the shared
     `dial_draw_number_boxes`/`dial_box_area` helpers, a direct port of
     timer's non-touch box-type duration dial (`dial_update_proc`,

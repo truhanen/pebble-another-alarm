@@ -457,6 +457,7 @@ static bool show_next_pending_alarm(void) {
 
 #define ALARM_BUZZ_INTERVAL_MS 4000
 #define ALARM_BUZZ_MAX_S       600
+#define ALARM_AUTO_STOP_MS 2000   // "a couple seconds"
 
 static Window *s_alarm_window;
 static TextLayer *s_alarm_title;
@@ -468,6 +469,7 @@ static char s_alarm_title_buf[16 + NAME_LEN + 2];
 static char s_alarm_sub_buf[32];
 static AppTimer *s_alarm_buzz_timer;
 static int64_t s_alarm_buzz_start_s;
+static AppTimer *s_alarm_auto_stop_timer;   // auto_stop: auto-dismisses the ring screen
 
 static void alarm_vibrate(void) {
   switch (s_vibe_pattern) {
@@ -525,7 +527,17 @@ static void alarm_buzz_stop(void) {
 #endif // PBL_SPEAKER
 }
 
-static void alarm_stop(ClickRecognizerRef rec, void *ctx) {
+// auto_stop's ring screen auto-dismisses itself via s_alarm_auto_stop_timer
+// (armed in trigger_alarm); a manual Stop or Snooze pressed before it fires
+// must cancel it, or it could fire moments later and clobber whatever the
+// user just did (re-clearing a snooze the user just set, or re-running the
+// "show next pending" chain a second time).
+static void alarm_cancel_auto_stop(void) {
+  if (s_alarm_auto_stop_timer) { app_timer_cancel(s_alarm_auto_stop_timer); s_alarm_auto_stop_timer = NULL; }
+}
+
+static void alarm_do_stop(void) {
+  alarm_cancel_auto_stop();
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
     s_alarms[s_alarm_idx].alarm_pending = false;
     s_alarms[s_alarm_idx].snooze_until = 0;
@@ -535,8 +547,17 @@ static void alarm_stop(ClickRecognizerRef rec, void *ctx) {
   if (show_next_pending_alarm()) { return; }
   window_stack_remove(s_alarm_window, true);
 }
+static void alarm_stop(ClickRecognizerRef rec, void *ctx) { alarm_do_stop(); }
+
+// Fired ALARM_AUTO_STOP_MS after an auto_stop alarm's ring screen is shown
+// (see trigger_alarm) -- same end state as the user pressing Stop.
+static void alarm_auto_stop_cb(void *data) {
+  s_alarm_auto_stop_timer = NULL;
+  alarm_do_stop();
+}
 
 static void alarm_snooze(ClickRecognizerRef rec, void *ctx) {
+  alarm_cancel_auto_stop();
   int idx = s_alarm_idx;
   if (idx >= 0 && idx < s_count) {
     Alarm *a = &s_alarms[idx];
@@ -650,6 +671,7 @@ static void alarm_window_load(Window *w) {
 
 static void alarm_window_unload(Window *w) {
   alarm_buzz_stop();
+  alarm_cancel_auto_stop();
   text_layer_destroy(s_alarm_title); s_alarm_title = NULL;
   text_layer_destroy(s_alarm_sub); s_alarm_sub = NULL;
   text_layer_destroy(s_alarm_lbl_up); s_alarm_lbl_up = NULL;
@@ -688,7 +710,17 @@ static void trigger_alarm(int idx, int count) {
     if (s_alarm_title) { text_layer_set_text(s_alarm_title, s_alarm_title_buf); layout_alarm_title(); }
     if (s_alarm_sub) { text_layer_set_text(s_alarm_sub, s_alarm_sub_buf); }
   }
-  alarm_buzz_start();
+
+  alarm_cancel_auto_stop();   // never leave a stale timer armed against whichever alarm gets shown next
+  if (a->auto_stop) {
+    if (a->vibration_enabled) { alarm_vibrate(); }
+#if PBL_SPEAKER
+    if (a->sound_enabled) { alarm_play_audio((uint8_t)s_audio_volume); }
+#endif // PBL_SPEAKER
+    s_alarm_auto_stop_timer = app_timer_register(ALARM_AUTO_STOP_MS, alarm_auto_stop_cb, NULL);
+  } else {
+    alarm_buzz_start();
+  }
 }
 
 // ============================ generic 2-choice confirm ============================
@@ -1533,8 +1565,9 @@ static int s_edit_idx = -1;
 #define EDIT_ROW_SNOOZE   5
 #define EDIT_ROW_VIBE     6
 #define EDIT_ROW_SOUND    7
-#define EDIT_ROW_DELETE   8
-#define EDIT_ROW_MAX_COUNT 8   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/SOUND/DELETE
+#define EDIT_ROW_AUTO_STOP 8
+#define EDIT_ROW_DELETE   9
+#define EDIT_ROW_MAX_COUNT 9   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/SOUND/AUTO_STOP/DELETE
 
 // Builds the ordered list of row "kinds" for the current alarm's mode into
 // out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
@@ -1554,6 +1587,7 @@ static int edit_build_rows(int *out_kinds, bool is_cron) {
   out_kinds[n++] = EDIT_ROW_SNOOZE;
   out_kinds[n++] = EDIT_ROW_VIBE;
   out_kinds[n++] = EDIT_ROW_SOUND;
+  out_kinds[n++] = EDIT_ROW_AUTO_STOP;
   out_kinds[n++] = EDIT_ROW_DELETE;
   return n;
 }
@@ -1622,6 +1656,10 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case EDIT_ROW_SOUND:
       key = "Sound";
       snprintf(value, sizeof(value), "%s", a->sound_enabled ? "On" : "Off");
+      break;
+    case EDIT_ROW_AUTO_STOP:
+      key = "Auto-stop";
+      snprintf(value, sizeof(value), "%s", a->auto_stop ? "On" : "Off");
       break;
     case EDIT_ROW_DELETE:
       key = "Delete";   // action row, no value
@@ -1818,6 +1856,11 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       break;
     case EDIT_ROW_SOUND:
       a->sound_enabled = !a->sound_enabled;
+      persist_all();
+      menu_layer_reload_data(s_edit_menu);
+      break;
+    case EDIT_ROW_AUTO_STOP:
+      a->auto_stop = !a->auto_stop;
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
@@ -2179,6 +2222,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
         a->cron_last_fired_min = (t->value->int32 != 0) ? (int32_t)(now_s() / 60) : -1;
         changed = true;
       }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoStop))) { a->auto_stop = t->value->int32 != 0; changed = true; }
     }
   }
 

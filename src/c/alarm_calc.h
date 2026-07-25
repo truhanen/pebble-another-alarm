@@ -33,6 +33,12 @@ typedef struct {
   uint8_t snooze_max;       // 0 = unlimited
   bool vibration_enabled;
   bool sound_enabled;
+  bool auto_stop;            // ring screen fires vibration/sound (per the two
+                             // toggles above) exactly once instead of the
+                             // usual repeating buzz, then auto-dismisses
+                             // itself after a couple seconds -- same end
+                             // state as the user pressing Stop. See main.c's
+                             // trigger_alarm()/alarm_auto_stop_cb().
   bool timeline_pin_enabled; // reserved placeholder; no push logic exists yet
   bool alarm_pending;        // due, still owed a ring screen
   int64_t snooze_until;      // epoch seconds; 0 = not currently snoozed. Persisted
