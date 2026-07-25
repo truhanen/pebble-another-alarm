@@ -441,7 +441,14 @@ even though its wire value isn't split across them — never assume
     label, and a divider line under each row. Row order is by raw clock time
     (hour:minute) ascending, ties broken by index — not time-to-next-
     occurrence, so a snoozed or disabled alarm still sorts by its own
-    hour:minute like any other.
+    hour:minute like any other. Each row's first line also gets a leading
+    play/stop icon (`ml_draw_state_icon`), a direct port of timer's own
+    `ml_draw_state_icon`'s `TS_RUNNING`/`TS_STOPPED` cases (scanline-built
+    triangle / filled square) — play when `enabled`, stop when disabled or
+    when `repeats && skip_next` (mirrors the edit menu's "Skip next"
+    condition exactly). Drawn in the row's existing `fg` tint, with the
+    time text shifted right 16px to make room; line 2 is unaffected and
+    stays flush-left.
   - The main window has a bottom bar (`draw_bottom_bar`/
     `bottom_bar_rect_for_bounds`), a direct port of timer's own bottom bar:
     a thin divider line + black strip pinned to the bottom, reducing the

@@ -153,6 +153,29 @@ static bool ml_is_boundary_row(int row) {
                           // trailing "+ New alarm" row is the list's end
 }
 
+// Leading play/stop indicator for an alarm row's first line, ported from
+// pebble-another-timer's ml_draw_state_icon (its TS_RUNNING/TS_STOPPED
+// cases only -- this app has no "paused" equivalent to reuse the third
+// for). "Play": a scanline-built right-pointing triangle (flat vertical
+// left edge at x, tapering to a point at mid-height) -- widest span in the
+// middle row, narrowing by row-distance from center, same technique timer
+// uses for its running icon. "Stop": a plain filled square.
+static void ml_draw_state_icon(GContext *ctx, int x, int y, bool show_stop, GColor color) {
+  graphics_context_set_fill_color(ctx, color);
+  if (show_stop) {
+    graphics_fill_rect(ctx, GRect(x, y + 1, 10, 10), 0, GCornerNone);
+    return;
+  }
+  const int h = 12;
+  const int w = 10;
+  for (int row = 0; row < h; row++) {
+    int d = (row <= (h / 2)) ? ((h / 2) - row) : (row - (h / 2));
+    int span = w - (d * w) / (h / 2 + 1);
+    if (span < 1) { span = 1; }
+    graphics_fill_rect(ctx, GRect(x, y + row, span, 1), 0, GCornerNone);
+  }
+}
+
 static void ml_draw_new_alarm_row(GContext *ctx, const Layer *cell_layer, bool selected) {
   GRect b = layer_get_bounds(cell_layer);
   graphics_context_set_fill_color(ctx, selected ? GColorBlack : GColorWhite);
@@ -189,14 +212,22 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   int ty = (b.size.h - (th + line2_h)) / 2 - 2;
   int time_x = 6;
 
+  // Leading play/stop icon: enabled -> play; disabled, or enabled-but-
+  // skipping-its-next-occurrence (mirrors edit_draw_row's EDIT_ROW_ENABLE
+  // "Skip next" condition exactly) -> stop.
+  int icon_y = ty + (th - 12) / 2 + 3;
+  bool show_stop = !a->enabled || (a->repeats && a->skip_next);
+  ml_draw_state_icon(ctx, time_x, icon_y, show_stop, fg);
+  int time_text_x = time_x + 16;
+
   char time_buf[16];
   if (a->is_cron) { snprintf(time_buf, sizeof(time_buf), "Cron"); }
   else { ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style()); }
-  graphics_draw_text(ctx, time_buf, tf, GRect(time_x, ty, b.size.w - time_x - 4, th),
+  graphics_draw_text(ctx, time_buf, tf, GRect(time_text_x, ty, b.size.w - time_text_x - 4, th),
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
   GSize tw = graphics_text_layout_get_content_size(time_buf, tf,
     GRect(0, 0, b.size.w, th), GTextOverflowModeFill, GTextAlignmentLeft);
-  int desc_x = time_x + tw.w + 8;
+  int desc_x = time_text_x + tw.w + 8;
   if (a->name[0]) {
     graphics_draw_text(ctx, a->name, nf, GRect(desc_x, ty, b.size.w - 4 - desc_x, th),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
