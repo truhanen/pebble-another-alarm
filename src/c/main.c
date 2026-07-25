@@ -1094,7 +1094,7 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   char value[CRON_FIELD_LEN + 12] = "";
   switch (cell_index->row) {
     case CRON_ROW_SUBMIT:
-      graphics_draw_text(ctx, "Submit", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+      graphics_draw_text(ctx, "Apply", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
                          GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
       return;
