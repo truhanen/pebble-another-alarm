@@ -30,10 +30,17 @@ def build(ctx):
     build_worker = os.path.exists('worker_src')
     binaries = []
 
+    # Test-only AppMessage hooks (see main.c's handle_test_message and
+    # CLAUDE.md's "Test hooks" section) are opt-in via env var so a normal
+    # `pebble build` never ships them: `APP_TEST_HOOKS=1 pebble build`.
+    test_hooks_enabled = os.environ.get('APP_TEST_HOOKS') == '1'
+
     cached_env = ctx.env
     for platform in ctx.env.TARGET_PLATFORMS:
         ctx.env = ctx.all_envs[platform]
         ctx.set_group(ctx.env.PLATFORM_NAME)
+        if test_hooks_enabled:
+            ctx.env.DEFINES += ['APP_TEST_HOOKS=1']
         app_elf = '{}/pebble-app.elf'.format(ctx.env.BUILD_DIR)
         ctx.pbl_build(source=ctx.path.ant_glob('src/c/**/*.c'), target=app_elf, bin_type='app')
 

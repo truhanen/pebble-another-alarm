@@ -1,7 +1,13 @@
 # Another alarm — feature spec
 
-Status: **design doc**, nothing here is implemented yet (see `CLAUDE.md` for
-current scaffold state). This adapts patterns proven in the sibling
+Status: **implemented** — see `CLAUDE.md` for the as-built architecture and
+a few implementation-time refinements not reflected below: time/duration
+entry uses simple button-driven pickers rather than a ported touch-dial
+widget, the "+ New alarm" wizard has no back-navigation across its steps
+(only the very first field can abort creation), and the edit menu gained a
+"Delete alarm" row (not in the original list below, but necessary — there
+was otherwise no way to remove an alarm). This document is kept as the
+historical design record. This adapts patterns proven in the sibling
 `pebble-another-timer` project wherever they fit; alarms differ from timers
 in one structural way timers don't have to deal with — **alarms must fire at
 a wall-clock time while the app isn't running**, which timers never needed

@@ -19,10 +19,46 @@
       "watchface": false
     },
     "messageKeys": [
-      "ExampleSetting"
+      "FirstDayOfWeek",
+      "AlarmVibePattern",
+      "DefaultSnoozeMinutes",
+      "DefaultSnoozeMax",
+      "AudioVolume",
+      "DefaultAlarmSignal[2]",
+      "TestClearAlarms",
+      "TestAlarmIndex",
+      "TestAlarmHour",
+      "TestAlarmMinute",
+      "TestAlarmRepeats",
+      "TestAlarmRepeatDays",
+      "TestAlarmEnabled",
+      "TestAlarmSnoozeMinutes",
+      "TestAlarmSnoozeMax",
+      "TestAlarmVibrationEnabled",
+      "TestAlarmSoundEnabled",
+      "TestAlarmName",
+      "TestAlarmSnoozeInSec",
+      "TestAlarmLastFiredToday",
+      "TestAlarmPending"
     ],
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_SHIFT_OFF",
+          "file": "images/shift-off.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "IMAGE_SHIFT_ONCE",
+          "file": "images/shift-once.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "IMAGE_SHIFT_LOCK",
+          "file": "images/shift-lock.png"
+        }
+      ]
     }
   },
   "devDependencies": {
