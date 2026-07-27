@@ -1,14 +1,18 @@
 {
   "name": "pebble-another-alarm",
-  "author": "MakeAwesomeHappen",
+  "author": "Tuukka Ruhanen",
   "version": "1.0.0",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "alarm",
+    "cron",
+    "repeat"
+  ],
   "private": true,
   "dependencies": {
     "pebble-clay": "^1.0.4"
   },
   "pebble": {
-    "displayName": "Another alarm",
+    "displayName": "Another Alarm",
     "uuid": "e3abb208-0d25-43eb-b6b5-c9d8abde0159",
     "sdkVersion": "3",
     "enableMultiJS": true,
