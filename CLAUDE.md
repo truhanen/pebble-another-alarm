@@ -416,52 +416,82 @@ even though its wire value isn't split across them — never assume
   ("Apply") on every open — otherwise a prior call's scroll position would
   leak into the next one, the same fix applied to the cron editor.
 - **Main list SELECT is split short-press/long-press** (`ml_select`/
-  `ml_select_long`): short-press toggles enable/disable directly, without
-  opening the edit menu — same underlying logic as the edit menu's own State
-  row (`ml_toggle_enable` mirrors `edit_select`'s `EDIT_ROW_ENABLE` case,
-  including the "Disable" vs "Skip next occurrence" prompt when the target
-  is a currently-enabled repeating alarm, so one accidental press can't
-  silently cancel every future occurrence). Long-press opens the full edit
-  menu (`open_edit_window`), which every other field lives behind now. The
-  "+ New alarm" row only responds to short-press (starts the wizard);
-  long-press on it is an explicit no-op, not "open some nonexistent edit
-  menu for it".
-- **The "Skip next occurrence" choice toggles `skip_next`, both ways**: if a
-  skip is already pending, the prompt's second option relabels itself to
-  "Enable next occurrence" (`ml_toggle_enable`/`edit_select`'s
-  `EDIT_ROW_ENABLE` case pick the label from the alarm's current
-  `skip_next`), and choosing it clears `skip_next` rather than setting it
-  again — the same choice slot undoes what it set, instead of needing a
-  separate "un-skip" affordance. The edit menu's State row surfaces this
-  too: it reads "Skip next" (not "Enabled") whenever `enabled && repeats &&
-  skip_next`, so the pending skip isn't otherwise invisible until its
-  occurrence silently doesn't ring.
+  `ml_select_long`): short-press cycles the alarm's state directly, with no
+  confirm prompt in between (`ml_cycle_alarm_state`) — a repeating alarm
+  advances enabled (normal) -> disabled -> enabled-with-skip-next-pending ->
+  back to enabled (normal), always the same direction regardless of which
+  state it's currently in; a non-repeating alarm has no skip state (`skip_next`
+  is meaningless for a one-time alarm) and just toggles enabled/disabled. This
+  used to prompt "Disable" vs "Skip next occurrence" for a repeating, enabled
+  alarm (via `confirm_window_push`) rather than disabling outright, to guard
+  against an accidental press silently cancelling every future occurrence;
+  the cycle replaces that guard with reversibility instead — every state is
+  one more short-press away from undoing itself, so there's no destructive
+  step to guard. The edit menu's own State row (`edit_select`'s
+  `EDIT_ROW_ENABLE` case) is unchanged and still uses the confirm-prompt
+  version (`edit_on_enable_choice`) — this cycle is specific to the main
+  list. Long-press opens the full edit menu (`open_edit_window`), which every
+  other field lives behind now. The "+ New alarm" row only responds to
+  short-press (starts the wizard); long-press on it is an explicit no-op,
+  not "open some nonexistent edit menu for it".
+- **`skip_next` toggles both ways from either entry point**: the main list's
+  cycle sets it on the disabled -> enabled-with-skip transition and clears it
+  on the enabled-with-skip -> enabled (normal) transition; the edit menu's
+  State row still goes through the "Disable" / "Skip next occurrence" (or
+  "Enable next occurrence", if a skip is already pending) confirm prompt
+  (`edit_on_enable_choice`), same choice-slot-undoes-itself convention as
+  before. The edit menu's State row surfaces the pending state too: it reads
+  "Skip next" (not "Enabled") whenever `enabled && repeats && skip_next`, so
+  it isn't otherwise invisible until its occurrence silently doesn't ring.
 - **Visual style matches `pebble-another-timer`**, ported deliberately:
   - The main list (`ml_row_colors`/`ml_draw_alarm_row`) mirrors timer's
     `ml_row_colors`/`ml_draw_row` — per-row state tinting (snoozing=red,
-    enabled=green, disabled=white; selected rows get a darker/black variant
-    of the same color), a fixed-width bold time followed by a lighter-weight
-    label, and a divider line under each row. Row order is by raw clock time
+    enabled=green, skip-pending=yellow, disabled=white; selected rows get a
+    darker/black variant of the same color), a fixed-width bold time
+    followed by a lighter-weight label, and a divider line under each row.
+    skip-pending (`enabled && repeats && skip_next`) reuses timer's exact
+    `TS_PAUSED` colors verbatim — `GColorYellow`/black unselected,
+    `GColorArmyGreen`/white selected (`ml_row_colors` takes a `skip_pending`
+    bool alongside `enabled`/`snoozing`, checked ahead of `enabled` so a
+    skip-pending row doesn't also match the plain-enabled branch; `snoozing`
+    still outranks it, since only an enabled alarm can be snoozing or
+    skip-pending in the first place). Row order is by raw clock time
     (hour:minute) ascending, ties broken by index — not time-to-next-
-    occurrence, so a snoozed or disabled alarm still sorts by its own
-    hour:minute like any other. Each row's first line also gets a leading
-    play/stop icon (`ml_draw_state_icon`), a direct port of timer's own
-    `ml_draw_state_icon`'s `TS_RUNNING`/`TS_STOPPED` cases (scanline-built
-    triangle / filled square) — play when `enabled`, stop when disabled or
-    when `repeats && skip_next` (mirrors the edit menu's "Skip next"
-    condition exactly). Drawn in the row's existing `fg` tint, with the
-    time text shifted right 16px to make room; line 2 is unaffected and
-    stays flush-left.
+    occurrence, so a snoozed, skip-pending, or disabled alarm still sorts by
+    its own hour:minute like any other. Each row's first line also gets a
+    leading play/stop/skip icon (`ml_draw_state_icon`, `MlIcon` enum) — play
+    and stop are a direct port of timer's own `ml_draw_state_icon`'s
+    `TS_RUNNING`/`TS_STOPPED` cases (scanline-built triangle / filled
+    square), drawn in the row's existing `fg` tint; skip is a third case
+    with no timer equivalent — the same filled square shape (also `fg`, so
+    it reads as the same family of symbol as play/stop, not a color of its
+    own), with a "1" digit cut into it in the row's `bg` tint for contrast
+    (one specific occurrence being skipped, not the alarm stopped outright).
+    Because drawing that digit sets the graphics context's text color to
+    `bg`, `ml_draw_alarm_row` explicitly resets it back to `fg` right after
+    the icon call, before drawing the rest of the row's text — otherwise the
+    time/label/repeat-summary text on a skip-pending row would silently
+    inherit `bg` too. Icon drawn with the time text shifted right 16px to
+    make room; line 2 is unaffected and stays flush-left.
+  - The trailing "+ New alarm" row is one row tall (`ML_NEW_ROW_H`, 34px —
+    the same single-row height as the cron/repeat/confirm/edit itemized
+    menus), not the taller two-line `ML_ROW_H` every alarm row uses;
+    `ml_cell_height` special-cases `row == s_count` for this. `main_hint_
+    update_proc`'s free-space math (`ML_ROW_H * s_count + ML_NEW_ROW_H`) has
+    to add these two different row heights rather than multiply by a single
+    uniform one, unlike timer's `empty_hint_update_proc` this was adapted
+    from — get this wrong and the hint text is off-center or clipped, since
+    it's positioned relative to where the list rows actually end, not a
+    fixed offset.
   - A one-alarm hint (`main_hint_update_proc`) is a direct adaptation of
     timer's `empty_hint_update_proc` (its `s_count == 1` branch): an overlay
     `Layer` (`s_main_hint_layer`) the same size as the `MenuLayer`, added on
-    top of it, that draws "- Short-press to toggle\n- Long-press to edit"
-    centered in the blank space below the list — only when there's exactly
-    one alarm (so exactly the alarm row + the trailing "+ New alarm" row,
-    at the fixed `ML_ROW_H` each this app uses, unlike timer's variable
-    per-row heights). Kept in sync via a single `layer_mark_dirty` call
-    added to `reload_ui()`, since every alarm-count/state change already
-    funnels through it.
+    top of it, that draws "- Short-press to cycle state\n- Long-press to
+    edit" centered in the blank space below the list — only when there's
+    exactly one alarm (so exactly the alarm row + the trailing "+ New alarm"
+    row). Kept in sync via a single `layer_mark_dirty` call added to
+    `reload_ui()`, since every alarm-count/state change already funnels
+    through it.
   - The main window has a bottom bar (`draw_bottom_bar`/
     `bottom_bar_rect_for_bounds`), a direct port of timer's own bottom bar:
     a thin divider line + black strip pinned to the bottom, reducing the

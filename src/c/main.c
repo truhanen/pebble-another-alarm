@@ -123,26 +123,37 @@ static uint16_t ml_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
 }
 
 #define ML_ROW_H 58   // taller now that line 2 matches timer's detail-row font size (24pt, not 18pt)
+// The trailing "+ New alarm" row has no second line, so it only needs one
+// row's worth of height, not the two-line alarm rows' ML_ROW_H — same
+// single-row height as the cron/repeat/confirm/edit itemized menus.
+#define ML_NEW_ROW_H 34
 
 static int16_t ml_cell_height(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
-  return ML_ROW_H;
+  return (cell_index->row == s_count) ? ML_NEW_ROW_H : ML_ROW_H;
 }
 
 // Row tint by state, same "state tints the row, selected row gets a
 // darkened/black variant" technique as pebble-another-timer's ml_row_colors
-// (main.c:1988) — there it's RUNNING/PAUSED/overtime; here it's
-// snoozing/enabled/disabled (red/green/white), but the pattern (bg/fg pair
-// per state x selection) is the same. Snoozing takes priority over enabled,
-// since only an enabled alarm can be snoozing.
-static void ml_row_colors(bool enabled, bool snoozing, bool selected, GColor *bg, GColor *fg) {
+// (main.c:2073) — there it's RUNNING/PAUSED/overtime; here it's
+// snoozing/enabled/skip-pending/disabled (red/green/yellow/white), but the
+// pattern (bg/fg pair per state x selection) is the same. skip-pending
+// reuses timer's exact PAUSED colors (GColorYellow unselected, GColorArmyGreen
+// selected) — same "a normally-active thing is temporarily not going to act"
+// meaning as a paused timer. Snoozing takes priority over both, since only
+// an enabled alarm can be snoozing or skip-pending.
+static void ml_row_colors(bool enabled, bool snoozing, bool skip_pending, bool selected, GColor *bg, GColor *fg) {
   if (selected) {
     *fg = GColorWhite;
     if (snoozing) { *bg = PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack); }
+    else if (skip_pending) { *bg = PBL_IF_COLOR_ELSE(GColorArmyGreen, GColorBlack); }
     else if (enabled) { *bg = PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorBlack); }
     else { *bg = GColorBlack; }
   } else if (snoozing) {
     *fg = GColorBlack;
     *bg = PBL_IF_COLOR_ELSE(GColorRed, GColorWhite);
+  } else if (skip_pending) {
+    *fg = GColorBlack;
+    *bg = PBL_IF_COLOR_ELSE(GColorYellow, GColorWhite);
   } else if (enabled) {
     *fg = GColorBlack;
     *bg = PBL_IF_COLOR_ELSE(GColorMediumSpringGreen, GColorWhite);
@@ -157,17 +168,30 @@ static bool ml_is_boundary_row(int row) {
                           // trailing "+ New alarm" row is the list's end
 }
 
-// Leading play/stop indicator for an alarm row's first line, ported from
-// pebble-another-timer's ml_draw_state_icon (its TS_RUNNING/TS_STOPPED
-// cases only -- this app has no "paused" equivalent to reuse the third
-// for). "Play": a scanline-built right-pointing triangle (flat vertical
-// left edge at x, tapering to a point at mid-height) -- widest span in the
-// middle row, narrowing by row-distance from center, same technique timer
-// uses for its running icon. "Stop": a plain filled square.
-static void ml_draw_state_icon(GContext *ctx, int x, int y, bool show_stop, GColor color) {
-  graphics_context_set_fill_color(ctx, color);
-  if (show_stop) {
-    graphics_fill_rect(ctx, GRect(x, y + 1, 10, 10), 0, GCornerNone);
+// Leading play/stop/skip indicator for an alarm row's first line, ported
+// from pebble-another-timer's ml_draw_state_icon (its TS_RUNNING/TS_STOPPED
+// cases only -- this app adds a third, ICON_SKIP, that timer has no
+// equivalent for). "Play": a scanline-built right-pointing triangle (flat
+// vertical left edge at x, tapering to a point at mid-height) -- widest span
+// in the middle row, narrowing by row-distance from center, same technique
+// timer uses for its running icon. "Stop": a plain filled square. "Skip":
+// the same square, in the same `fg` tint as play/stop (not a special color
+// of its own), with a "1" digit cut into it in the row's `bg` tint for
+// contrast -- one specific occurrence is being skipped, not the alarm being
+// stopped outright.
+typedef enum { ML_ICON_PLAY, ML_ICON_STOP, ML_ICON_SKIP } MlIcon;
+static void ml_draw_state_icon(GContext *ctx, int x, int y, MlIcon icon, GColor fg, GColor bg) {
+  if (icon == ML_ICON_SKIP) {
+    graphics_context_set_fill_color(ctx, fg);
+    graphics_fill_rect(ctx, GRect(x, y + 1, 11, 11), 0, GCornerNone);
+    graphics_context_set_text_color(ctx, bg);
+    graphics_draw_text(ctx, "1", fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+                       GRect(x - 1, y - 3, 14, 16), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+    return;
+  }
+  graphics_context_set_fill_color(ctx, fg);
+  if (icon == ML_ICON_STOP) {
+    graphics_fill_rect(ctx, GRect(x, y + 1, 11, 11), 0, GCornerNone);
     return;
   }
   const int h = 12;
@@ -186,7 +210,7 @@ static void ml_draw_new_alarm_row(GContext *ctx, const Layer *cell_layer, bool s
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
   graphics_draw_text(ctx, "+ New alarm", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, (b.size.h - 26) / 2 - 3, b.size.w - 8, 26),
+                     GRect(4, (b.size.h - 26) / 2, b.size.w - 8, 26),
                      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
@@ -194,8 +218,9 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   const Alarm *a = &s_alarms[idx];
   GRect b = layer_get_bounds(cell_layer);
 
+  bool skip_pending = a->enabled && a->repeats && a->skip_next;
   GColor bg, fg;
-  ml_row_colors(a->enabled, a->snooze_until > 0, selected, &bg, &fg);
+  ml_row_colors(a->enabled, a->snooze_until > 0, skip_pending, selected, &bg, &fg);
   graphics_context_set_fill_color(ctx, bg);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, fg);
@@ -216,12 +241,15 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   int ty = (b.size.h - (th + line2_h)) / 2 - 2;
   int time_x = 6;
 
-  // Leading play/stop icon: enabled -> play; disabled, or enabled-but-
-  // skipping-its-next-occurrence (mirrors edit_draw_row's EDIT_ROW_ENABLE
-  // "Skip next" condition exactly) -> stop.
+  // Leading play/stop/skip icon: enabled -> play; enabled but skipping its
+  // next occurrence (mirrors edit_draw_row's EDIT_ROW_ENABLE "Skip next"
+  // condition exactly) -> skip; otherwise (disabled) -> stop.
   int icon_y = ty + (th - 12) / 2 + 3;
-  bool show_stop = !a->enabled || (a->repeats && a->skip_next);
-  ml_draw_state_icon(ctx, time_x, icon_y, show_stop, fg);
+  MlIcon icon = !a->enabled ? ML_ICON_STOP : skip_pending ? ML_ICON_SKIP : ML_ICON_PLAY;
+  ml_draw_state_icon(ctx, time_x, icon_y, icon, fg, bg);
+  // The skip icon's "1" digit sets the context's text color to bg; restore
+  // it to fg before drawing the rest of the row's text.
+  graphics_context_set_text_color(ctx, fg);
   int time_text_x = time_x + 16;
 
   char time_buf[16];
@@ -258,49 +286,40 @@ static void ml_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_
   ml_draw_alarm_row(ctx, cell_layer, s_order[row], row, sel.row == row);
 }
 
-// Callback for the "Disable" / "Skip next occurrence" (or "Enable next
-// occurrence", if a skip is already pending) prompt below, invoked from the
-// main list's short-press toggle on a repeating, enabled alarm. `ctx`
-// carries the target alarm's index (via confirm_window_push's generic
-// void* ctx, not a dedicated global — this prompt isn't tied to the edit
-// window being open), same 0/1 choice convention as edit_on_enable_choice.
-static void ml_enable_choice(int choice, void *ctx) {
-  int idx = (int)(intptr_t)ctx;
+// Short-press SELECT on an alarm row cycles its state directly, with no
+// intervening confirm prompt — same underlying fields as the edit menu's
+// State row (edit_select's EDIT_ROW_ENABLE case), just reachable in one
+// press from the main list instead of opening the edit menu and confirming
+// a choice there. For a repeating alarm the cycle is three states, always
+// advancing the same direction regardless of how it got there: enabled
+// (normal) -> disabled -> enabled-but-skip-next-occurrence -> back to
+// enabled (normal). A non-repeating alarm has no skip state (skip_next is
+// meaningless for a one-time alarm — it just auto-disables once it fires),
+// so it's a plain two-state enabled/disabled toggle.
+static void ml_cycle_alarm_state(int idx) {
   if (idx < 0 || idx >= s_count) { return; }
   Alarm *a = &s_alarms[idx];
-  if (choice == 0) { a->enabled = false; a->skip_next = false; }
-  else { a->skip_next = !a->skip_next; }
-  persist_all(); rearm_wakeup(); reload_ui();
-}
-
-// Short-press SELECT on an alarm row toggles enable/disable outright — same
-// underlying logic as the edit menu's State row (edit_select's
-// EDIT_ROW_ENABLE case), just reachable directly from the main list instead
-// of needing to open the edit menu first. A repeating, currently-enabled
-// alarm prompts "Disable" vs "Skip next occurrence" rather than disabling
-// outright, since silently disabling every future occurrence of a repeating
-// alarm from a single accidental press would be surprising — and if a skip
-// is already pending, the second option flips to "Enable next occurrence"
-// so it can be undone the same way it was set.
-static void ml_toggle_enable(int idx) {
-  if (idx < 0 || idx >= s_count) { return; }
-  Alarm *a = &s_alarms[idx];
-  if (a->repeats && a->enabled) {
-    const char *label1 = a->skip_next ? "Enable next occurrence" : "Skip next occurrence";
-    confirm_window_push("Disable", label1, ml_enable_choice, (void *)(intptr_t)idx);
-    return;
+  if (!a->repeats) {
+    bool was_enabled = a->enabled;
+    a->enabled = !a->enabled;
+    a->skip_next = false;
+    if (!was_enabled && a->enabled) { resync_last_fired_for_schedule_change(a); }
+  } else if (a->enabled && !a->skip_next) {
+    a->enabled = false;
+  } else if (!a->enabled) {
+    a->enabled = true;
+    a->skip_next = true;
+    resync_last_fired_for_schedule_change(a);
+  } else {
+    a->skip_next = false;
   }
-  bool was_enabled = a->enabled;
-  a->enabled = !a->enabled;
-  if (!was_enabled && a->enabled) { resync_last_fired_for_schedule_change(a); }
-  if (!a->enabled) { a->skip_next = false; }
   persist_all(); rearm_wakeup(); reload_ui();
 }
 
 static void ml_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   int row = cell_index->row;
   if (row == s_count) { start_new_alarm_flow(); return; }
-  ml_toggle_enable(s_order[row]);
+  ml_cycle_alarm_state(s_order[row]);
 }
 
 // Long-press SELECT opens the full edit menu — the main list's short-press
@@ -2092,16 +2111,16 @@ static void main_bottom_bar_update_proc(Layer *l, GContext *ctx) {
 // One-alarm hint, adapted from pebble-another-timer's empty_hint_update_proc
 // (its s_count == 1 branch): drawn into the blank space below the list's
 // two rows (the alarm + trailing "+ New alarm"), centered, word-wrapped,
-// with the same GOTHIC optical-rise nudge timer uses. This app's
-// ml_cell_height() is a fixed ML_ROW_H (unlike timer's variable per-row
-// heights), so free space always starts at a fixed 2 * ML_ROW_H here.
+// with the same GOTHIC optical-rise nudge timer uses. The trailing row is
+// shorter than an alarm row (ML_NEW_ROW_H vs. ML_ROW_H — see ml_cell_height),
+// so free space starts after one of each, not a uniform 2 * ML_ROW_H.
 static void main_hint_update_proc(Layer *layer, GContext *ctx) {
   if (s_count != 1) { return; }
   GRect b = layer_get_bounds(layer);
   if (b.size.h <= 32) { return; }
   const GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
-  const char *msg = "- Short-press to toggle\n- Long-press to edit";
-  int free_top = ML_ROW_H * (s_count + 1);   // bottom of the "+ New alarm" row
+  const char *msg = "- Short-press to cycle state\n- Long-press to edit";
+  int free_top = ML_ROW_H * s_count + ML_NEW_ROW_H;   // bottom of the "+ New alarm" row
   GRect area = GRect(8, free_top, b.size.w - 16, b.size.h - free_top);
   if (area.size.h <= 20) { return; }
   GSize sz = graphics_text_layout_get_content_size(
