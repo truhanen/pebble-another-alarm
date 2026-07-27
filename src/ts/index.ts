@@ -1,5 +1,4 @@
 import Clay from 'pebble-clay';
-import messageKeys from 'message_keys';
 import clayConfig from './config_clay';
 import { buildDict, ClaySettings } from './dict';
 
@@ -24,10 +23,12 @@ Pebble.addEventListener('webviewclosed', (e: any) => {
     AlarmVibePattern: s.AlarmVibePattern,
     DefaultSnoozeMinutes: s.DefaultSnoozeMinutes,
     DefaultSnoozeMax: s.DefaultSnoozeMax,
+    DefaultSnoozeEnabled: s.DefaultSnoozeEnabled,
+    DefaultSoundEnabled: s.DefaultSoundEnabled,
+    DefaultVibrationEnabled: s.DefaultVibrationEnabled,
     AudioVolume: s.AudioVolume,
-    DefaultAlarmSignal: s.DefaultAlarmSignal,
   };
-  const dict = buildDict(settings, { DefaultAlarmSignal: messageKeys.DefaultAlarmSignal });
+  const dict = buildDict(settings);
   Pebble.sendAppMessage(dict, () => { console.log('config sent'); },
     () => { console.log('config send failed'); });
 });

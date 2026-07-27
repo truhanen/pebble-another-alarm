@@ -11,16 +11,10 @@ export interface ClaySettings {
   AlarmVibePattern?: string;
   DefaultSnoozeMinutes?: string;
   DefaultSnoozeMax?: string;
-  AudioVolume?: string | number;   // Clay's slider type returns a number, not a string
-  DefaultAlarmSignal?: boolean[];  // Clay's checkboxgroup type returns an array of booleans
-}
-
-// The base numeric id of the DefaultAlarmSignal[2] array-type message key
-// (see package.json). Passed in rather than required directly here so this
-// module stays a pure function of its inputs, host-testable without needing
-// the generated `message_keys` module (which only exists at build time).
-export interface MessageKeyIds {
-  DefaultAlarmSignal: number;
+  DefaultSnoozeEnabled?: boolean;    // Clay's toggle type returns a boolean
+  DefaultSoundEnabled?: boolean;
+  DefaultVibrationEnabled?: boolean;
+  AudioVolume?: string | number;     // Clay's slider type returns a number, not a string
 }
 
 function toInt(value: string | number | undefined, fallback: number): number {
@@ -28,27 +22,19 @@ function toInt(value: string | number | undefined, fallback: number): number {
   return Number.isNaN(n) ? fallback : n;
 }
 
-export function buildDict(settings: ClaySettings, keys: MessageKeyIds): Record<string, number> {
-  const signal = settings.DefaultAlarmSignal ?? [];
-  const vibration = (signal[0] ?? true) ? 1 : 0;
-  const sound = (signal[1] ?? true) ? 1 : 0;
+export function buildDict(settings: ClaySettings): Record<string, number> {
+  const snoozeEnabled = settings.DefaultSnoozeEnabled ?? true;
   return {
     FirstDayOfWeek: toInt(settings.FirstDayOfWeek, 1),
     AlarmVibePattern: toInt(settings.AlarmVibePattern, 0),
-    DefaultSnoozeMinutes: toInt(settings.DefaultSnoozeMinutes, 9),
+    // 0 reuses the watch's existing "snooze disabled outright" convention
+    // (snooze_minutes == 0) rather than sending a wholly separate flag for
+    // the watch to also track — when snooze is off, the actual duration
+    // value is moot, so there's nothing lost by collapsing it to 0 here.
+    DefaultSnoozeMinutes: snoozeEnabled ? toInt(settings.DefaultSnoozeMinutes, 9) : 0,
     DefaultSnoozeMax: toInt(settings.DefaultSnoozeMax, 3),
+    DefaultSoundEnabled: (settings.DefaultSoundEnabled ?? true) ? 1 : 0,
+    DefaultVibrationEnabled: (settings.DefaultVibrationEnabled ?? true) ? 1 : 0,
     AudioVolume: toInt(settings.AudioVolume, 0),
-    // Sent as two plain scalar ints at their own explicit numeric keys
-    // (DefaultAlarmSignal[2]'s base id = Vibration, base+1 = Sound), NOT as
-    // one key holding a JS array value. A JS array VALUE passed to
-    // Pebble.sendAppMessage is not guaranteed to be split across an
-    // array-type key's reserved ids by every PebbleKitJS runtime (confirmed
-    // for pypkjs it instead packs into a single byte-array tuple at the base
-    // id, which the previous version of this code got wrong on the read
-    // side) — addressing each element's own numeric key directly sidesteps
-    // that ambiguity entirely, since these are then just two ordinary
-    // scalar sends like every other key here.
-    [keys.DefaultAlarmSignal]: vibration,
-    [keys.DefaultAlarmSignal + 1]: sound,
   };
 }

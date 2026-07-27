@@ -103,21 +103,22 @@ pebble send-app-message --emulator emery --vnc \
   --string 10018=TestAlarm
 ```
 
-Key IDs are assigned by `pebble build` in two passes, **not** simply
-`10000 + declaration index`: every array-syntax key (`"Name[N]"`, e.g.
-`DefaultAlarmSignal[2]`) claims its N consecutive ids *first*, regardless of
-where it sits in the `messageKeys` list, and only then do the plain scalar
-keys get assigned the remaining ids in declaration order. Concretely,
-`DefaultAlarmSignal[2]` claims 10000-10001, which is why the table below
-starts at 10002 rather than 10000 — adding or resizing any array-type key
-shifts every scalar key's id after it. Always regenerate and check
-`build/src/message_keys.auto.c` after touching `messageKeys` rather than
-trusting a mental model of the numbering.
+Key IDs are assigned by `pebble build` as `10000 + declaration index` in
+`package.json`'s `messageKeys` list — **except** if any key uses Clay's
+array syntax (`"Name[N]"`), which claims its N consecutive ids *first*,
+regardless of where it sits in the list, before any plain scalar key gets
+assigned an id; this codebase has no array-type key at all right now (the
+one that used to exist, `DefaultAlarmSignal[2]`, was replaced by two
+ordinary scalar toggles — see the AppMessage keys note below), so today the
+mapping really is just declaration order. That won't stay true
+the moment an array-type key is reintroduced, so always regenerate and
+check `build/src/message_keys.auto.c` after touching `messageKeys` rather
+than trusting a mental model of the numbering.
 
 | Key | ID | Type | Meaning |
 |---|---|---|---|
 | `TestClearAlarms` | 10007 | int, nonzero | Wipes all alarms (`s_count = 0`) before anything else in the same message. |
-| `TestAlarmIndex` | 10008 | int | **Required** to touch alarm fields. `== s_count` appends a new alarm (seeded with the same defaults as the "+ New alarm" wizard — enabled, vibration+sound on, default snooze, one-time — except the time, which is a fixed 7:00 here rather than "next minute", for a deterministic default unless overridden); `< s_count` edits that existing alarm in place; anything else is ignored (logged as a warning). |
+| `TestAlarmIndex` | 10008 | int | **Required** to touch alarm fields. `== s_count` appends a new alarm (seeded with the same defaults as the "+ New alarm" wizard — enabled, vibration+sound on, Double vibe pattern, default snooze, one-time — except the time, which is a fixed 7:00 here rather than "next minute", for a deterministic default unless overridden); `< s_count` edits that existing alarm in place; anything else is ignored (logged as a warning). |
 | `TestAlarmHour` | 10009 | int 0-23 | |
 | `TestAlarmMinute` | 10010 | int 0-59 | |
 | `TestAlarmRepeats` | 10011 | int 0/1 | |
@@ -137,6 +138,7 @@ trusting a mental model of the numbering.
 | `TestAlarmCronDow` | 10025 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
 | `TestAlarmCronFiredNow` | 10026 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
 | `TestAlarmAutoStop` | 10027 | int 0/1 | Sets `auto_stop` (see "Key design points" below). |
+| `TestAlarmVibePattern` | 10028 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -179,68 +181,58 @@ as every other alarm-mutating code path.
 
 ### Phone side (`src/ts/`)
 
-- **`config_clay.ts`** — the Clay config schema: `FirstDayOfWeek`
-  (radiogroup, Sunday/Monday), `AlarmVibePattern` (select, Double/Short/
-  Long), `AudioVolume` (slider, 0-100, 0=disabled — see sound design point
-  below), `DefaultAlarmSignal` (checkboxgroup, "Defaults for new alarms" —
-  Vibration/Sound, pre-fills a new alarm's own toggles; see
-  `messageKeys`/array-key note below), `DefaultSnoozeMinutes`/
-  `DefaultSnoozeMax` (number inputs).
+- **`config_clay.ts`** — three sections: (1) `FirstDayOfWeek` (radiogroup,
+  Sunday/Monday); (2) "New alarm defaults" — everything here only pre-fills
+  a newly created alarm's own fields, never touches existing ones: a
+  `DefaultSnoozeEnabled` toggle + `DefaultSnoozeMinutes`/`DefaultSnoozeMax`
+  number inputs (the latter labeled "Repeats", matching the on-watch snooze
+  editor's own field name for the same value — see the snooze design point
+  below), `DefaultSoundEnabled`/`DefaultVibrationEnabled` (two independent
+  `toggle`s, in that order — Sound above Vibration) and `AlarmVibePattern`
+  (select, Double/Short/Long — only seeds a new alarm's own `vibe_pattern`;
+  see the per-alarm vibration pattern design point below); (3) "Alarm
+  volume" — just `AudioVolume` (slider, 0-100, 0=disabled — see sound design
+  point below), given its own section because, unlike everything in (2),
+  it's read live by every alarm's ring screen rather than copied once at
+  creation.
 - **`dict.ts`** — pure `buildDict()` transform, `parseInt`s each Clay string
   value into a real int32. Because `index.ts` builds the AppMessage dict
   manually (`autoHandleEvents: false`), the watch reads plain ints directly —
   no ASCII-digit-unwrap workaround needed for `select`/`radiogroup` values.
   `AudioVolume` comes back from Clay as a number (not a string, since it's a
-  `slider`), so `toInt()` stringifies before parsing. `DefaultAlarmSignal`
-  comes back as an array of booleans (Clay's `checkboxgroup` type);
-  `buildDict` takes a second `keys` param (`{ DefaultAlarmSignal: number }`,
-  the key's base numeric id) and sends its two elements as **two ordinary
-  scalar ints at explicit numeric keys** — `dict[keys.DefaultAlarmSignal]` =
-  Vibration, `dict[keys.DefaultAlarmSignal + 1]` = Sound — not as one key
-  holding a JS array value (see the AppMessage keys note below for why).
-  `keys` is a plain parameter rather than something `dict.ts` looks up
-  itself, so it stays a pure function of its inputs and testable without the
-  generated `message_keys` module.
+  `slider`), so `toInt()` stringifies before parsing. `DefaultSoundEnabled`/
+  `DefaultVibrationEnabled` come back as plain booleans (Clay's `toggle`
+  type) and are sent as ordinary `0`/`1` ints at their own message keys —
+  no array-key/checkboxgroup complexity here at all; each toggle is just
+  another independent scalar setting, same as every other field.
+  `DefaultSnoozeEnabled` (also a `toggle`) is deliberately **not** forwarded
+  to the watch as its own wire key — when it's `false`, `buildDict` just
+  sends `DefaultSnoozeMinutes` as `0` outright, reusing the watch's existing
+  "`snooze_minutes == 0` means disabled" convention (see the snooze design
+  point below) instead of adding a flag for the watch to also track and keep
+  in sync.
 - **`index.ts`** — entry point; wires `Pebble.addEventListener` for
   `showConfiguration`/`webviewclosed`, opens the Clay URL, and sends the
-  built dict on save. Imports the generated `message_keys` module (typed by
-  `types/message-keys.d.ts`; resolved to `build/js/message_keys.json` by the
-  SDK's webpack config, so it only exists at build time, not at typecheck
-  time against a real file) to get `DefaultAlarmSignal`'s base id for
-  `buildDict`. Alarms themselves are **never synced to/from the phone** —
-  only these global settings are. All alarm data (time, label, repeat,
-  snooze, per-alarm toggles) lives solely in the watch's persistent storage,
-  edited entirely through the watch UI.
+  built dict on save. Alarms themselves are **never synced to/from the
+  phone** — only these global settings are. All alarm data (time, label,
+  repeat, snooze, per-alarm toggles) lives solely in the watch's persistent
+  storage, edited entirely through the watch UI.
 
 AppMessage keys (`package.json`'s `pebble.messageKeys`, used as
 `MESSAGE_KEY_*` in C): `FirstDayOfWeek`, `AlarmVibePattern`,
 `DefaultSnoozeMinutes`, `DefaultSnoozeMax`, `AudioVolume`,
-`DefaultAlarmSignal[2]` — phone→watch only. `DefaultAlarmSignal[2]` is
-declared with Clay's array-key syntax (required for its `checkboxgroup`
-component, which returns a JS array) and reserves **two** consecutive ids —
-but that's for Clay's own internal bookkeeping of the component's declared
-length, not the wire format we actually use. A real bug fix, in two stages:
-the first fix read `MESSAGE_KEY_DefaultAlarmSignal` and `+ 1` as two
-separate int32 keys, which happened to be wrong because `index.ts` builds
-and sends the dict itself (`autoHandleEvents: false`) rather than letting
-Clay auto-submit, and a JS array *value* given to `Pebble.sendAppMessage`
-isn't expanded across an array-type key's reserved ids — pypkjs (this
-project's emulator JS runtime, `pypkjs/javascript/pebble.py`) instead packs
-it into a single `TUPLE_BYTE_ARRAY` tuple at the base id. That got "fixed"
-to read one byte-array tuple instead — but that fix rested entirely on
-pypkjs's specific behavior, with no way to confirm real mobile PebbleKitJS
-(a wholly separate codebase) handles a JS array value in `sendAppMessage`
-the same way. The actual fix: stop sending a JS array value at all.
-`index.ts` resolves `DefaultAlarmSignal`'s base id via the generated
-`message_keys` module and `dict.ts` sends its two elements as **plain
-scalar ints at explicit numeric keys** (base and base+1) — this is standard,
-unambiguous PebbleKitJS behavior (addressing a message key by its raw
-numeric id) with no dependency on how any particular runtime packs array
-*values*, so `inbox_received` goes back to reading two ordinary int32 keys.
-Declaring `DefaultAlarmSignal[2]` still shifts every other key's numeric id
-even though its wire value isn't split across them — never assume
-`10000 + declaration index` without checking
-`build/src/message_keys.auto.c`.
+`DefaultSoundEnabled`, `DefaultVibrationEnabled` — phone→watch only, all
+plain scalars, no array-type key. (`DefaultSnoozeEnabled` is a real Clay
+field but intentionally has no corresponding watch-side message key at all
+— see `dict.ts` above.) This used to need declaring `DefaultAlarmSignal[2]`
+with Clay's array-key syntax for a `checkboxgroup` component, plus a fair
+amount of care in both `dict.ts` and `main.c` about exactly how a JS array
+*value* gets packed across an array-type key's reserved ids (that behavior
+isn't guaranteed portable across every PebbleKitJS runtime) — replacing the
+checkboxgroup with two independent `toggle`s removed that whole class of
+problem outright, not just worked around it: there's no array-type key left
+in this app at all, so every message key is now just an ordinary scalar at
+`10000 + declaration index`.
 
 ## Key design points worth knowing before touching this code
 
@@ -306,6 +298,10 @@ even though its wire value isn't split across them — never assume
   editor lets `Minutes` go down to 0 (`Repeats` already went down to 0 for
   "unlimited") and the boxes themselves spell out "Disabled"/"Infinite" at 0
   instead of a bare "0", since the two fields mean opposite things there.
+  The phone config's "Enable snooze" toggle (`DefaultSnoozeEnabled`) reuses
+  this exact convention on the wire rather than adding a second flag: `off`
+  just makes `dict.ts` send `DefaultSnoozeMinutes` as `0` outright, so the
+  watch never even needs to know the toggle existed.
 - **Alarm sound is a direct port of `pebble-instant-timer`'s "Add alarm
   audio" commit** (`alarm_play_audio()`, `main.c`): the exact same
   beep-silence-beep-silence `SpeakerNote` sequence (MIDI note 95/B6, square
@@ -315,6 +311,22 @@ even though its wire value isn't split across them — never assume
   0-100, 0=disabled) is the *only* gate; here it's a **global** volume
   (`s_audio_volume`, phone-configured via `AudioVolume`) layered under each
   alarm's own `sound_enabled` toggle — both must allow sound for it to play.
+- **Vibration pattern is a per-alarm attribute (`Alarm.vibe_pattern`), unlike
+  volume**: `alarm_vibrate()` takes the pattern as a parameter now instead of
+  reading a global, and both ring-time call sites pass the firing alarm's
+  own `vibe_pattern`. `s_default_vibe_pattern` (phone-configured via the
+  still-named-`AlarmVibePattern` message key) is only read once, at
+  creation, to seed a new alarm's `vibe_pattern` (`start_new_alarm_flow`) —
+  changing the phone setting afterward has no effect on already-created
+  alarms, unlike `AudioVolume`. Editable per-alarm via the edit menu's
+  "Vibe pattern" row, which cycles Double -> Short -> Long -> Double on
+  SELECT (`EDIT_ROW_VIBE_PATTERN`), the same short-press-cycles convention
+  as the main list's enable/disable/skip state — there's no 3-way picker
+  widget in this app, so cycling was the natural fit rather than building
+  one. Adding this field bumped `STORE_SCHEMA` (`alarm_store.h`) to 7, which
+  wipes all existing on-watch alarms on the first launch after upgrading —
+  same as every prior struct change (`is_cron`'s fields, then `auto_stop`);
+  there's no field-by-field persisted migration in this codebase.
 - **`auto_stop` alarms still show the ring screen, but only briefly**:
   `trigger_alarm()` branches on `a->auto_stop` — an auto-stop alarm fires
   vibration/sound (via its own existing `vibration_enabled`/`sound_enabled`
@@ -390,7 +402,11 @@ even though its wire value isn't split across them — never assume
   — used by the "+ New alarm" wizard (`new_alarm_wizard_cancel`) so exiting
   any of its screens aborts the whole flow outright, discarding the draft;
   the alarm is only actually created by completing the last screen (the
-  label) via SELECT. If `on_cancel` is NULL — every per-alarm edit-menu call
+  label) via SELECT. The wizard has no Snooze screen any more — it used to,
+  but `new_alarm_repeat_confirm`/`new_alarm_cron_confirm` now go straight
+  from Repeat/Cron to the label keyboard, since `s_draft.snooze_minutes`/
+  `snooze_max` are already seeded from the phone-configured defaults in
+  `start_new_alarm_flow`; every new alarm just uses those outright. If `on_cancel` is NULL — every per-alarm edit-menu call
   site (`edit_on_*_confirm`) — cancelling instead reverts to the value the
   screen was opened with and still calls `on_confirm` with that original
   value, so editing a single field of an already-existing alarm behaves as
@@ -567,10 +583,18 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   5th `on_chord` callback parameter for this. A hint ("Long-press select\nto
   enter cron mode", `GOTHIC_24`, horizontally centered) is drawn in whatever
   room is left below the hour/minute boxes whenever `on_chord` is non-NULL.
-  The cron fields default to the currently-staged hour/minute (everyday —
-  e.g. `"30 20 *"` for 20:30) rather than `"*/*/* "`, read directly off
-  `s_time_hour`/`s_time_minute`, which are still valid at the moment
-  `on_chord` runs (popping the time window doesn't reset them).
+  The cron fields default to everyday (`dow = "*"`) rather than `"*/*/* "` in
+  both cases, but the hour/minute default differs by call site: converting
+  an already-existing alarm (`edit_on_time_chord`) keeps the exact
+  currently-staged hour/minute (e.g. `"30 20 *"` for 20:30, read directly off
+  `s_time_hour`/`s_time_minute`, still valid at the moment `on_chord` runs
+  since popping the time window doesn't reset them) — editing an existing
+  schedule shouldn't silently change the time itself. The "+ New alarm"
+  wizard (`new_alarm_time_chord`) instead defaults minute to `"0"` and hour
+  to the *next* full hour (`s_time_hour + 1` if `s_time_minute > 0`, else
+  unchanged) — a brand new cron alarm is far more likely to want "top of the
+  hour" than whatever incidental minute the time editor happened to be
+  showing.
 - **One `cron_edit_window_push()` window serves every call site** — the "+
   New alarm" wizard (the long-press replaces the Time+Repeat steps, skipping
   straight to Snooze), converting an existing normal alarm (long-press on
@@ -596,7 +620,11 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   list for the current alarm (collapsing Time+Repeat into one `EDIT_ROW_CRON`
   row when `is_cron`) so `edit_num_rows`/`edit_draw_row`/`edit_select` share
   one source of truth for "which row is at this menu position" without
-  scattering `is_cron` checks through each of them individually.
+  scattering `is_cron` checks through each of them individually. Row order:
+  Time (or Cron), Label, State, Repeat (only when `!is_cron`), Snooze,
+  Vibration, Vibe pattern, Sound, Auto-stop, Delete — Time/Cron leads,
+  ahead of Label/State, unlike every other row grouping in this app which
+  puts Label first.
 - **Main list display**: the bold time slot shows "Cron" instead of a
   formatted time; the summary line below shows the three raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.

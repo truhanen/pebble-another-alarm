@@ -76,6 +76,14 @@ typedef struct {
   char cron_min[CRON_FIELD_LEN];   // raw text, e.g. "*/20" — for redisplay/re-editing
   char cron_hour[CRON_FIELD_LEN];  // e.g. "9-17/2"
   char cron_dow[CRON_FIELD_LEN];   // e.g. "1-5" — parses into repeat_days above
+
+  // Appended at the very end deliberately -- see STORE_SCHEMA's comment in
+  // alarm_store.h. Every field added from here on must go at the end too,
+  // never inserted earlier in the struct.
+  uint8_t vibe_pattern;      // 0=Double, 1=Short, 2=Long -- own copy per alarm,
+                             // seeded from the phone-configured default at
+                             // creation (see s_default_vibe_pattern, main.c);
+                             // editing it later doesn't touch other alarms
 } Alarm;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own

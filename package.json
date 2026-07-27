@@ -24,7 +24,8 @@
       "DefaultSnoozeMinutes",
       "DefaultSnoozeMax",
       "AudioVolume",
-      "DefaultAlarmSignal[2]",
+      "DefaultSoundEnabled",
+      "DefaultVibrationEnabled",
       "TestClearAlarms",
       "TestAlarmIndex",
       "TestAlarmHour",
@@ -45,7 +46,8 @@
       "TestAlarmCronHour",
       "TestAlarmCronDow",
       "TestAlarmCronFiredNow",
-      "TestAlarmAutoStop"
+      "TestAlarmAutoStop",
+      "TestAlarmVibePattern"
     ],
     "resources": {
       "media": [

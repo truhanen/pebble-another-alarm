@@ -41,7 +41,15 @@ static int s_count = 0;
 static int s_order[MAX_ALARMS];   // display order (by time-of-day ascending)
 
 static int s_first_day_of_week = 1;   // 0=Sunday, 1=Monday
-static int s_vibe_pattern = 0;        // 0=Double, 1=Short, 2=Long
+// Default vibration pattern (0=Double, 1=Short, 2=Long) copied into a new
+// alarm's own vibe_pattern at creation -- no longer read at ring time
+// (ring reads the firing alarm's own vibe_pattern instead), since the
+// pattern is now a per-alarm attribute, editable independently afterward.
+static int s_default_vibe_pattern = 0;
+// The phone's "Enable snooze" toggle has no watch-side counterpart: when
+// off, dict.ts sends DefaultSnoozeMinutes as 0 outright, reusing the
+// existing "0 = snooze disabled" convention (see alarm_snooze()) instead of
+// a separate flag the watch would also have to track.
 static int s_default_snooze_minutes = 9;
 static int s_default_snooze_max = 3;
 static uint16_t s_next_local_id = 1;
@@ -59,7 +67,7 @@ static uint32_t next_alarm_id(void) {
 static void persist_all(void) {
   store_save(s_alarms, s_count);
   store_save_first_day_of_week(s_first_day_of_week);
-  store_save_vibe_pattern(s_vibe_pattern);
+  store_save_vibe_pattern(s_default_vibe_pattern);
   store_save_default_snooze_minutes(s_default_snooze_minutes);
   store_save_default_snooze_max(s_default_snooze_max);
   store_save_audio_volume(s_audio_volume);
@@ -529,8 +537,8 @@ static AppTimer *s_alarm_buzz_timer;
 static int64_t s_alarm_buzz_start_s;
 static AppTimer *s_alarm_auto_stop_timer;   // auto_stop: auto-dismisses the ring screen
 
-static void alarm_vibrate(void) {
-  switch (s_vibe_pattern) {
+static void alarm_vibrate(uint8_t pattern) {
+  switch (pattern) {
     case 1: vibes_short_pulse(); break;
     case 2: vibes_long_pulse(); break;
     default: vibes_double_pulse(); break;
@@ -563,7 +571,7 @@ static void alarm_buzz_cb(void *ctx) {
   s_alarm_buzz_timer = NULL;
   if (now_s() - s_alarm_buzz_start_s >= ALARM_BUZZ_MAX_S) { return; }
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
-    if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(); }
+    if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(s_alarms[s_alarm_idx].vibe_pattern); }
 #if PBL_SPEAKER
     if (s_alarms[s_alarm_idx].sound_enabled) { alarm_play_audio((uint8_t)s_audio_volume); }
 #endif // PBL_SPEAKER
@@ -787,7 +795,7 @@ static void trigger_alarm(int idx, int count) {
 
   alarm_cancel_auto_stop();   // never leave a stale timer armed against whichever alarm gets shown next
   if (a->auto_stop) {
-    if (a->vibration_enabled) { alarm_vibrate(); }
+    if (a->vibration_enabled) { alarm_vibrate(a->vibe_pattern); }
 #if PBL_SPEAKER
     if (a->sound_enabled) { alarm_play_audio((uint8_t)s_audio_volume); }
 #endif // PBL_SPEAKER
@@ -969,18 +977,13 @@ static void time_layer_update(Layer *l, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, GColorBlack);
 
-  // Header: "Time" (left) + the fully-formatted current value (right, honors
-  // the system's 12h/24h clock style) — same layout as timer's dial header
-  // (dial_update_proc, main.c:961-981). The boxes below always edit the raw
-  // 24h hour field for unambiguous +/- stepping; only this header reflects
-  // 12h/AM-PM formatting.
-  char head_right[16];
-  ac_format_time(head_right, sizeof(head_right), s_time_hour, s_time_minute, clock_is_24h_style());
+  // Header: just "Time" -- the boxes below already show the staged value
+  // directly, so a redundant formatted-value readout on the header's right
+  // side was removed. The boxes always edit the raw 24h hour field for
+  // unambiguous +/- stepping, regardless of the system's 12h/24h style.
   GFont hf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  graphics_draw_text(ctx, "Time", hf, GRect(4, 2, b.size.w - 90, 26),
+  graphics_draw_text(ctx, "Time", hf, GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  graphics_draw_text(ctx, head_right, hf, GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
 
   int margin = 8, gap = 6;
   int bw = (b.size.w - margin * 2 - gap) / 2;
@@ -1577,6 +1580,14 @@ static Window *s_edit_window;
 static MenuLayer *s_edit_menu;
 static int s_edit_idx = -1;
 
+static const char *vibe_pattern_name(uint8_t pattern) {
+  switch (pattern) {
+    case 1: return "Short";
+    case 2: return "Long";
+    default: return "Double";
+  }
+}
+
 #define EDIT_ROW_LABEL    0
 #define EDIT_ROW_ENABLE   1
 #define EDIT_ROW_TIME     2
@@ -1584,10 +1595,11 @@ static int s_edit_idx = -1;
 #define EDIT_ROW_CRON     4
 #define EDIT_ROW_SNOOZE   5
 #define EDIT_ROW_VIBE     6
-#define EDIT_ROW_SOUND    7
-#define EDIT_ROW_AUTO_STOP 8
-#define EDIT_ROW_DELETE   9
-#define EDIT_ROW_MAX_COUNT 9   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/SOUND/AUTO_STOP/DELETE
+#define EDIT_ROW_VIBE_PATTERN 7
+#define EDIT_ROW_SOUND    8
+#define EDIT_ROW_AUTO_STOP 9
+#define EDIT_ROW_DELETE   10
+#define EDIT_ROW_MAX_COUNT 10   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/AUTO_STOP/DELETE
 
 // Builds the ordered list of row "kinds" for the current alarm's mode into
 // out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
@@ -1596,16 +1608,19 @@ static int s_edit_idx = -1;
 // scattering is_cron checks through draw/select.
 static int edit_build_rows(int *out_kinds, bool is_cron) {
   int n = 0;
-  out_kinds[n++] = EDIT_ROW_LABEL;
-  out_kinds[n++] = EDIT_ROW_ENABLE;
   if (is_cron) {
     out_kinds[n++] = EDIT_ROW_CRON;
   } else {
     out_kinds[n++] = EDIT_ROW_TIME;
+  }
+  out_kinds[n++] = EDIT_ROW_LABEL;
+  out_kinds[n++] = EDIT_ROW_ENABLE;
+  if (!is_cron) {
     out_kinds[n++] = EDIT_ROW_REPEAT;
   }
   out_kinds[n++] = EDIT_ROW_SNOOZE;
   out_kinds[n++] = EDIT_ROW_VIBE;
+  out_kinds[n++] = EDIT_ROW_VIBE_PATTERN;
   out_kinds[n++] = EDIT_ROW_SOUND;
   out_kinds[n++] = EDIT_ROW_AUTO_STOP;
   out_kinds[n++] = EDIT_ROW_DELETE;
@@ -1672,6 +1687,10 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case EDIT_ROW_VIBE:
       key = "Vibration";
       snprintf(value, sizeof(value), "%s", a->vibration_enabled ? "On" : "Off");
+      break;
+    case EDIT_ROW_VIBE_PATTERN:
+      key = "Vibe pattern";
+      snprintf(value, sizeof(value), "%s", vibe_pattern_name(a->vibe_pattern));
       break;
     case EDIT_ROW_SOUND:
       key = "Sound";
@@ -1878,6 +1897,13 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
+    case EDIT_ROW_VIBE_PATTERN:
+      // Double -> Short -> Long -> Double, same short-press-cycles
+      // convention as the main list's enable/disable/skip state.
+      a->vibe_pattern = (a->vibe_pattern + 1) % 3;
+      persist_all();
+      menu_layer_reload_data(s_edit_menu);
+      break;
     case EDIT_ROW_SOUND:
       a->sound_enabled = !a->sound_enabled;
       persist_all();
@@ -1953,17 +1979,13 @@ static void new_alarm_label_done(const char *text, void *ctx) {
   reload_ui();
 }
 
-static void new_alarm_snooze_confirm(uint16_t minutes, uint8_t max_count, void *ctx) {
-  s_draft.snooze_minutes = minutes;
-  s_draft.snooze_max = max_count;
-  multitap_keyboard_window_push_ex(new_alarm_label_done, "", NAME_LEN, NULL);
-}
-
+// Snooze is no longer its own wizard screen -- s_draft.snooze_minutes/max
+// were already seeded from the phone-configured defaults in
+// start_new_alarm_flow, so every new alarm just uses those outright.
 static void new_alarm_repeat_confirm(bool repeats, uint8_t repeat_days, void *ctx) {
   s_draft.repeats = repeats;
   s_draft.repeat_days = repeat_days;
-  snooze_edit_window_push(s_draft.snooze_minutes, s_draft.snooze_max, new_alarm_snooze_confirm,
-                          new_alarm_wizard_cancel, NULL);
+  multitap_keyboard_window_push_ex(new_alarm_label_done, "", NAME_LEN, NULL);
 }
 
 static void new_alarm_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
@@ -1990,14 +2012,18 @@ static void new_alarm_cron_confirm(const char *min_str, const char *hour_str, co
   strncpy(s_draft.cron_hour, hour_str, CRON_FIELD_LEN - 1); s_draft.cron_hour[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_draft.cron_dow, dow_str, CRON_FIELD_LEN - 1); s_draft.cron_dow[CRON_FIELD_LEN - 1] = '\0';
   s_draft.cron_last_fired_min = -1;
-  snooze_edit_window_push(s_draft.snooze_minutes, s_draft.snooze_max, new_alarm_snooze_confirm,
-                          new_alarm_wizard_cancel, NULL);
+  multitap_keyboard_window_push_ex(new_alarm_label_done, "", NAME_LEN, NULL);
 }
+// Unlike edit_on_time_chord (converting an already-existing alarm, which
+// keeps the exact staged hour:minute), the "+ New alarm" wizard defaults to
+// the next full hour, every day -- a fresh cron alarm is far more likely to
+// want "top of the hour" than whatever incidental minute the time editor
+// happened to be showing.
 static void new_alarm_time_chord(void *ctx) {
-  char min_str[8], hour_str[8];
-  snprintf(min_str, sizeof(min_str), "%d", s_time_minute);
-  snprintf(hour_str, sizeof(hour_str), "%d", s_time_hour);
-  cron_edit_window_push(min_str, hour_str, "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
+  char hour_str[8];
+  int next_full_hour = (s_time_minute > 0) ? (s_time_hour + 1) % 24 : s_time_hour;
+  snprintf(hour_str, sizeof(hour_str), "%d", next_full_hour);
+  cron_edit_window_push("0", hour_str, "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
 }
 
 static void start_new_alarm_flow(void) {
@@ -2005,7 +2031,11 @@ static void start_new_alarm_flow(void) {
   s_draft.last_fired_day = -1;   // never fired
   s_draft.enabled = true;
   s_draft.vibration_enabled = s_default_vibration_enabled;
+  s_draft.vibe_pattern = (uint8_t)s_default_vibe_pattern;
   s_draft.sound_enabled = s_default_sound_enabled;
+  // 0 here (already the case when the phone's "Enable snooze" toggle is
+  // off) reuses the existing "snooze disabled outright" convention, see
+  // alarm_snooze().
   s_draft.snooze_minutes = (uint16_t)s_default_snooze_minutes;
   s_draft.snooze_max = (uint8_t)s_default_snooze_max;
   // Default to the next minute, not a fixed time, so the time editor opens
@@ -2208,6 +2238,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
       a->last_fired_day = -1;
       a->enabled = true;
       a->vibration_enabled = true;
+      a->vibe_pattern = 0;
       a->sound_enabled = true;
       a->snooze_minutes = (uint16_t)s_default_snooze_minutes;
       a->snooze_max = (uint8_t)s_default_snooze_max;
@@ -2229,6 +2260,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSnoozeMinutes))) { a->snooze_minutes = (uint16_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSnoozeMax))) { a->snooze_max = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibrationEnabled))) { a->vibration_enabled = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibePattern))) { a->vibe_pattern = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundEnabled))) { a->sound_enabled = t->value->int32 != 0; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmName))) {
         strncpy(a->name, t->value->cstring, NAME_LEN);
@@ -2297,20 +2329,12 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
   bool changed = false;
   Tuple *t;
   if ((t = dict_find(iter, MESSAGE_KEY_FirstDayOfWeek))) { s_first_day_of_week = (int)t->value->int32; changed = true; }
-  if ((t = dict_find(iter, MESSAGE_KEY_AlarmVibePattern))) { s_vibe_pattern = (int)t->value->int32; changed = true; }
+  if ((t = dict_find(iter, MESSAGE_KEY_AlarmVibePattern))) { s_default_vibe_pattern = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultSnoozeMinutes))) { s_default_snooze_minutes = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultSnoozeMax))) { s_default_snooze_max = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_AudioVolume))) { s_audio_volume = (int)t->value->int32; changed = true; }
-  // DefaultAlarmSignal[2] (package.json array-type key) reserves two
-  // consecutive ids so Clay's checkboxgroup component accepts it, but
-  // dict.ts deliberately does NOT rely on any runtime auto-splitting a JS
-  // array value across those ids (that behavior can't be assumed portable
-  // across every PebbleKitJS implementation) — it addresses each id
-  // directly as its own plain scalar int (see dict.ts's buildDict), so these
-  // read exactly like any other scalar key: base id = Vibration, base+1 id =
-  // Sound, matching config_clay.ts's checkboxgroup options order.
-  if ((t = dict_find(iter, MESSAGE_KEY_DefaultAlarmSignal))) { s_default_vibration_enabled = t->value->int32 != 0; changed = true; }
-  if ((t = dict_find(iter, MESSAGE_KEY_DefaultAlarmSignal + 1))) { s_default_sound_enabled = t->value->int32 != 0; changed = true; }
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultSoundEnabled))) { s_default_sound_enabled = t->value->int32 != 0; changed = true; }
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultVibrationEnabled))) { s_default_vibration_enabled = t->value->int32 != 0; changed = true; }
   if (changed) { persist_all(); reload_ui(); }
 #ifdef APP_TEST_HOOKS
   if (handle_test_message(iter)) { persist_all(); rearm_wakeup(); reload_ui(); }
@@ -2341,7 +2365,7 @@ static void handle_wakeup_event(WakeupId id, int32_t cookie) {
 static void init(void) {
   s_count = store_load(s_alarms);   // snooze_until/snooze_count load with the alarm, since they're persisted now
   s_first_day_of_week = store_load_first_day_of_week();
-  s_vibe_pattern = store_load_vibe_pattern();
+  s_default_vibe_pattern = store_load_vibe_pattern();
   s_default_snooze_minutes = store_load_default_snooze_minutes();
   s_default_snooze_max = store_load_default_snooze_max();
   s_next_local_id = store_load_next_local_id();

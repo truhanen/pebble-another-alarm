@@ -15,8 +15,23 @@
 #define PERSIST_KEY_DEFAULT_VIBRATION_ENABLED 10
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 6   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
-                          // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop
+#define STORE_SCHEMA 7   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+                          // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
+                          // then vibe_pattern (per-alarm vibration pattern override).
+                          // Every field added to Alarm so far (including vibe_pattern) was
+                          // appended at the very end of the struct, on purpose -- this is
+                          // what would let a future forward-compatible loader read an
+                          // older, shorter blob's bytes into the front of a same-or-larger
+                          // buffer and get correct values for every field that existed back
+                          // then, with only the new trailing fields needing their own
+                          // defaults filled in. Nothing here currently *implements* that
+                          // yet, though (a stored-schema mismatch still wipes everything,
+                          // see store_load() below) -- a real migration would compare the
+                          // stored schema against a per-version "known size" table and, for
+                          // a purely-additive bump, read the old (shorter) byte count into a
+                          // zeroed current-sized Alarm rather than wiping. TODO.md has the
+                          // fuller writeup; this ordering discipline is the precondition for
+                          // it working at all.
 
 // Loads alarms into out (capacity MAX_ALARMS); returns count, or 0 if none/old schema.
 int store_load(Alarm *out);
@@ -32,8 +47,9 @@ void store_save_wakeup_id(int32_t id);
 int store_load_first_day_of_week(void);
 void store_save_first_day_of_week(int day);
 
-// Vibration pattern for the ring screen (0=Double, 1=Short, 2=Long; defaults
-// to 0/Double when unset).
+// Default vibration pattern (0=Double, 1=Short, 2=Long) copied into a new
+// alarm's own vibe_pattern at creation (defaults to 0/Double when unset) --
+// not read at ring time; each alarm rings with its own vibe_pattern.
 int store_load_vibe_pattern(void);
 void store_save_vibe_pattern(int pattern);
 
@@ -64,3 +80,8 @@ bool store_load_default_vibration_enabled(void);
 void store_save_default_vibration_enabled(bool enabled);
 bool store_load_default_sound_enabled(void);
 void store_save_default_sound_enabled(bool enabled);
+
+// Whether newly created alarms snooze by default (phone-configured; defaults
+// to true/enabled when unset — does not affect existing alarms).
+bool store_load_default_snooze_enabled(void);
+void store_save_default_snooze_enabled(bool enabled);
