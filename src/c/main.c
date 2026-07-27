@@ -501,9 +501,25 @@ static bool sweep_due_alarms(void) {
   return any;
 }
 
+// Lower is a stronger signal: sound beats vibration beats neither. Used to
+// pick which of several simultaneously-pending alarms gets the ring screen
+// and fires its signal first, so a silent (or vibrate-only) alarm never
+// pre-empts one that would otherwise wake the user with sound.
+static int alarm_signal_strength(const Alarm *a) {
+  if (a->sound_enabled) { return 0; }
+  if (a->vibration_enabled) { return 1; }
+  return 2;
+}
+
 static int first_pending_alarm_idx(void) {
-  for (int i = 0; i < s_count; i++) { if (s_alarms[i].alarm_pending) { return i; } }
-  return -1;
+  int best = -1;
+  for (int i = 0; i < s_count; i++) {
+    if (!s_alarms[i].alarm_pending) { continue; }
+    if (best < 0 || alarm_signal_strength(&s_alarms[i]) < alarm_signal_strength(&s_alarms[best])) {
+      best = i;
+    }
+  }
+  return best;
 }
 
 static int pending_alarm_count(void) {
