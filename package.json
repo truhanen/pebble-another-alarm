@@ -30,6 +30,7 @@
       "AudioVolume",
       "DefaultSoundEnabled",
       "DefaultVibrationEnabled",
+      "DefaultIncreasingVolume",
       "TestClearAlarms",
       "TestAlarmIndex",
       "TestAlarmHour",
@@ -51,7 +52,8 @@
       "TestAlarmCronDow",
       "TestAlarmCronFiredNow",
       "TestAlarmAutoStop",
-      "TestAlarmVibePattern"
+      "TestAlarmVibePattern",
+      "TestAlarmIncreasingVolume"
     ],
     "resources": {
       "media": [

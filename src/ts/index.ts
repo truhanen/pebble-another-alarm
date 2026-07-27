@@ -26,6 +26,7 @@ Pebble.addEventListener('webviewclosed', (e: any) => {
     DefaultSnoozeEnabled: s.DefaultSnoozeEnabled,
     DefaultSoundEnabled: s.DefaultSoundEnabled,
     DefaultVibrationEnabled: s.DefaultVibrationEnabled,
+    DefaultIncreasingVolume: s.DefaultIncreasingVolume,
     AudioVolume: s.AudioVolume,
   };
   const dict = buildDict(settings);

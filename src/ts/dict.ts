@@ -14,6 +14,7 @@ export interface ClaySettings {
   DefaultSnoozeEnabled?: boolean;    // Clay's toggle type returns a boolean
   DefaultSoundEnabled?: boolean;
   DefaultVibrationEnabled?: boolean;
+  DefaultIncreasingVolume?: boolean;
   AudioVolume?: string | number;     // Clay's slider type returns a number, not a string
 }
 
@@ -35,6 +36,7 @@ export function buildDict(settings: ClaySettings): Record<string, number> {
     DefaultSnoozeMax: toInt(settings.DefaultSnoozeMax, 3),
     DefaultSoundEnabled: (settings.DefaultSoundEnabled ?? true) ? 1 : 0,
     DefaultVibrationEnabled: (settings.DefaultVibrationEnabled ?? true) ? 1 : 0,
+    DefaultIncreasingVolume: (settings.DefaultIncreasingVolume ?? false) ? 1 : 0,
     AudioVolume: toInt(settings.AudioVolume, 0),
   };
 }

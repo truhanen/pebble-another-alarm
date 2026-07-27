@@ -16,6 +16,7 @@ test('buildDict parses Clay string values to ints', () => {
     DefaultSnoozeMax: 5,
     DefaultSoundEnabled: 1,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
     AudioVolume: 40,
   });
 });
@@ -28,6 +29,7 @@ test('buildDict accepts AudioVolume as a number (Clay slider type)', () => {
     DefaultSnoozeMax: 3,
     DefaultSoundEnabled: 1,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
     AudioVolume: 75,
   });
 });
@@ -40,6 +42,7 @@ test('buildDict defaults missing/unparseable fields', () => {
     DefaultSnoozeMax: 3,
     DefaultSoundEnabled: 1,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
     AudioVolume: 0,
   });
 });
@@ -52,6 +55,7 @@ test('buildDict treats DefaultSnoozeMax "0" (unlimited) as a real value, not a d
     DefaultSnoozeMax: 0,
     DefaultSoundEnabled: 1,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
     AudioVolume: 0,
   });
 });
@@ -64,6 +68,7 @@ test('buildDict collapses DefaultSnoozeMinutes to 0 when DefaultSnoozeEnabled is
     DefaultSnoozeMax: 3,
     DefaultSoundEnabled: 1,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
     AudioVolume: 0,
   });
 });
@@ -76,6 +81,20 @@ test('buildDict sends DefaultSoundEnabled/DefaultVibrationEnabled as independent
     DefaultSnoozeMax: 3,
     DefaultSoundEnabled: 0,
     DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 0,
+    AudioVolume: 0,
+  });
+});
+
+test('buildDict sends DefaultIncreasingVolume as an independent boolean', () => {
+  assert.deepStrictEqual(buildDict({ DefaultIncreasingVolume: true }), {
+    FirstDayOfWeek: 1,
+    AlarmVibePattern: 0,
+    DefaultSnoozeMinutes: 9,
+    DefaultSnoozeMax: 3,
+    DefaultSoundEnabled: 1,
+    DefaultVibrationEnabled: 1,
+    DefaultIncreasingVolume: 1,
     AudioVolume: 0,
   });
 });

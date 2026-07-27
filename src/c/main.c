@@ -56,6 +56,7 @@ static uint16_t s_next_local_id = 1;
 static int s_audio_volume = 0;        // 0-100, 0 = sound disabled (global, like Instant Timer's audioVolume)
 static bool s_default_vibration_enabled = true;   // pre-fills new alarms' own toggles
 static bool s_default_sound_enabled = true;
+static bool s_default_increasing_volume = false;
 
 static uint32_t next_alarm_id(void) {
   uint32_t id = s_next_local_id;
@@ -73,6 +74,7 @@ static void persist_all(void) {
   store_save_audio_volume(s_audio_volume);
   store_save_default_vibration_enabled(s_default_vibration_enabled);
   store_save_default_sound_enabled(s_default_sound_enabled);
+  store_save_default_increasing_volume(s_default_increasing_volume);
 }
 
 // Display-only sort key for a cron alarm: lowest set bit in cron_hour_mask/
@@ -540,6 +542,7 @@ static bool show_next_pending_alarm(void) {
 #define ALARM_BUZZ_INTERVAL_MS 4000
 #define ALARM_BUZZ_MAX_S       600
 #define ALARM_AUTO_STOP_MS 2000   // "a couple seconds"
+#define ALARM_VOLUME_STEP 10   // increasing_volume: volume units added per buzz cycle (after the initial 0->1->5 warm-up)
 
 static Window *s_alarm_window;
 static TextLayer *s_alarm_title;
@@ -551,6 +554,7 @@ static char s_alarm_title_buf[16 + NAME_LEN + 2];
 static char s_alarm_sub_buf[32];
 static AppTimer *s_alarm_buzz_timer;
 static int64_t s_alarm_buzz_start_s;
+static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
 static AppTimer *s_alarm_auto_stop_timer;   // auto_stop: auto-dismisses the ring screen
 
 static void alarm_vibrate(uint8_t pattern) {
@@ -581,6 +585,33 @@ static void alarm_play_audio(uint8_t volume) {
     speaker_play_notes(notes, ARRAY_LENGTH(notes), volume);
   }
 }
+
+// increasing_volume: driven by s_alarm_buzz_count (how many buzz cycles have
+// already happened since this ring started, reset alongside
+// s_alarm_buzz_start_s at the top of trigger_alarm() regardless of
+// auto_stop), NOT by elapsed time -- a fixed per-cycle step reads as a much
+// more noticeably increasing ramp than a fixed total duration does, since
+// most of a duration-based ramp's early steps landed on volumes too low to
+// be audibly distinct from silence on the watch's speaker. Sequence: 0, 0
+// (silent on the first two buzzes), 1, 1 (a bare-minimum audible cue, held
+// for two buzzes as well), 5, 10, then increments of ALARM_VOLUME_STEP (10,
+// so 20, 30, 40, ...) from there on, capped at the configured global
+// s_audio_volume. Vibration is unaffected by this -- it always fires at
+// full strength from the very first buzz cycle, so an increasing-volume
+// alarm isn't inaudible-and-unnoticeable at the very start when vibration
+// is also on.
+static uint8_t alarm_current_volume(const Alarm *a) {
+  if (!a->increasing_volume) { return (uint8_t)s_audio_volume; }
+  int c = s_alarm_buzz_count;
+  int vol;
+  if (c <= 1) { vol = 0; }
+  else if (c <= 3) { vol = 1; }
+  else if (c == 4) { vol = 5; }
+  else if (c == 5) { vol = 10; }
+  else { vol = (c - 4) * ALARM_VOLUME_STEP; }
+  if (vol > s_audio_volume) { vol = s_audio_volume; }
+  return (uint8_t)vol;
+}
 #endif // PBL_SPEAKER
 
 static void alarm_buzz_cb(void *ctx) {
@@ -589,8 +620,15 @@ static void alarm_buzz_cb(void *ctx) {
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
     if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(s_alarms[s_alarm_idx].vibe_pattern); }
 #if PBL_SPEAKER
-    if (s_alarms[s_alarm_idx].sound_enabled) { alarm_play_audio((uint8_t)s_audio_volume); }
+    if (s_alarms[s_alarm_idx].sound_enabled) {
+      alarm_play_audio(alarm_current_volume(&s_alarms[s_alarm_idx]));
+    }
 #endif // PBL_SPEAKER
+    // Advances the increasing_volume ramp one step regardless of whether
+    // sound is currently enabled/available this cycle, so the ramp position
+    // stays consistent with "how many times has this alarm buzzed" rather
+    // than depending on PBL_SPEAKER or the alarm's own sound_enabled toggle.
+    s_alarm_buzz_count++;
   }
   s_alarm_buzz_timer = app_timer_register(ALARM_BUZZ_INTERVAL_MS, alarm_buzz_cb, NULL);
 }
@@ -810,10 +848,19 @@ static void trigger_alarm(int idx, int count) {
   }
 
   alarm_cancel_auto_stop();   // never leave a stale timer armed against whichever alarm gets shown next
+  // Stamped/reset here (not just inside alarm_buzz_start()) so
+  // alarm_current_volume()/s_alarm_buzz_count always start fresh for THIS
+  // ring, even for the auto_stop branch below, which never calls
+  // alarm_buzz_start() at all.
+  s_alarm_buzz_start_s = now_s();
+  s_alarm_buzz_count = 0;
   if (a->auto_stop) {
     if (a->vibration_enabled) { alarm_vibrate(a->vibe_pattern); }
 #if PBL_SPEAKER
-    if (a->sound_enabled) { alarm_play_audio((uint8_t)s_audio_volume); }
+    // Note: auto_stop only ever buzzes once, at buzz_count=0, so an
+    // increasing_volume alarm combined with auto_stop never reaches a
+    // meaningfully ramped-up volume -- see alarm_current_volume().
+    if (a->sound_enabled) { alarm_play_audio(alarm_current_volume(a)); }
 #endif // PBL_SPEAKER
     s_alarm_auto_stop_timer = app_timer_register(ALARM_AUTO_STOP_MS, alarm_auto_stop_cb, NULL);
   } else {
@@ -1720,9 +1767,10 @@ static const char *vibe_pattern_name(uint8_t pattern) {
 #define EDIT_ROW_VIBE     6
 #define EDIT_ROW_VIBE_PATTERN 7
 #define EDIT_ROW_SOUND    8
-#define EDIT_ROW_AUTO_STOP 9
-#define EDIT_ROW_DELETE   10
-#define EDIT_ROW_MAX_COUNT 10   // legacy: LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/AUTO_STOP/DELETE
+#define EDIT_ROW_INCREASING_VOLUME 9
+#define EDIT_ROW_AUTO_STOP 10
+#define EDIT_ROW_DELETE   11
+#define EDIT_ROW_MAX_COUNT 11   // LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/INCREASING_VOLUME/AUTO_STOP/DELETE
 
 // Builds the ordered list of row "kinds" for the current alarm's mode into
 // out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
@@ -1745,6 +1793,7 @@ static int edit_build_rows(int *out_kinds, bool is_cron) {
   out_kinds[n++] = EDIT_ROW_VIBE;
   out_kinds[n++] = EDIT_ROW_VIBE_PATTERN;
   out_kinds[n++] = EDIT_ROW_SOUND;
+  out_kinds[n++] = EDIT_ROW_INCREASING_VOLUME;
   out_kinds[n++] = EDIT_ROW_AUTO_STOP;
   out_kinds[n++] = EDIT_ROW_DELETE;
   return n;
@@ -1818,6 +1867,10 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case EDIT_ROW_SOUND:
       key = "Sound";
       snprintf(value, sizeof(value), "%s", a->sound_enabled ? "On" : "Off");
+      break;
+    case EDIT_ROW_INCREASING_VOLUME:
+      key = "Increasing volume";
+      snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
       break;
     case EDIT_ROW_AUTO_STOP:
       key = "Auto-stop";
@@ -2032,6 +2085,11 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
+    case EDIT_ROW_INCREASING_VOLUME:
+      a->increasing_volume = !a->increasing_volume;
+      persist_all();
+      menu_layer_reload_data(s_edit_menu);
+      break;
     case EDIT_ROW_AUTO_STOP:
       a->auto_stop = !a->auto_stop;
       persist_all();
@@ -2156,6 +2214,7 @@ static void start_new_alarm_flow(void) {
   s_draft.vibration_enabled = s_default_vibration_enabled;
   s_draft.vibe_pattern = (uint8_t)s_default_vibe_pattern;
   s_draft.sound_enabled = s_default_sound_enabled;
+  s_draft.increasing_volume = s_default_increasing_volume;
   // 0 here (already the case when the phone's "Enable snooze" toggle is
   // off) reuses the existing "snooze disabled outright" convention, see
   // alarm_snooze().
@@ -2385,6 +2444,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibrationEnabled))) { a->vibration_enabled = t->value->int32 != 0; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibePattern))) { a->vibe_pattern = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundEnabled))) { a->sound_enabled = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmIncreasingVolume))) { a->increasing_volume = t->value->int32 != 0; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmName))) {
         strncpy(a->name, t->value->cstring, NAME_LEN);
         a->name[NAME_LEN] = '\0';
@@ -2458,6 +2518,7 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
   if ((t = dict_find(iter, MESSAGE_KEY_AudioVolume))) { s_audio_volume = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultSoundEnabled))) { s_default_sound_enabled = t->value->int32 != 0; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultVibrationEnabled))) { s_default_vibration_enabled = t->value->int32 != 0; changed = true; }
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultIncreasingVolume))) { s_default_increasing_volume = t->value->int32 != 0; changed = true; }
   if (changed) { persist_all(); reload_ui(); }
 #ifdef APP_TEST_HOOKS
   if (handle_test_message(iter)) { persist_all(); rearm_wakeup(); reload_ui(); }
@@ -2495,6 +2556,7 @@ static void init(void) {
   s_audio_volume = store_load_audio_volume();
   s_default_vibration_enabled = store_load_default_vibration_enabled();
   s_default_sound_enabled = store_load_default_sound_enabled();
+  s_default_increasing_volume = store_load_default_increasing_volume();
 
   // If launched by a wakeup, the firing event was already consumed.
   WakeupId wid; int32_t cookie;

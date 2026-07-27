@@ -84,6 +84,13 @@ typedef struct {
                              // seeded from the phone-configured default at
                              // creation (see s_default_vibe_pattern, main.c);
                              // editing it later doesn't touch other alarms
+  bool increasing_volume;   // sound steps up per buzz cycle (0, 0, 1, 1, 5,
+                             // 10, then +10 each cycle) up to the configured
+                             // global AudioVolume, instead of starting at
+                             // that volume outright -- own copy per alarm,
+                             // seeded from the phone-configured default at
+                             // creation (see s_default_increasing_volume,
+                             // main.c). See alarm_current_volume() in main.c.
 } Alarm;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own

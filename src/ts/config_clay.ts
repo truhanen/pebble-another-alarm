@@ -13,6 +13,8 @@ const config = [
         attributes: { type: 'number', min: 0, max: 20 }, defaultValue: '3' },
       { type: 'toggle', messageKey: 'DefaultSoundEnabled', label: 'Sound',
         defaultValue: true },
+      { type: 'toggle', messageKey: 'DefaultIncreasingVolume', label: 'Increasing volume',
+        defaultValue: false },
       { type: 'toggle', messageKey: 'DefaultVibrationEnabled', label: 'Vibration',
         defaultValue: true },
       { type: 'select', messageKey: 'AlarmVibePattern', label: 'Vibration pattern',
@@ -38,6 +40,7 @@ const config = [
       // top of this, not a replacement for it).
       { type: 'slider', messageKey: 'AudioVolume', label: 'Alarm volume (0 to disable)',
         defaultValue: 5, min: 0, max: 100, step: 5 },
+      { type: 'text', defaultValue: 'Maximum for alarms with increasing volume.' },
     ],
   },
   { type: 'submit', defaultValue: 'Save' },

@@ -17,6 +17,9 @@
 static size_t alarm_size_for_schema(int schema) {
   switch (schema) {
     case 7: return 184;   // baseline this migration shipped in
+    case 8: return 184;   // + increasing_volume (bool) -- fits into existing
+                           // trailing struct padding, so the byte size is
+                           // unchanged from schema 7
     default: return 0;
   }
 }
@@ -155,4 +158,13 @@ bool store_load_default_sound_enabled(void) {
 
 void store_save_default_sound_enabled(bool enabled) {
   persist_write_int(PERSIST_KEY_DEFAULT_SOUND_ENABLED, enabled ? 1 : 0);
+}
+
+bool store_load_default_increasing_volume(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_INCREASING_VOLUME)) { return false; }
+  return persist_read_int(PERSIST_KEY_DEFAULT_INCREASING_VOLUME) != 0;
+}
+
+void store_save_default_increasing_volume(bool enabled) {
+  persist_write_int(PERSIST_KEY_DEFAULT_INCREASING_VOLUME, enabled ? 1 : 0);
 }

@@ -14,13 +14,16 @@
 #define PERSIST_KEY_AUDIO_VOLUME         9   // 0-100, 0 = sound disabled (matches Instant Timer's audioVolume)
 #define PERSIST_KEY_DEFAULT_VIBRATION_ENABLED 10
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
+#define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 7   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+#define STORE_SCHEMA 8   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
-                          // then vibe_pattern (per-alarm vibration pattern override).
+                          // then vibe_pattern (per-alarm vibration pattern override), then
+                          // increasing_volume (per-alarm ramp-up-to-max toggle).
                           //
-                          // Every field added to Alarm so far (including vibe_pattern) was
-                          // appended at the very end of the struct, on purpose: it's what
+                          // Every field added to Alarm so far (including vibe_pattern and
+                          // increasing_volume) was appended at the very end of the struct,
+                          // on purpose: it's what
                           // lets store_load()'s forward-compatible migration (see
                           // alarm_size_for_schema() in alarm_store.c) read an older, shorter
                           // blob's bytes into the front of a same-or-larger buffer and get
@@ -90,3 +93,9 @@ bool store_load_default_vibration_enabled(void);
 void store_save_default_vibration_enabled(bool enabled);
 bool store_load_default_sound_enabled(void);
 void store_save_default_sound_enabled(bool enabled);
+
+// Default "increasing volume" toggle pre-filled for newly created alarms
+// (phone-configured; defaults to false/off when unset — does not affect
+// existing alarms). See Alarm.increasing_volume (alarm_calc.h).
+bool store_load_default_increasing_volume(void);
+void store_save_default_increasing_volume(bool enabled);
