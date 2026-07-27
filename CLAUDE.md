@@ -558,29 +558,40 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   `sweep_due_alarms()` dedups on exact epoch-minute
   (`ac_cron_is_due`/`cron_last_fired_min`) rather than `last_fired_day`'s
   whole-day dedup, since a cron alarm can genuinely fire many times a day.
-- **Secret UP+DOWN chord on the time editor** switches it to cron entry.
-  Detected via `window_raw_click_subscribe` held-flags (`s_time_up_held`/
-  `s_time_down_held` in `main.c`) added *alongside* the time editor's
-  existing `window_single_repeating_click_subscribe` UP/DOWN — confirmed
-  against the Pebble SDK header that raw click has no documented conflict
-  with single-repeating-click on a different button (unlike single-click vs
-  single-repeating-click on the *same* button, which do conflict), so this
-  adds zero latency to a normal single click. `time_edit_window_push` gained
-  a 5th `on_chord` callback parameter for this.
+- **Secret long-press SELECT on the time editor** switches it to cron entry,
+  regardless of which field (hour/minute) is currently focused
+  (`time_select_long`, `window_long_click_subscribe(BUTTON_ID_SELECT, 500,
+  ...)` alongside the time editor's existing plain `window_single_click_
+  subscribe` on SELECT — both coexist on the same button, same pattern the
+  cron/repeat editors' own Apply row uses). `time_edit_window_push` gained a
+  5th `on_chord` callback parameter for this. A hint ("Long-press select\nto
+  enter cron mode", `GOTHIC_24`, horizontally centered) is drawn in whatever
+  room is left below the hour/minute boxes whenever `on_chord` is non-NULL.
+  The cron fields default to the currently-staged hour/minute (everyday —
+  e.g. `"30 20 *"` for 20:30) rather than `"*/*/* "`, read directly off
+  `s_time_hour`/`s_time_minute`, which are still valid at the moment
+  `on_chord` runs (popping the time window doesn't reset them).
 - **One `cron_edit_window_push()` window serves every call site** — the "+
-  New alarm" wizard (chord replaces the Time+Repeat steps, skipping straight
-  to Snooze), converting an existing normal alarm (chord on its edit menu's
-  Time row — `edit_cron_convert_cancel` is a real no-op cancel, not `NULL`,
-  since there's no prior cron state to revert to), and re-editing an
-  existing cron alarm (its edit menu's Cron row — real `NULL`
+  New alarm" wizard (the long-press replaces the Time+Repeat steps, skipping
+  straight to Snooze), converting an existing normal alarm (long-press on
+  its edit menu's Time row — `edit_cron_convert_cancel` is a real no-op
+  cancel, not `NULL`, since there's no prior cron state to revert to), and
+  re-editing an existing cron alarm (its edit menu's Cron row — real `NULL`
   snapshot-revert cancel semantics apply here). `MenuLayer`-based: row 0
-  "Submit", rows 1-3 the three fields (each opens the shared multitap
-  keyboard to edit its raw text; live "(invalid)" annotation if
-  `ac_cron_parse_field` currently fails, checked on every draw but never
-  blocking typing — only Submit is gated on all three parsing cleanly).
-  BACK follows the same on_cancel-vs-snapshot-revert convention as the
-  time/repeat/snooze editors. Long-press SELECT submits outright regardless
-  of cursor position; long-press BACK is a no-op.
+  "Apply", rows 1-3 the three fields in display order Minute, Hour,
+  Weekday — `CRON_ROW_MINUTE`/`CRON_ROW_HOUR`/`CRON_ROW_DOW` assigned row
+  numbers 1/2/3 in that order, matching the `min_str, hour_str, dow_str`
+  parameter order every function signature in this file uses
+  (`cron_edit_window_push`, `ac_format_cron_summary`, `ac_cron_*`) — row
+  order and parameter order are the same convention everywhere, deliberately
+  kept in sync rather than letting the on-watch display order drift from the
+  code's own field order. Each row opens the shared multitap keyboard to
+  edit its raw text; live "(invalid)" annotation if `ac_cron_parse_field`
+  currently fails, checked on every draw but never blocking typing — only
+  Apply is gated on all three parsing cleanly. BACK follows the same
+  on_cancel-vs-snapshot-revert convention as the time/repeat/snooze editors.
+  Long-press SELECT submits outright regardless of cursor position;
+  long-press BACK is a no-op.
 - **Edit menu display**: `edit_build_rows()` builds the ordered row-kind
   list for the current alarm (collapsing Time+Repeat into one `EDIT_ROW_CRON`
   row when `is_cron`) so `edit_num_rows`/`edit_draw_row`/`edit_select` share
