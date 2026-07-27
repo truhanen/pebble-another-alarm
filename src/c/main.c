@@ -943,7 +943,6 @@ static void (*s_time_on_confirm)(uint8_t hour, uint8_t minute, void *ctx);
 static void (*s_time_on_cancel)(void *ctx);
 static void (*s_time_on_chord)(void *ctx);
 static void *s_time_ctx;
-static bool s_time_up_held, s_time_down_held;
 
 static void time_layer_update(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
@@ -974,6 +973,21 @@ static void time_layer_update(Layer *l, GContext *ctx) {
   snprintf(mbuf, sizeof(mbuf), "%02d", s_time_minute);
   const char *texts[2] = { hbuf, mbuf };
   dial_draw_number_boxes(ctx, GRect(margin, by, bw * 2 + gap, bh), 2, texts, NULL, 0, s_time_field);
+
+  // Hint for the secret long-press-SELECT cron entry point, drawn in
+  // whatever room is left below the boxes -- same font as the main list's
+  // one-alarm hint (main_hint_update_proc), horizontally centered.
+  if (s_time_on_chord) {
+    int dial_bottom = by + bh + 8 + DIAL_TRI_H;
+    int hint_h = b.size.h - dial_bottom;
+    if (hint_h > 10) {
+      graphics_context_set_text_color(ctx, GColorBlack);
+      graphics_draw_text(ctx, "Long-press select\nto enter cron mode",
+                         fonts_get_system_font(FONT_KEY_GOTHIC_24),
+                         GRect(4, dial_bottom, b.size.w - 8, hint_h),
+                         GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+    }
+  }
 }
 
 static void time_adjust(int delta) {
@@ -998,39 +1012,21 @@ static void time_back(ClickRecognizerRef r, void *ctx) {
   window_stack_pop(true);
   if (cb) { cb(c); }
 }
-// Secret UP+DOWN chord: switches the time editor over to cron-syntax
-// entry. Detected via raw click held-flags (not single/single-repeating,
-// which only conflict with each other on the SAME button per the SDK
-// header -- raw click on one button is undocumented-safe alongside
-// single-repeating-click on another), so it adds zero latency to a normal
-// single click; whichever button's down-edge completes the chord may also
-// fire its ordinary time_up/time_down handler once, which is harmless since
-// the chord immediately abandons the staged hour/minute anyway.
-static void time_chord_trigger(void) {
-  s_time_up_held = false;
-  s_time_down_held = false;
+// Secret long-press SELECT: switches the time editor over to cron-syntax
+// entry, regardless of which field (hour/minute) is currently focused.
+static void time_select_long(ClickRecognizerRef r, void *ctx) {
   void *c = s_time_ctx;
   void (*cb)(void *) = s_time_on_chord;
+  if (!cb) { return; }
   window_stack_pop(true);
-  if (cb) { cb(c); }
+  cb(c);
 }
-static void time_up_raw_down(ClickRecognizerRef r, void *ctx) {
-  s_time_up_held = true;
-  if (s_time_down_held) { time_chord_trigger(); }
-}
-static void time_up_raw_up(ClickRecognizerRef r, void *ctx) { s_time_up_held = false; }
-static void time_down_raw_down(ClickRecognizerRef r, void *ctx) {
-  s_time_down_held = true;
-  if (s_time_up_held) { time_chord_trigger(); }
-}
-static void time_down_raw_up(ClickRecognizerRef r, void *ctx) { s_time_down_held = false; }
 static void time_click_config(void *ctx) {
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 70, time_up);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 70, time_down);
   window_single_click_subscribe(BUTTON_ID_SELECT, time_select);
   window_single_click_subscribe(BUTTON_ID_BACK, time_back);
-  window_raw_click_subscribe(BUTTON_ID_UP, time_up_raw_down, time_up_raw_up, NULL);
-  window_raw_click_subscribe(BUTTON_ID_DOWN, time_down_raw_down, time_down_raw_up, NULL);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, time_select_long, NULL);
 }
 static void time_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
@@ -1047,7 +1043,6 @@ static void time_edit_window_push(uint8_t hour, uint8_t minute,
   s_time_hour = hour; s_time_minute = minute; s_time_field = 0;
   s_time_on_confirm = on_confirm; s_time_on_cancel = on_cancel;
   s_time_on_chord = on_chord; s_time_ctx = ctx;
-  s_time_up_held = false; s_time_down_held = false;
   if (!s_time_window) {
     s_time_window = window_create();
     window_set_window_handlers(s_time_window, (WindowHandlers){
@@ -1107,7 +1102,7 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       snprintf(value, sizeof(value), "%s%s", s_cron_hour, cron_field_valid(s_cron_hour, 0, 23) ? "" : " (invalid)");
       break;
     case CRON_ROW_DOW:
-      key = "Day";
+      key = "Weekday";
       snprintf(value, sizeof(value), "%s%s", s_cron_dow, cron_field_valid(s_cron_dow, 0, 6) ? "" : " (invalid)");
       break;
   }
@@ -1189,6 +1184,8 @@ static void cron_select_click(ClickRecognizerRef r, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_cron_menu);
   cron_select(s_cron_menu, &idx, ctx);
 }
+// single_repeating_click (not a plain single_click) so holding UP/DOWN
+// scrolls the menu continuously instead of moving one row per press.
 static void cron_up_click(ClickRecognizerRef r, void *ctx) {
   menu_layer_set_selected_next(s_cron_menu, true, MenuRowAlignCenter, true);
 }
@@ -1201,15 +1198,32 @@ static void cron_down_click(ClickRecognizerRef r, void *ctx) {
 // revert BACK convention shared with every other editor in this file.
 static void cron_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_SELECT, cron_select_click);
-  window_single_click_subscribe(BUTTON_ID_UP, cron_up_click);
-  window_single_click_subscribe(BUTTON_ID_DOWN, cron_down_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, cron_up_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, cron_down_click);
   window_single_click_subscribe(BUTTON_ID_BACK, cron_back);
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, cron_select_long, NULL);
   window_long_click_subscribe(BUTTON_ID_BACK, 500, cron_back_long, NULL);
 }
+// Left-aligned title, same style as the "Time"/"Repeat" editor headers.
+static Layer *s_cron_header;
+#define CRON_HEADER_H 30
+static void cron_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Cron", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
 static void cron_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_cron_menu = menu_layer_create(layer_get_bounds(root));
+  GRect bounds = layer_get_bounds(root);
+  s_cron_header = layer_create(GRect(0, 0, bounds.size.w, CRON_HEADER_H));
+  layer_set_update_proc(s_cron_header, cron_header_update_proc);
+  layer_add_child(root, s_cron_header);
+  GRect menu_bounds = GRect(0, CRON_HEADER_H, bounds.size.w, bounds.size.h - CRON_HEADER_H);
+  s_cron_menu = menu_layer_create(menu_bounds);
   menu_layer_set_callbacks(s_cron_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = cron_num_rows, .get_cell_height = cron_cell_height,
     .draw_row = cron_draw_row, .select_click = cron_select });
@@ -1220,6 +1234,7 @@ static void cron_window_load(Window *w) {
 }
 static void cron_window_unload(Window *w) {
   menu_layer_destroy(s_cron_menu); s_cron_menu = NULL;
+  layer_destroy(s_cron_header); s_cron_header = NULL;
 }
 static void cron_edit_window_push(const char *min_str, const char *hour_str, const char *dow_str,
     void (*on_confirm)(const char *min_str, const char *hour_str, const char *dow_str, void *ctx),
@@ -1237,6 +1252,12 @@ static void cron_edit_window_push(const char *min_str, const char *hour_str, con
       .load = cron_window_load, .unload = cron_window_unload });
   }
   window_stack_push(s_cron_window, true);
+  // The window (and its MenuLayer) is cached and reused across every call
+  // site, so a prior open's scroll position would otherwise leak into this
+  // one -- always land back on "Apply" (row 0) when (re)opening.
+  if (s_cron_menu) {
+    menu_layer_set_selected_index(s_cron_menu, (MenuIndex){ 0, CRON_ROW_SUBMIT }, MenuRowAlignTop, false);
+  }
 }
 
 // ============================ repeat / weekday editor ============================
@@ -1811,7 +1832,10 @@ static void edit_on_cron_confirm(const char *min_str, const char *hour_str, cons
 // "revert to the */*/* snapshot", which doesn't apply here).
 static void edit_cron_convert_cancel(void *ctx) { }
 static void edit_on_time_chord(void *ctx) {
-  cron_edit_window_push("*", "*", "*", edit_on_cron_confirm, edit_cron_convert_cancel, NULL);
+  char min_str[8], hour_str[8];
+  snprintf(min_str, sizeof(min_str), "%d", s_time_minute);
+  snprintf(hour_str, sizeof(hour_str), "%d", s_time_hour);
+  cron_edit_window_push(min_str, hour_str, "*", edit_on_cron_confirm, edit_cron_convert_cancel, NULL);
 }
 
 static void edit_on_repeat_confirm(bool repeats, uint8_t repeat_days, void *ctx) {
@@ -2026,7 +2050,10 @@ static void new_alarm_cron_confirm(const char *min_str, const char *hour_str, co
                           new_alarm_wizard_cancel, NULL);
 }
 static void new_alarm_time_chord(void *ctx) {
-  cron_edit_window_push("*", "*", "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
+  char min_str[8], hour_str[8];
+  snprintf(min_str, sizeof(min_str), "%d", s_time_minute);
+  snprintf(hour_str, sizeof(hour_str), "%d", s_time_hour);
+  cron_edit_window_push(min_str, hour_str, "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
 }
 
 static void start_new_alarm_flow(void) {
