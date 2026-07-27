@@ -648,10 +648,12 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   row when `is_cron`) so `edit_num_rows`/`edit_draw_row`/`edit_select` share
   one source of truth for "which row is at this menu position" without
   scattering `is_cron` checks through each of them individually. Row order:
-  Time (or Cron), Label, State, Repeat (only when `!is_cron`), Snooze,
-  Vibration, Vibe pattern, Sound, Auto-stop, Delete — Time/Cron leads,
-  ahead of Label/State, unlike every other row grouping in this app which
-  puts Label first.
+  Delete, Time (or Cron), Label, State, Repeat (only when `!is_cron`),
+  Snooze, Vibration, Vibe pattern, Sound, Increasing volume, Auto-stop —
+  Delete leads (so it's the row selected by default when the menu opens;
+  still gated behind its own confirm prompt, so landing on it isn't
+  destructive by itself), and Time/Cron comes next ahead of Label/State,
+  unlike every other row grouping in this app which puts Label first.
 - **Main list display**: the bold time slot shows "Cron" instead of a
   formatted time; the summary line below shows the three raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.

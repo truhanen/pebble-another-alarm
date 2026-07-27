@@ -1779,6 +1779,7 @@ static const char *vibe_pattern_name(uint8_t pattern) {
 // scattering is_cron checks through draw/select.
 static int edit_build_rows(int *out_kinds, bool is_cron) {
   int n = 0;
+  out_kinds[n++] = EDIT_ROW_DELETE;
   if (is_cron) {
     out_kinds[n++] = EDIT_ROW_CRON;
   } else {
@@ -1795,7 +1796,6 @@ static int edit_build_rows(int *out_kinds, bool is_cron) {
   out_kinds[n++] = EDIT_ROW_SOUND;
   out_kinds[n++] = EDIT_ROW_INCREASING_VOLUME;
   out_kinds[n++] = EDIT_ROW_AUTO_STOP;
-  out_kinds[n++] = EDIT_ROW_DELETE;
   return n;
 }
 
