@@ -1275,7 +1275,7 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case CRON_ROW_SUBMIT:
       graphics_draw_text(ctx, "Apply", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                         GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
       return;
     case CRON_ROW_MINUTE:
       key = "Minute";
@@ -1292,7 +1292,7 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case CRON_ROW_HELP:
       graphics_draw_text(ctx, "Help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                         GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
       return;
   }
   graphics_draw_text(ctx, key, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
@@ -1488,7 +1488,7 @@ static void repeat_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
   if (cell_index->row == REPEAT_ROW_SUBMIT) {
     graphics_draw_text(ctx, "Apply", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                        GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
     return;
   }
   int wday = (s_first_day_of_week + (cell_index->row - 1)) % 7;
