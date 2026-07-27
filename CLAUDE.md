@@ -352,19 +352,24 @@ even though its wire value isn't split across them — never assume
   alarms due in the same wakeup-launched session still chain through their
   ring screens one at a time as before — the exit only happens once the
   *last* one is dismissed.
-- **`repeats` (bool) is separate from `repeat_days` (bitmask)**: `repeats`
-  says whether the alarm recurs weekly forever or fires once; `repeat_days`
-  says which day(s) apply in either case. This lets a *non-repeating* alarm
-  still target a specific weekday (`repeats=false`, one bit set in
-  `repeat_days` — "fire once, next Friday") instead of only ever meaning
-  "next occurrence of the time, today/tomorrow" (`repeat_days==0`).
-  `ac_next_offset_days` scans `repeat_days` the same way regardless of
-  `repeats`; only `ac_mark_fired` (disable vs. keep recurring) and
-  `skip_next` (repeats-only) branch on it. Toggling the repeat editor's
-  ON/OFF box only flips `repeats` — it no longer forces `repeat_days` to
-  all-or-nothing, so a picked weekday survives switching repeat on/off
-  (except turning repeat on with no day picked yet, which defaults to every
-  day so a repeating alarm never ends up with zero days set).
+- **`repeats` (bool) is derived from `repeat_days` (bitmask), not set
+  directly**: `repeats` says whether the alarm recurs weekly forever or
+  fires once; `repeat_days` says which day(s) apply. The repeat editor has
+  no separate on/off control — `repeat_edit_window_push`'s Apply always
+  computes `repeats = (repeat_days != 0)` from whatever weekdays ended up
+  picked (`repeat_confirm_and_pop`/`repeat_back`, `main.c`). This means a
+  *non-repeating* alarm can never target one specific weekday through this
+  editor (`repeats=false` with one bit set in `repeat_days`, e.g. "fire
+  once, next Friday") — a capability the app supported earlier but
+  deliberately dropped when the editor was rebuilt (see "Repeat editor" key
+  design point below); a `repeat_days==0` alarm now always means "next
+  occurrence of the time, today/tomorrow", with no specific day. Existing
+  persisted alarms in that now-unreachable state (`repeats=false`, exactly
+  one `repeat_days` bit set) are left as-is by every other code path — only
+  actually opening this alarm's Repeat screen and pressing Apply collapses
+  it into the derived model. `ac_next_offset_days` scans `repeat_days` the
+  same way regardless of `repeats`; only `ac_mark_fired` (disable vs. keep
+  recurring) and `skip_next` (repeats-only) branch on it.
 - **Ring screen click config is intentionally asymmetric**: DOWN needs
   `window_multi_click_subscribe` (double-click to stop) while UP is a plain
   single-click (snooze). BACK is explicitly subscribed to a no-op handler —
@@ -374,44 +379,42 @@ even though its wire value isn't split across them — never assume
 - **No touch-dial reuse**: time/duration entry uses plain button-driven
   pickers (UP/DOWN adjust, SELECT advance/confirm, BACK retreat/cancel),
   not a port of the vendored `touch_dial` widget.
-- **Time/snooze/repeat editors all follow the same SELECT-advances/BACK-
-  retreats pattern**, each a plain custom `Layer` (not a `MenuLayer` — see
-  below): SELECT moves forward one field/box, confirming (submitting) when
-  already on the last one; BACK moves back one field/box, **cancelling**
-  once already on the first one. What cancelling does depends on the
-  caller-supplied `on_cancel` (a 4th param on `time_edit_window_push`/
-  `repeat_edit_window_push`/`snooze_edit_window_push`, alongside the existing
-  `on_confirm`): if non-NULL, it's called instead of `on_confirm` — used by
-  the "+ New alarm" wizard (`new_alarm_wizard_cancel`) so exiting *any* of
-  its four screens (time, repeat, snooze, or BACK on the label's multitap
-  keyboard) aborts the whole flow outright, discarding the draft; the alarm
-  is only actually created by completing the last screen (the label) via
-  SELECT. If `on_cancel` is NULL — every per-alarm edit-menu call site
-  (`edit_on_*_confirm`) — cancelling instead reverts to the value the screen
-  was opened with and still calls `on_confirm` with that original value, so
-  editing a single field of an already-existing alarm behaves as a no-op on
-  cancel rather than needing its own special case.
-- **Repeat editor is 8 selectors on one compressed line**, not a `MenuLayer`
-  list: selector 0 is the ON/OFF (`repeats`) toggle (given 2 column-units'
-  worth of width, weekdays 1 unit each, so "OFF" always fits without
-  ellipsizing), selectors 1-7 are the individual weekdays starting at the
-  configured first-day-of-week. BACK/SELECT move the cursor horizontally
-  across the 8 selectors (not vertically like a normal menu); UP/DOWN toggle
-  whichever one is under the cursor. Each selector is GOTHIC_28_BOLD text
-  with a thick underscore under it when "on" (unpicked weekdays dim to gray
-  while repeat is off); cursor focus is a small downward-pointing chevron
-  drawn a few px above the selector (`repeat_draw_focus_marker`), independent
-  of the underscore. Turning repeat OFF deselects all weekdays; conversely,
-  toggling off the last remaining selected weekday directly, while repeat is
-  ON, turns repeat itself OFF — the ON/OFF switch is the source of truth for
-  "zero days selected", not an invalid state to silently repair (this
-  replaced an earlier "snap back to every day" behavior). While repeat is
-  OFF, weekday selectors are
-  mutually exclusive (radio-button, not checkbox): picking one clears
-  whichever other day was previously picked, since a one-time alarm only
-  ever targets a single day. Long-pressing SELECT submits the current
-  selections outright regardless of cursor position (a shortcut past
-  "advance to the last box first"); long-pressing BACK is an explicit no-op.
+- **Time/snooze editors both follow the same SELECT-advances/BACK-retreats
+  pattern**, each a plain custom `Layer` (not a `MenuLayer` — the repeat and
+  cron editors are `MenuLayer`s instead, see below): SELECT moves forward
+  one field/box, confirming (submitting) when already on the last one; BACK
+  moves back one field/box, **cancelling** once already on the first one.
+  What cancelling does depends on the caller-supplied `on_cancel` (a 4th
+  param on `time_edit_window_push`/`snooze_edit_window_push`, alongside the
+  existing `on_confirm`): if non-NULL, it's called instead of `on_confirm`
+  — used by the "+ New alarm" wizard (`new_alarm_wizard_cancel`) so exiting
+  any of its screens aborts the whole flow outright, discarding the draft;
+  the alarm is only actually created by completing the last screen (the
+  label) via SELECT. If `on_cancel` is NULL — every per-alarm edit-menu call
+  site (`edit_on_*_confirm`) — cancelling instead reverts to the value the
+  screen was opened with and still calls `on_confirm` with that original
+  value, so editing a single field of an already-existing alarm behaves as
+  a no-op on cancel rather than needing its own special case. The repeat and
+  cron editors follow this same on_cancel-vs-snapshot-revert convention on
+  BACK, just via a `MenuLayer`'s vertical selection instead of a horizontal
+  field cursor (see below).
+- **Repeat editor is an itemized `MenuLayer`**, the same shape as the cron
+  editor: row 0 is "Apply", rows 1-7 are the individual weekdays (full
+  names, e.g. "Monday") starting at the configured first-day-of-week, each
+  an independent checkbox row toggled by SELECT (`repeat_select`,
+  `repeat_draw_row`) — a `"[X] "`/`"[  ] "` marker precedes the day name in
+  one left-aligned string, rather than a separate right-aligned "On"/"Off"
+  value, so the checked state reads at the same glance as the label. There
+  is no separate on/off item — `repeats` isn't set directly here at all,
+  it's derived on Apply from whether any weekday ended up picked (see the
+  `repeats`/`repeat_days` key design point above).
+  UP/DOWN are `single_repeating_click`, so holding them scrolls
+  continuously; long-press SELECT submits outright regardless of cursor
+  position; long-press BACK is an explicit no-op. Because the window (and
+  its `MenuLayer`) is created once and reused across every call site,
+  `repeat_edit_window_push` explicitly resets the selection to row 0
+  ("Apply") on every open — otherwise a prior call's scroll position would
+  leak into the next one, the same fix applied to the cron editor.
 - **Main list SELECT is split short-press/long-press** (`ml_select`/
   `ml_select_long`): short-press toggles enable/disable directly, without
   opening the edit menu — same underlying logic as the edit menu's own State

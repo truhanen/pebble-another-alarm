@@ -1262,179 +1262,72 @@ static void cron_edit_window_push(const char *min_str, const char *hour_str, con
 
 // ============================ repeat / weekday editor ============================
 //
-// A plain custom Layer (not a MenuLayer), like the time/snooze editors — 8
-// boxes in a single horizontal row: box 0 is the "Repeat" master toggle
-// (mirrors the old row 0: turning it on/off sets all 7 days on/off at once),
-// boxes 1-7 are the individual weekdays starting at the configured
-// first-day-of-week. Navigation is horizontal (BACK/SELECT move the cursor
-// left/right across the 8 boxes) instead of the usual vertical MenuLayer
-// scrolling, since these are peers in a row, not a list.
+// An itemized MenuLayer, same shape as the cron editor: row 0 is "Apply",
+// rows 1-7 are the individual weekdays starting at the configured
+// first-day-of-week, each an independent on/off row. There is no separate
+// "Repeat" on/off item any more -- "repeats" isn't something the user sets
+// directly here, it's derived on Apply purely from whether any weekday ended
+// up picked: any day picked -> recurring weekly on those days; no days
+// picked -> a one-time alarm for the next occurrence of the time, with no
+// specific weekday. This deliberately drops the old "pick exactly one day,
+// leave repeat off" one-time-on-a-specific-day state.
+
+#define REPEAT_ROW_SUBMIT  0
+#define REPEAT_ROW_COUNT   8   // Apply + 7 weekdays
 
 static Window *s_repeat_window;
-static Layer *s_repeat_layer;
-static bool s_repeats;                  // true = weekly forever; false = fires once
-static uint8_t s_repeat_days;           // which day(s); a single bit is meaningful even when !s_repeats
-static bool s_repeats_original;         // snapshot at open, restored on cancel
-static uint8_t s_repeat_days_original;
-static int s_repeat_cursor;              // 0 = ON/OFF toggle, 1..7 = weekdays
+static MenuLayer *s_repeat_menu;
+static uint8_t s_repeat_days;             // which day(s) are picked
+static uint8_t s_repeat_days_snapshot;    // value this screen was opened with -- restored on cancel
 static void (*s_repeat_on_confirm)(bool repeats, uint8_t repeat_days, void *ctx);
-static void (*s_repeat_on_cancel)(void *ctx);   // NULL: revert-and-confirm (edit flow); set: true abort (wizard)
+static void (*s_repeat_on_cancel)(void *ctx);   // NULL: revert-and-confirm (edit flow); set: abort (wizard)
 static void *s_repeat_ctx;
 
-// Single-letter weekday abbreviations, indexed by wday (0=Sunday..6=Saturday).
-static const char DAY_LETTER[7] = { 'S', 'M', 'T', 'W', 'T', 'F', 'S' };
+// Full weekday names, indexed by wday (0=Sunday..6=Saturday).
+static const char *DAY_NAME[7] = {
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
 
-// Small downward-pointing chevron ("v") drawn a few px above a selector,
-// centered on `cx` — the cursor-focus marker. Independent of the "on"
-// underscore below the text, so a picked-but-unfocused day and the
-// currently-focused selector never get confused for one another.
-static void repeat_draw_focus_marker(GContext *ctx, int cx, int bottom_y) {
-  const int hw = 6, h = 5;
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_line(ctx, GPoint(cx - hw, bottom_y - h), GPoint(cx, bottom_y));
-  graphics_draw_line(ctx, GPoint(cx, bottom_y), GPoint(cx + hw, bottom_y - h));
-}
+static uint16_t repeat_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return REPEAT_ROW_COUNT; }
+static int16_t repeat_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
 
-// "On" (repeats master / a picked weekday) is shown with a thick underscore
-// under the text rather than a filled box; cursor focus is a chevron marker
-// above the selector — the two are independent, so a picked-but-unfocused
-// day and the currently-focused selector never get confused for one
-// another. No bottom hint text — the whole row centers in the full window
-// height below the header.
-static void repeat_layer_update(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-
-  GFont hf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  graphics_draw_text(ctx, "Repeat", hf, GRect(4, 2, b.size.w - 8, 26),
+static void repeat_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
+  GRect b = layer_get_bounds(cell_layer);
+  if (cell_index->row == REPEAT_ROW_SUBMIT) {
+    graphics_draw_text(ctx, "Apply", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                       GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+    return;
+  }
+  int wday = (s_first_day_of_week + (cell_index->row - 1)) % 7;
+  bool on = (s_repeat_days & AC_DAY_BIT(wday)) != 0;
+  char text[24];
+  snprintf(text, sizeof(text), "[%s] %s", on ? "X" : "  ", DAY_NAME[wday]);
+  graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-
-  GFont uf = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);   // one step up from GOTHIC_24_BOLD
-  bool repeats_on = s_repeats;
-
-  const int row_h = 34;
-  const int header_bottom = 30;
-  // Centered in the FULL window height (not just the space below the
-  // header) so the letters sit at the screen's vertical center, not biased
-  // downward by the header eating into the space the old "center below
-  // header" math divided up.
-  int row_y = (b.size.h - row_h) / 2;
-  if (row_y < header_bottom) { row_y = header_bottom; }
-
-  int margin = 4;
-  int avail_w = b.size.w - margin * 2;
-  // ON/OFF gets 2 column-units' worth of space (enough to fit "OFF" without
-  // ellipsizing), weekdays get 1 unit each -> 9 units total.
-  int col_w = avail_w / 9;
-  int on_w = avail_w - col_w * 7;
-
-  // ---- ON/OFF selector, left-aligned (not centered) ----
-  bool on_focused = (s_repeat_cursor == 0);
-  const char *on_text = repeats_on ? "ON" : "OFF";
-  GRect on_rect = GRect(margin, row_y, on_w - 2, row_h);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, on_text, uf, on_rect, GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-  GSize on_size = graphics_text_layout_get_content_size(on_text, uf, on_rect,
-                                                        GTextOverflowModeFill, GTextAlignmentLeft);
-  if (repeats_on) {
-    graphics_context_set_fill_color(ctx, GColorBlack);
-    graphics_fill_rect(ctx, GRect(margin, row_y + row_h - 4, on_size.w, 4), 0, GCornerNone);
-  }
-  if (on_focused) {
-    repeat_draw_focus_marker(ctx, margin + on_size.w / 2, row_y - 4);
-  }
-
-  // ---- weekday selectors, same line, wider columns ----
-  for (int i = 0; i < 7; i++) {
-    int wday = (s_first_day_of_week + i) % 7;
-    bool on = (s_repeat_days & AC_DAY_BIT(wday)) != 0;
-    bool focused = (s_repeat_cursor == i + 1);
-    char letter[2] = { DAY_LETTER[wday], '\0' };
-    int x = margin + on_w + i * col_w;
-    GRect day_rect = GRect(x, row_y, col_w, row_h);
-
-    // A picked day always reads as black (it's the significant choice, even
-    // for a one-time alarm with repeat off); unpicked days always dim to
-    // gray, regardless of the ON/OFF state.
-    GColor day_color = on ? GColorBlack : GColorDarkGray;
-    graphics_context_set_text_color(ctx, day_color);
-    graphics_draw_text(ctx, letter, uf, day_rect, GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-    GSize ls = graphics_text_layout_get_content_size(letter, uf, day_rect,
-                                                     GTextOverflowModeFill, GTextAlignmentCenter);
-    int lx = x + (col_w - ls.w) / 2;
-    if (on) {
-      graphics_context_set_fill_color(ctx, day_color);
-      graphics_fill_rect(ctx, GRect(lx, row_y + row_h - 4, ls.w, 4), 0, GCornerNone);
-    }
-    if (focused) {
-      repeat_draw_focus_marker(ctx, lx + ls.w / 2, row_y - 4);
-    }
-  }
 }
 
-// Toggles the box at the current cursor (either/both UP and DOWN, since each
-// box is a plain on/off flag — there's no "increase"/"decrease" direction).
-// Turning repeat ON with no day picked yet defaults to every day, since a
-// repeating alarm with no days selected would never fire. Turning it OFF
-// deselects all weekdays outright (so re-enabling always starts from a
-// clean slate rather than silently resuming whatever was picked before).
-// Toggling off the last remaining selected weekday directly, while repeat
-// is ON, turns repeat itself OFF (rather than snapping back to every day) —
-// the ON/OFF switch is the source of truth for "zero days selected", not an
-// invalid state that needs to be silently repaired.
-// While repeat is OFF, weekdays are mutually exclusive (radio-button, not
-// checkbox) — a one-time alarm only ever targets a single day, so picking
-// one clears whatever other day was previously picked.
-static void repeat_toggle_cursor(void) {
-  if (s_repeat_cursor == 0) {
-    s_repeats = !s_repeats;
-    if (s_repeats) {
-      if (s_repeat_days == 0) { s_repeat_days = AC_DAY_ALL; }
-    } else {
-      s_repeat_days = 0;
-    }
-  } else {
-    int wday = (s_first_day_of_week + (s_repeat_cursor - 1)) % 7;
-    if (s_repeats) {
-      s_repeat_days ^= AC_DAY_BIT(wday);
-      if (s_repeat_days == 0) { s_repeats = false; }
-    } else {
-      bool was_on = (s_repeat_days & AC_DAY_BIT(wday)) != 0;
-      s_repeat_days = was_on ? 0 : AC_DAY_BIT(wday);
-    }
-  }
-  layer_mark_dirty(s_repeat_layer);
-}
-static void repeat_up(ClickRecognizerRef r, void *ctx) { repeat_toggle_cursor(); }
-static void repeat_down(ClickRecognizerRef r, void *ctx) { repeat_toggle_cursor(); }
+// repeats is derived, never stored independently of repeat_days.
 static void repeat_confirm_and_pop(void) {
-  bool repeats = s_repeats;
   uint8_t days = s_repeat_days;
+  bool repeats = (days != 0);
   void *c = s_repeat_ctx;
   void (*cb)(bool, uint8_t, void *) = s_repeat_on_confirm;
   window_stack_pop(true);
   if (cb) { cb(repeats, days, c); }
 }
-// SELECT moves the cursor right, confirming (submitting) once it's already on
-// the rightmost box (Saturday) — same "advance / confirm on the last one"
-// pattern as the time and snooze editors. This applies uniformly whether
-// repeat is on or off: even a one-time alarm can target a specific weekday,
-// so the weekday boxes always need to stay reachable.
-static void repeat_select(ClickRecognizerRef r, void *ctx) {
-  if (s_repeat_cursor < 7) { s_repeat_cursor++; layer_mark_dirty(s_repeat_layer); return; }
-  repeat_confirm_and_pop();
+static void repeat_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
+  if (cell_index->row == REPEAT_ROW_SUBMIT) { repeat_confirm_and_pop(); return; }
+  int wday = (s_first_day_of_week + (cell_index->row - 1)) % 7;
+  s_repeat_days ^= AC_DAY_BIT(wday);
+  if (s_repeat_menu) { menu_layer_reload_data(s_repeat_menu); }
 }
-// BACK moves the cursor left; pressing it on the leftmost box (ON/OFF)
-// cancels. If the caller supplied an on_cancel (the "+ New alarm" wizard —
-// see start_new_alarm_flow), that aborts the whole flow outright. Otherwise
-// (the per-alarm edit menu, editing one field of an already-existing alarm)
-// it reverts to the value this screen was opened with and still calls
-// on_confirm, so that caller doesn't need to special-case "cancel" at all.
+// BACK follows the same on_cancel-vs-snapshot-revert convention as every
+// other editor in this file: on_cancel != NULL means "abort the whole flow"
+// (the "+ New alarm" wizard); NULL means "revert to the snapshot this screen
+// was opened with, then still call on_confirm with that unchanged snapshot".
 static void repeat_back(ClickRecognizerRef r, void *ctx) {
-  if (s_repeat_cursor > 0) { s_repeat_cursor--; layer_mark_dirty(s_repeat_layer); return; }
   if (s_repeat_on_cancel) {
     void *c = s_repeat_ctx;
     void (*cb)(void *) = s_repeat_on_cancel;
@@ -1442,55 +1335,87 @@ static void repeat_back(ClickRecognizerRef r, void *ctx) {
     cb(c);
     return;
   }
-  bool repeats = s_repeats_original;
-  uint8_t days = s_repeat_days_original;
+  uint8_t days = s_repeat_days_snapshot;
+  bool repeats = (days != 0);
   void *c = s_repeat_ctx;
   void (*cb)(bool, uint8_t, void *) = s_repeat_on_confirm;
   window_stack_pop(true);
   if (cb) { cb(repeats, days, c); }
 }
-// Long-pressing SELECT submits the current selections outright, regardless
-// of which box the cursor is on — a shortcut for "confirm now" rather than
-// walking the cursor to the rightmost box first. Long-pressing BACK is
-// explicitly a no-op (not "jump to the first box" or "cancel") — only the
-// short-press semantics on BACK matter here.
-static void repeat_select_long(ClickRecognizerRef r, void *ctx) {
-  repeat_confirm_and_pop();
-}
+// Long-press SELECT submits outright regardless of cursor position;
+// long-press BACK is an explicit no-op (matches the cron editor's convention).
+static void repeat_select_long(ClickRecognizerRef r, void *ctx) { repeat_confirm_and_pop(); }
 static void repeat_back_long(ClickRecognizerRef r, void *ctx) {}
+static void repeat_select_click(ClickRecognizerRef r, void *ctx) {
+  MenuIndex idx = menu_layer_get_selected_index(s_repeat_menu);
+  repeat_select(s_repeat_menu, &idx, ctx);
+}
+// single_repeating_click (not a plain single_click) so holding UP/DOWN
+// scrolls the menu continuously instead of moving one row per press.
+static void repeat_up_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_repeat_menu, true, MenuRowAlignCenter, true);
+}
+static void repeat_down_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_repeat_menu, false, MenuRowAlignCenter, true);
+}
 static void repeat_click_config(void *ctx) {
-  window_single_repeating_click_subscribe(BUTTON_ID_UP, 70, repeat_up);
-  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 70, repeat_down);
-  window_single_click_subscribe(BUTTON_ID_SELECT, repeat_select);
+  window_single_click_subscribe(BUTTON_ID_SELECT, repeat_select_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, repeat_up_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, repeat_down_click);
   window_single_click_subscribe(BUTTON_ID_BACK, repeat_back);
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, repeat_select_long, NULL);
   window_long_click_subscribe(BUTTON_ID_BACK, 500, repeat_back_long, NULL);
 }
+// Left-aligned title, same style as the cron editor's "Cron" header.
+static Layer *s_repeat_header;
+#define REPEAT_HEADER_H 30
+static void repeat_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Repeat", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
 static void repeat_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_repeat_layer = layer_create(layer_get_bounds(root));
-  layer_set_update_proc(s_repeat_layer, repeat_layer_update);
-  layer_add_child(root, s_repeat_layer);
+  GRect bounds = layer_get_bounds(root);
+  s_repeat_header = layer_create(GRect(0, 0, bounds.size.w, REPEAT_HEADER_H));
+  layer_set_update_proc(s_repeat_header, repeat_header_update_proc);
+  layer_add_child(root, s_repeat_header);
+  GRect menu_bounds = GRect(0, REPEAT_HEADER_H, bounds.size.w, bounds.size.h - REPEAT_HEADER_H);
+  s_repeat_menu = menu_layer_create(menu_bounds);
+  menu_layer_set_callbacks(s_repeat_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = repeat_num_rows, .get_cell_height = repeat_cell_height,
+    .draw_row = repeat_draw_row, .select_click = repeat_select });
+  menu_layer_set_normal_colors(s_repeat_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_repeat_menu, GColorBlack, GColorWhite);
+  layer_add_child(root, menu_layer_get_layer(s_repeat_menu));
+  window_set_click_config_provider(w, repeat_click_config);
 }
 static void repeat_window_unload(Window *w) {
-  layer_destroy(s_repeat_layer); s_repeat_layer = NULL;
+  menu_layer_destroy(s_repeat_menu); s_repeat_menu = NULL;
+  layer_destroy(s_repeat_header); s_repeat_header = NULL;
 }
-static void repeat_edit_window_push(bool repeats, uint8_t repeat_days,
+static void repeat_edit_window_push(uint8_t repeat_days,
     void (*on_confirm)(bool repeats, uint8_t repeat_days, void *ctx),
     void (*on_cancel)(void *ctx), void *ctx) {
-  s_repeats = repeats;
-  s_repeats_original = repeats;
   s_repeat_days = repeat_days;
-  s_repeat_days_original = repeat_days;
-  s_repeat_cursor = 0;
+  s_repeat_days_snapshot = repeat_days;
   s_repeat_on_confirm = on_confirm; s_repeat_on_cancel = on_cancel; s_repeat_ctx = ctx;
   if (!s_repeat_window) {
     s_repeat_window = window_create();
     window_set_window_handlers(s_repeat_window, (WindowHandlers){
       .load = repeat_window_load, .unload = repeat_window_unload });
-    window_set_click_config_provider(s_repeat_window, repeat_click_config);
   }
   window_stack_push(s_repeat_window, true);
+  // The window (and its MenuLayer) is cached and reused across every call
+  // site, so a prior open's scroll position would otherwise leak into this
+  // one -- always land back on "Apply" (row 0) when (re)opening.
+  if (s_repeat_menu) {
+    menu_layer_set_selected_index(s_repeat_menu, (MenuIndex){ 0, REPEAT_ROW_SUBMIT }, MenuRowAlignTop, false);
+  }
 }
 
 // ============================ snooze (duration + max) editor ============================
@@ -1921,7 +1846,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       time_edit_window_push(a->hour, a->minute, edit_on_time_confirm, NULL, edit_on_time_chord, NULL);
       break;
     case EDIT_ROW_REPEAT:
-      repeat_edit_window_push(a->repeats, a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
+      repeat_edit_window_push(a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
       break;
     case EDIT_ROW_CRON:
       cron_edit_window_push(a->cron_min, a->cron_hour, a->cron_dow, edit_on_cron_confirm, NULL, NULL);
@@ -2025,7 +1950,7 @@ static void new_alarm_repeat_confirm(bool repeats, uint8_t repeat_days, void *ct
 static void new_alarm_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
   s_draft.hour = hour;
   s_draft.minute = minute;
-  repeat_edit_window_push(s_draft.repeats, s_draft.repeat_days, new_alarm_repeat_confirm,
+  repeat_edit_window_push(s_draft.repeat_days, new_alarm_repeat_confirm,
                           new_alarm_wizard_cancel, NULL);
 }
 
