@@ -1090,6 +1090,104 @@ static void time_edit_window_push(uint8_t hour, uint8_t minute,
   window_stack_push(s_time_window, true);
 }
 
+// ============================ cron syntax help ============================
+//
+// A plain scrollable text screen (ScrollLayer + TextLayer, no MenuLayer)
+// explaining the cron field syntax, reached from the cron editor's own
+// "Help" row. BACK is left unbound -- unlike the ring screen, the default
+// "pop the window" behavior is exactly what's wanted here, so there's no
+// custom click config beyond what scroll_layer_set_click_config_onto_window
+// already wires up (UP/DOWN scroll).
+
+static Window *s_cron_help_window;
+static ScrollLayer *s_cron_help_scroll;
+static TextLayer *s_cron_help_text;
+static Layer *s_cron_help_header;
+
+#define CRON_HELP_HEADER_H 30
+
+// Same GOTHIC_24 (not bold) used by the time editor's own cron-mode hint --
+// see the "secret long-press-SELECT" comment below.
+static const char *const CRON_HELP_TEXT =
+  "Alarm fires every minute\n"
+  "that matches the configured\n"
+  "pattern.\n"
+  "\n"
+  "Example patterns:\n"
+  "\n"
+  "Wildcard:\n"
+  "\"*\" in weekday\n"
+  "fires every weekday\n"
+  "\n"
+  "Range:\n"
+  "\"8-16\" in hour\n"
+  "fires between 8-16 o'clock\n"
+  "\n"
+  "List:\n"
+  "\"8,16\" in hour\n"
+  "fires when hour is 8 or 16\n"
+  "\n"
+  "Wildcard & step:\n"
+  "\"*/20\" in minute\n"
+  "fires every 20 minutes\n"
+  "\n"
+  "Range & step:\n"
+  "\"8-16/2\" in hour\n"
+  "fires between 8-16 o'clock\n"
+  "when hour is 8, 10, 12, etc.";
+
+static void cron_help_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Cron help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+static void cron_help_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect bounds = layer_get_bounds(root);
+
+  s_cron_help_header = layer_create(GRect(0, 0, bounds.size.w, CRON_HELP_HEADER_H));
+  layer_set_update_proc(s_cron_help_header, cron_help_header_update_proc);
+  layer_add_child(root, s_cron_help_header);
+
+  GRect scroll_bounds = GRect(0, CRON_HELP_HEADER_H, bounds.size.w, bounds.size.h - CRON_HELP_HEADER_H);
+  s_cron_help_scroll = scroll_layer_create(scroll_bounds);
+  scroll_layer_set_click_config_onto_window(s_cron_help_scroll, w);
+
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  int text_w = scroll_bounds.size.w - 8;
+  GSize sz = graphics_text_layout_get_content_size(
+      CRON_HELP_TEXT, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+
+  s_cron_help_text = text_layer_create(GRect(4, 4, text_w, sz.h + 8));
+  text_layer_set_font(s_cron_help_text, f);
+  text_layer_set_overflow_mode(s_cron_help_text, GTextOverflowModeWordWrap);
+  text_layer_set_text(s_cron_help_text, CRON_HELP_TEXT);
+  scroll_layer_add_child(s_cron_help_scroll, text_layer_get_layer(s_cron_help_text));
+  scroll_layer_set_content_size(s_cron_help_scroll, GSize(scroll_bounds.size.w, sz.h + 16));
+
+  layer_add_child(root, scroll_layer_get_layer(s_cron_help_scroll));
+}
+
+static void cron_help_window_unload(Window *w) {
+  scroll_layer_destroy(s_cron_help_scroll); s_cron_help_scroll = NULL;
+  text_layer_destroy(s_cron_help_text); s_cron_help_text = NULL;
+  layer_destroy(s_cron_help_header); s_cron_help_header = NULL;
+}
+
+static void cron_help_window_push(void) {
+  if (!s_cron_help_window) {
+    s_cron_help_window = window_create();
+    window_set_window_handlers(s_cron_help_window, (WindowHandlers){
+      .load = cron_help_window_load, .unload = cron_help_window_unload });
+  }
+  window_stack_push(s_cron_help_window, true);
+}
+
 // ============================ cron field editor ============================
 //
 // One MenuLayer-based window, reused verbatim across every call site that
@@ -1102,7 +1200,8 @@ static void time_edit_window_push(uint8_t hour, uint8_t minute,
 #define CRON_ROW_MINUTE  1
 #define CRON_ROW_HOUR    2
 #define CRON_ROW_DOW     3
-#define CRON_ROW_COUNT   4
+#define CRON_ROW_HELP    4
+#define CRON_ROW_COUNT   5
 
 static Window *s_cron_window;
 static MenuLayer *s_cron_menu;
@@ -1143,6 +1242,11 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       key = "Weekday";
       snprintf(value, sizeof(value), "%s%s", s_cron_dow, cron_field_valid(s_cron_dow, 0, 6) ? "" : " (invalid)");
       break;
+    case CRON_ROW_HELP:
+      graphics_draw_text(ctx, "Help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                         GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                         GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+      return;
   }
   graphics_draw_text(ctx, key, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
@@ -1187,6 +1291,9 @@ static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       break;
     case CRON_ROW_DOW:
       multitap_keyboard_window_push_numeric(cron_field_done, s_cron_dow, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_DOW);
+      break;
+    case CRON_ROW_HELP:
+      cron_help_window_push();
       break;
   }
 }
