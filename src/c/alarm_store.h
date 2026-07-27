@@ -18,20 +18,30 @@
 #define STORE_SCHEMA 7   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
                           // then vibe_pattern (per-alarm vibration pattern override).
+                          //
                           // Every field added to Alarm so far (including vibe_pattern) was
-                          // appended at the very end of the struct, on purpose -- this is
-                          // what would let a future forward-compatible loader read an
-                          // older, shorter blob's bytes into the front of a same-or-larger
-                          // buffer and get correct values for every field that existed back
-                          // then, with only the new trailing fields needing their own
-                          // defaults filled in. Nothing here currently *implements* that
-                          // yet, though (a stored-schema mismatch still wipes everything,
-                          // see store_load() below) -- a real migration would compare the
-                          // stored schema against a per-version "known size" table and, for
-                          // a purely-additive bump, read the old (shorter) byte count into a
-                          // zeroed current-sized Alarm rather than wiping. TODO.md has the
-                          // fuller writeup; this ordering discipline is the precondition for
-                          // it working at all.
+                          // appended at the very end of the struct, on purpose: it's what
+                          // lets store_load()'s forward-compatible migration (see
+                          // alarm_size_for_schema() in alarm_store.c) read an older, shorter
+                          // blob's bytes into the front of a same-or-larger buffer and get
+                          // correct values for every field that existed back then, with only
+                          // the new trailing fields left at 0.
+                          //
+                          // Ground rules for the NEXT bump, to keep that working:
+                          //  1. Add the new field(s) at the very end of the struct. Never
+                          //     insert, reorder, resize, or remove an existing field -- any
+                          //     of those is a hard break (see #3).
+                          //  2. Before editing the struct, capture its current size (a
+                          //     throwaway `printf("%zu", sizeof(Alarm))` build is enough) and
+                          //     add it as a new `case <old schema>: return <that size>;` in
+                          //     alarm_size_for_schema() -- a frozen literal, NOT `sizeof
+                          //     (Alarm)` itself, which would silently track the wrong (new)
+                          //     struct once you've made the edit.
+                          //  3. If the change genuinely can't be additive (a field removed,
+                          //     reordered, or resized), just bump STORE_SCHEMA and don't add a
+                          //     case for the old version -- alarm_size_for_schema()'s default
+                          //     case wipes, exactly like every bump before this migration
+                          //     existed. Say so in this comment when it happens.
 
 // Loads alarms into out (capacity MAX_ALARMS); returns count, or 0 if none/old schema.
 int store_load(Alarm *out);
@@ -80,8 +90,3 @@ bool store_load_default_vibration_enabled(void);
 void store_save_default_vibration_enabled(bool enabled);
 bool store_load_default_sound_enabled(void);
 void store_save_default_sound_enabled(bool enabled);
-
-// Whether newly created alarms snooze by default (phone-configured; defaults
-// to true/enabled when unset — does not affect existing alarms).
-bool store_load_default_snooze_enabled(void);
-void store_save_default_snooze_enabled(bool enabled);

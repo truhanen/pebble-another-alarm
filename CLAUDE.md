@@ -323,10 +323,37 @@ in this app at all, so every message key is now just an ordinary scalar at
   SELECT (`EDIT_ROW_VIBE_PATTERN`), the same short-press-cycles convention
   as the main list's enable/disable/skip state — there's no 3-way picker
   widget in this app, so cycling was the natural fit rather than building
-  one. Adding this field bumped `STORE_SCHEMA` (`alarm_store.h`) to 7, which
-  wipes all existing on-watch alarms on the first launch after upgrading —
-  same as every prior struct change (`is_cron`'s fields, then `auto_stop`);
-  there's no field-by-field persisted migration in this codebase.
+  one. Adding this field bumped `STORE_SCHEMA` (`alarm_store.h`) to 7 — the
+  baseline version the forward-compatible migration below ships in, so this
+  particular bump was the last one to unconditionally wipe existing alarms;
+  see the `store_load()` design point below for what happens on the *next*
+  bump.
+- **A `STORE_SCHEMA` bump doesn't have to wipe every alarm, for a pure
+  field-append**: `store_load()` (`alarm_store.c`) relies on
+  `persist_read_data`'s own documented behavior — it copies
+  `min(buffer_size, actual_stored_size)` bytes and leaves the rest of the
+  buffer untouched — so reading an older, shorter `Alarm` blob into a
+  `memset`-zeroed current-sized buffer already reproduces every field that
+  existed at write time correctly, leaving only new trailing field(s) at 0.
+  `alarm_size_for_schema()` is the gate: it maps a stored schema version to
+  its historical `sizeof(Alarm)` as a **frozen literal** (never `sizeof
+  (Alarm)` itself, which tracks the current struct and would be wrong for
+  a past version once the struct grows again); a version with no case there
+  (its `default: return 0`) either predates this migration or was a
+  declared hard break, and `store_load()` wipes for both of those, plus for
+  a newer-than-us stored schema (a downgrade) — exactly like every schema
+  mismatch did before this migration existed. On a successful migration,
+  `store_load()` immediately writes the current `STORE_SCHEMA` back via
+  `persist_write_int` so a later load doesn't re-check, even though the
+  per-alarm blobs themselves stay physically old-sized on disk until the
+  next real `store_save()` (any ordinary mutation triggers one via
+  `persist_all()`). This only works because every field added to `Alarm`
+  so far was appended at the very end (see the ground rules in
+  `STORE_SCHEMA`'s own comment, `alarm_store.h`) — verified manually once,
+  by temporarily growing `Alarm` by a field and bumping `STORE_SCHEMA` in a
+  throwaway build installed over an emulator instance with existing schema-7
+  data, confirming the alarm survived instead of being wiped (see
+  `TODO.md`).
 - **`auto_stop` alarms still show the ring screen, but only briefly**:
   `trigger_alarm()` branches on `a->auto_stop` — an auto-stop alarm fires
   vibration/sound (via its own existing `vibration_enabled`/`sound_enabled`
