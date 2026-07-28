@@ -5,7 +5,8 @@
   "keywords": [
     "alarm",
     "cron",
-    "repeat"
+    "repeat",
+    "pomodoro"
   ],
   "private": true,
   "dependencies": {
