@@ -124,21 +124,23 @@ than trusting a mental model of the numbering.
 | `TestAlarmRepeats` | 10011 | int 0/1 | |
 | `TestAlarmRepeatDays` | 10012 | int 0-127 | `AC_DAY_*` bitmask. |
 | `TestAlarmEnabled` | 10013 | int 0/1 | |
-| `TestAlarmSnoozeMinutes` | 10014 | int | |
-| `TestAlarmSnoozeMax` | 10015 | int | 0 = unlimited. |
-| `TestAlarmVibrationEnabled` | 10016 | int 0/1 | |
-| `TestAlarmSoundEnabled` | 10017 | int 0/1 | |
-| `TestAlarmName` | 10018 | string | |
-| `TestAlarmSnoozeInSec` | 10019 | int | Seconds from *now* until the snooze deadline — an offset, not an absolute epoch, so a test harness doesn't need to know the device's clock. 0 clears/means not snoozed. |
-| `TestAlarmLastFiredToday` | 10020 | int 0/1 | Stamps the opaque `last_fired_day` with today's day id (simulates "this alarm's regular occurrence already fired today") or clears it to "never" — a state otherwise only reachable by waiting for real time to cross the alarm's hour:minute. |
-| `TestAlarmPending` | 10021 | int 0/1 | Forces `alarm_pending`, jumping straight to "ring screen should show" without waiting for a real due transition. |
-| `TestAlarmIsCron` | 10022 | int 0/1 | Switches the alarm to cron mode (see "Cron-syntax alarms" below). |
-| `TestAlarmCronMinute` | 10023 | string | Raw cron minute field (e.g. `"*/20"`), parsed into `cron_min_mask`. Logs a warning (field left as previously set) if unparseable. |
-| `TestAlarmCronHour` | 10024 | string | Raw cron hour field, parsed into `cron_hour_mask`. |
-| `TestAlarmCronDow` | 10025 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
-| `TestAlarmCronFiredNow` | 10026 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
-| `TestAlarmAutoStop` | 10027 | int 0/1 | Sets `auto_stop` (see "Key design points" below). |
-| `TestAlarmVibePattern` | 10028 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
+| `TestAlarmSkipNext` | 10015 | int 0/1 | Sets `skip_next` directly. Reused for cron alarms too (see "Cron-syntax alarms" below) — no separate cron-specific key. |
+| `TestAlarmSnoozeMinutes` | 10016 | int | |
+| `TestAlarmSnoozeMax` | 10017 | int | 0 = unlimited. |
+| `TestAlarmVibrationEnabled` | 10018 | int 0/1 | |
+| `TestAlarmSoundEnabled` | 10019 | int 0/1 | |
+| `TestAlarmName` | 10020 | string | |
+| `TestAlarmSnoozeInSec` | 10021 | int | Seconds from *now* until the snooze deadline — an offset, not an absolute epoch, so a test harness doesn't need to know the device's clock. 0 clears/means not snoozed. |
+| `TestAlarmLastFiredToday` | 10022 | int 0/1 | Stamps the opaque `last_fired_day` with today's day id (simulates "this alarm's regular occurrence already fired today") or clears it to "never" — a state otherwise only reachable by waiting for real time to cross the alarm's hour:minute. |
+| `TestAlarmPending` | 10023 | int 0/1 | Forces `alarm_pending`, jumping straight to "ring screen should show" without waiting for a real due transition. |
+| `TestAlarmIsCron` | 10024 | int 0/1 | Switches the alarm to cron mode (see "Cron-syntax alarms" below). |
+| `TestAlarmCronMinute` | 10025 | string | Raw cron minute field (e.g. `"*/20"`), parsed into `cron_min_mask`. Logs a warning (field left as previously set) if unparseable. |
+| `TestAlarmCronHour` | 10026 | string | Raw cron hour field, parsed into `cron_hour_mask`. |
+| `TestAlarmCronDow` | 10027 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
+| `TestAlarmCronFiredNow` | 10028 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
+| `TestAlarmAutoStop` | 10029 | int 0/1 | Sets `auto_stop` (see "Key design points" below). |
+| `TestAlarmVibePattern` | 10030 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
+| `TestAlarmIncreasingVolume` | 10031 | int 0/1 | Sets `increasing_volume` directly (see "Key design points" below). |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -611,13 +613,42 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   "fix" (see the comment at `sweep_due_alarms()`'s cron branch, `main.c`).
 - **Day-of-week reuses `repeat_days`/`AC_DAY_BIT`** — no separate field:
   when `is_cron`, `repeat_days` holds the parsed cron dow mask instead of
-  the legacy weekly-repeat days, and `repeats`/`skip_next` are unused
-  (forced false/ignored). Every legacy code path touching those fields must
-  branch on `is_cron` — missing a guard silently corrupts a cron alarm's
-  display or scheduling. The one non-obvious spot: the edit menu's
-  ENABLE-row re-enable handler used to call
+  the legacy weekly-repeat days, and `repeats` is unused (forced
+  false/ignored). Every legacy code path touching that field must branch on
+  `is_cron` — missing a guard silently corrupts a cron alarm's display or
+  scheduling. The one non-obvious spot: both the edit menu's ENABLE-row
+  re-enable handler (`edit_select`'s `EDIT_ROW_ENABLE` case) and the main
+  list's short-press state cycle (`ml_cycle_alarm_state`) used to call
   `resync_last_fired_for_schedule_change()` (which reads `repeat_days` under
-  legacy semantics) unconditionally — it now branches on `is_cron` first.
+  legacy semantics) unconditionally on re-enable — both now branch on
+  `is_cron` first (`a->cron_last_fired_min = -1` instead). The main-list
+  cycle's version of this was a real latent bug (not just theoretical): any
+  cron alarm re-enabled from the main list would silently take the wrong
+  path, until `skip_next` support (below) moved cron alarms into the same
+  three-state cycle branches as repeating legacy alarms and this got fixed
+  alongside it.
+- **`skip_next` is reused (not repurposed) for cron alarms**, unlike
+  `repeat_days`: same "skip just the next occurrence" meaning as legacy,
+  just applied to cron's minute-granularity schedule instead of a whole day.
+  `ac_cron_next_offset_days()` (`alarm_calc.c`) takes a `skip_next` param and
+  reports the SECOND matching (day-offset, hour, minute) instead of the
+  first when set — mirroring `ac_next_offset_days`'s own skip handling,
+  factored through a shared `ac_cron_first_match_after()` scan helper since
+  cron's match search is 3-dimensional (day/hour/minute) rather than a
+  single day loop. `ac_cron_is_due()` itself stays skip-unaware, exactly
+  like legacy's `ac_is_due()` — the skip is enforced entirely by
+  `rearm_wakeup()` (via `compute_next_fire_time()`) never scheduling a
+  wakeup for the skipped minute in the first place, which is sufficient
+  because `sweep_due_alarms()` is ONLY ever invoked from `init()` or a real
+  `WakeupEvent` (`handle_wakeup_event`) — there's no periodic re-check that
+  could otherwise re-evaluate a due cron minute independent of wakeup
+  timing. `sweep_due_alarms()`'s cron branch clears `skip_next` once the
+  resumed (non-skipped) occurrence actually rings, mirroring
+  `ac_mark_fired()`'s legacy skip_next consumption. Surfaced identically to
+  legacy in every UI spot that previously gated on `a->repeats`: the main
+  list's skip icon/tint, the edit menu's "Skip next" state text, the edit
+  menu's Disable/"Skip next occurrence" confirm prompt, and the main list's
+  short-press three-state cycle all now check `a->repeats || a->is_cron`.
 - **No eager-fire guard needed on create/edit**, unlike legacy's
   `resync_last_fired_for_schedule_change`: for cron, "the pattern currently
   matches right now" **is** the real, immediate next occurrence, so every

@@ -188,17 +188,22 @@ bool ac_cron_parse_field(const char *text, int min_val, int max_val, uint64_t *o
   return true;
 }
 
-int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask,
-                              int now_wday, int now_hour, int now_min,
-                              int *out_hour, int *out_minute) {
+// Shared scan behind ac_cron_next_offset_days: first match STRICTLY after
+// (from_wday, from_hour, from_min). Factored out so the public function can
+// call it twice (once for the first match, once more from just after it) to
+// implement skip_next, without duplicating the triple-nested day/hour/minute
+// scan.
+static int ac_cron_first_match_after(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask,
+                                      int from_wday, int from_hour, int from_min,
+                                      int *out_hour, int *out_minute) {
   if (min_mask == 0 || hour_mask == 0 || dow_mask == 0) { return -1; }
   for (int off = 0; off <= 7; off++) {
-    int wday = (now_wday + off) % 7;
+    int wday = (from_wday + off) % 7;
     if (!(dow_mask & AC_DAY_BIT(wday))) { continue; }
-    int start_hour = (off == 0) ? now_hour : 0;
+    int start_hour = (off == 0) ? from_hour : 0;
     for (int hour = start_hour; hour <= 23; hour++) {
       if (!(hour_mask & (1u << hour))) { continue; }
-      int start_min = (off == 0 && hour == now_hour) ? now_min + 1 : 0;
+      int start_min = (off == 0 && hour == from_hour) ? from_min + 1 : 0;
       for (int minute = start_min; minute <= 59; minute++) {
         if (min_mask & (1ULL << minute)) {
           if (out_hour) { *out_hour = hour; }
@@ -209,6 +214,33 @@ int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_
     }
   }
   return -1;
+}
+
+int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask, bool skip_next,
+                              int now_wday, int now_hour, int now_min,
+                              int *out_hour, int *out_minute) {
+  int hour1, min1;
+  int off1 = ac_cron_first_match_after(min_mask, hour_mask, dow_mask, now_wday, now_hour, now_min, &hour1, &min1);
+  if (off1 < 0 || !skip_next) {
+    if (off1 >= 0) {
+      if (out_hour) { *out_hour = hour1; }
+      if (out_minute) { *out_minute = min1; }
+    }
+    return off1;
+  }
+  // skip_next: the match at off1/hour1/min1 is skipped; find the next one
+  // strictly after IT.
+  int from_wday2 = (now_wday + off1) % 7;
+  int off2 = ac_cron_first_match_after(min_mask, hour_mask, dow_mask, from_wday2, hour1, min1, out_hour, out_minute);
+  if (off2 < 0) {
+    // Unreachable given validated non-zero masks (same guarantee as
+    // ac_next_offset_days's own "unreachable" fallback) -- defensively fall
+    // back to the skipped match itself rather than reporting "never".
+    if (out_hour) { *out_hour = hour1; }
+    if (out_minute) { *out_minute = min1; }
+    return off1;
+  }
+  return off1 + off2;
 }
 
 bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask, bool enabled,

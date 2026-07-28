@@ -230,7 +230,7 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   const Alarm *a = &s_alarms[idx];
   GRect b = layer_get_bounds(cell_layer);
 
-  bool skip_pending = a->enabled && a->repeats && a->skip_next;
+  bool skip_pending = a->enabled && (a->repeats || a->is_cron) && a->skip_next;
   GColor bg, fg;
   ml_row_colors(a->enabled, a->snooze_until > 0, skip_pending, selected, &bg, &fg);
   graphics_context_set_fill_color(ctx, bg);
@@ -302,16 +302,17 @@ static void ml_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_
 // intervening confirm prompt — same underlying fields as the edit menu's
 // State row (edit_select's EDIT_ROW_ENABLE case), just reachable in one
 // press from the main list instead of opening the edit menu and confirming
-// a choice there. For a repeating alarm the cycle is three states, always
-// advancing the same direction regardless of how it got there: enabled
-// (normal) -> disabled -> enabled-but-skip-next-occurrence -> back to
-// enabled (normal). A non-repeating alarm has no skip state (skip_next is
-// meaningless for a one-time alarm — it just auto-disables once it fires),
-// so it's a plain two-state enabled/disabled toggle.
+// a choice there. For a repeating OR cron alarm the cycle is three states,
+// always advancing the same direction regardless of how it got there:
+// enabled (normal) -> disabled -> enabled-but-skip-next-occurrence -> back
+// to enabled (normal). A plain non-repeating, non-cron alarm has no skip
+// state (skip_next is meaningless for a one-time alarm — it just
+// auto-disables once it fires), so it's a plain two-state enabled/disabled
+// toggle.
 static void ml_cycle_alarm_state(int idx) {
   if (idx < 0 || idx >= s_count) { return; }
   Alarm *a = &s_alarms[idx];
-  if (!a->repeats) {
+  if (!a->repeats && !a->is_cron) {
     bool was_enabled = a->enabled;
     a->enabled = !a->enabled;
     a->skip_next = false;
@@ -321,7 +322,13 @@ static void ml_cycle_alarm_state(int idx) {
   } else if (!a->enabled) {
     a->enabled = true;
     a->skip_next = true;
-    resync_last_fired_for_schedule_change(a);
+    // resync_last_fired_for_schedule_change reads repeat_days under LEGACY
+    // (weekly-repeat weekday) semantics -- a cron alarm repurposes
+    // repeat_days as its day-of-week mask, so it must take the "no
+    // eager-fire guard needed" cron path instead, same split as
+    // edit_select's EDIT_ROW_ENABLE re-enable handler.
+    if (a->is_cron) { a->cron_last_fired_min = -1; }
+    else { resync_last_fired_for_schedule_change(a); }
   } else {
     a->skip_next = false;
   }
@@ -414,7 +421,7 @@ static bool compute_next_fire_time(int64_t *out_time, int *out_idx) {
     const Alarm *a = &s_alarms[i];
     if (!a->is_cron || !a->enabled || a->snooze_until > 0) { continue; }
     int oh, om;
-    int off = ac_cron_next_offset_days(a->cron_min_mask, a->cron_hour_mask, a->repeat_days,
+    int off = ac_cron_next_offset_days(a->cron_min_mask, a->cron_hour_mask, a->repeat_days, a->skip_next,
                                         wday, hour, min, &oh, &om);
     if (off < 0) { continue; }
     time_t candidate = occurrence_to_epoch_hm(off, oh, om);
@@ -492,6 +499,14 @@ static bool sweep_due_alarms(void) {
       // snoozed — intended cron behavior, not a bug.
       a->cron_last_fired_min = epoch_min;
       a->snooze_count = 0;
+      // This is the resumed (non-skipped) occurrence actually ringing --
+      // rearm_wakeup()'s cron scan (compute_next_fire_time) already skipped
+      // scheduling a wakeup for whatever match skip_next was covering, so by
+      // the time sweep ever sees a cron alarm as due again, any pending skip
+      // has already served its purpose. Clear it here, mirroring
+      // ac_mark_fired()'s legacy skip_next consumption on its own resumed
+      // occurrence.
+      if (a->skip_next) { a->skip_next = false; }
       a->alarm_pending = true;
       any = true;
       continue;
@@ -1842,7 +1857,7 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       break;
     case EDIT_ROW_ENABLE:
       key = "State";
-      if (a->enabled && a->repeats && a->skip_next) {
+      if (a->enabled && (a->repeats || a->is_cron) && a->skip_next) {
         snprintf(value, sizeof(value), "%s", "Skip next");
       } else {
         snprintf(value, sizeof(value), "%s", a->enabled ? "Enabled" : "Disabled");
@@ -2041,7 +2056,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       multitap_keyboard_window_push_ex(edit_on_label_done, a->name, NAME_LEN, NULL);
       break;
     case EDIT_ROW_ENABLE:
-      if (a->repeats && a->enabled) {
+      if ((a->repeats || a->is_cron) && a->enabled) {
         const char *label1 = a->skip_next ? "Enable next occurrence" : "Skip next occurrence";
         confirm_window_push("Disable", label1, edit_on_enable_choice, NULL);
       } else {
@@ -2470,6 +2485,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmRepeats))) { a->repeats = t->value->int32 != 0; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmRepeatDays))) { a->repeat_days = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmEnabled))) { a->enabled = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSkipNext))) { a->skip_next = t->value->int32 != 0; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSnoozeMinutes))) { a->snooze_minutes = (uint16_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSnoozeMax))) { a->snooze_max = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibrationEnabled))) { a->vibration_enabled = t->value->int32 != 0; changed = true; }

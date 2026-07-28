@@ -38,6 +38,7 @@
       "TestAlarmRepeats",
       "TestAlarmRepeatDays",
       "TestAlarmEnabled",
+      "TestAlarmSkipNext",
       "TestAlarmSnoozeMinutes",
       "TestAlarmSnoozeMax",
       "TestAlarmVibrationEnabled",

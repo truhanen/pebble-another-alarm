@@ -301,7 +301,7 @@ static void test_cron_next_offset_days_matches_now_reports_next_future(void) {
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
   // Every minute matches; "now" itself doesn't count -- next hit is the very next minute.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 30, &oh, &om);
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 10, 30, &oh, &om);
   assert(off == 0 && oh == 10 && om == 31);
 }
 
@@ -310,9 +310,9 @@ static void test_cron_next_offset_days_later_same_day(void) {
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 5, &oh, &om);
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 10, 5, &oh, &om);
   assert(off == 0 && oh == 10 && om == 20);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 10, 45, &oh, &om);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 10, 45, &oh, &om);
   assert(off == 0 && oh == 11 && om == 0);   // rolls into next matching hour
 }
 
@@ -322,7 +322,7 @@ static void test_cron_next_offset_days_tomorrow_when_dow_skips_today(void) {
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
   // Today is Wed (3); only Mon (1) matches -> 5 days out.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_MON, 3, 10, 30, &oh, &om);
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DAY_MON, false, 3, 10, 30, &oh, &om);
   assert(off == 5);
 }
 
@@ -334,12 +334,51 @@ static void test_cron_next_offset_days_multi_fire_progression(void) {
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh, om;
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 23, 45, &oh, &om);
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 23, 45, &oh, &om);
   assert(off == 1 && oh == 0 && om == 0);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 0, 0, &oh, &om);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 0, 0, &oh, &om);
   assert(off == 0 && oh == 0 && om == 20);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, 3, 0, 20, &oh, &om);
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, false, 3, 0, 20, &oh, &om);
   assert(off == 0 && oh == 0 && om == 40);
+}
+
+// skip_next: the very next match is skipped, reporting the SECOND one
+// instead -- mirrors ac_next_offset_days's own skip_next behavior, applied
+// to cron's 3-dimensional (day/hour/minute) scan.
+static void test_cron_next_offset_days_skip_next_same_day(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh = -1, om = -1;
+  // Without skip: next hit after 10:05 is 10:20.
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 10, 5, &oh, &om);
+  assert(off == 0 && oh == 10 && om == 40);   // 10:20 skipped -> 10:40
+}
+
+static void test_cron_next_offset_days_skip_next_across_day_boundary(void) {
+  uint64_t m20, hour_all;
+  assert(ac_cron_parse_field("*/20", 0, 59, &m20));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  int oh = -1, om = -1;
+  // First hit after 23:45 is tomorrow 00:00; skipping it lands on 00:20,
+  // still tomorrow (offset 1, not 2) -- the skip must resume the scan from
+  // the skipped hit's own day, not from `now`'s day again.
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DAY_ALL, true, 3, 23, 45, &oh, &om);
+  assert(off == 1 && oh == 0 && om == 20);
+}
+
+static void test_cron_next_offset_days_skip_next_across_dow_gap(void) {
+  // A single weekly slot (10:30 Monday only, not "every minute/hour" like
+  // the other tests) so skipping the first hit genuinely has to jump a
+  // whole week rather than landing on a later minute the same day.
+  uint64_t min30, hour10;
+  assert(ac_cron_parse_field("30", 0, 59, &min30));
+  assert(ac_cron_parse_field("10", 0, 23, &hour10));
+  int oh = -1, om = -1;
+  // First hit from Wed 10:30 is next Monday (offset 5); skipping it must
+  // land on the Monday AFTER THAT (offset 12), not the very next day.
+  int off = ac_cron_next_offset_days(min30, (uint32_t)hour10, AC_DAY_MON, true, 3, 10, 30, &oh, &om);
+  assert(off == 12 && oh == 10 && om == 30);
 }
 
 static void test_cron_is_due_matches_and_not_yet_fired_this_minute(void) {
@@ -430,6 +469,9 @@ int main(void) {
   test_cron_next_offset_days_later_same_day();
   test_cron_next_offset_days_tomorrow_when_dow_skips_today();
   test_cron_next_offset_days_multi_fire_progression();
+  test_cron_next_offset_days_skip_next_same_day();
+  test_cron_next_offset_days_skip_next_across_day_boundary();
+  test_cron_next_offset_days_skip_next_across_dow_gap();
   test_cron_is_due_matches_and_not_yet_fired_this_minute();
   test_cron_is_due_already_fired_this_exact_minute();
   test_cron_is_due_older_last_fired_still_due();

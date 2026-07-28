@@ -28,7 +28,9 @@ typedef struct {
                             // time (today/tomorrow), or a single bit = fire once on that
                             // specific weekday. When repeats: the weekly recurrence days.
   bool enabled;
-  bool skip_next;           // skip just the next occurrence (repeats only)
+  bool skip_next;           // skip just the next occurrence (repeats only for
+                            // legacy alarms; also reused for is_cron alarms
+                            // -- see the is_cron block below)
   uint16_t snooze_minutes;
   uint8_t snooze_max;       // 0 = unlimited
   bool vibration_enabled;
@@ -58,10 +60,16 @@ typedef struct {
   // above: hour/minute/day-of-week each given as an independent cron-style
   // field ("*", "12", "1-2", "*/20", "4-45/10", comma-lists of these),
   // matched every minute rather than fired at most once per day. When
-  // is_cron, `repeats`/`skip_next` are unused (forced false/ignored) and
-  // `repeat_days` is REPURPOSED to hold the parsed day-of-week mask (same
-  // AC_DAY_* bits) instead of the legacy weekly-repeat days — no separate
-  // field needed since it's exactly the same bitmask shape either way.
+  // is_cron, `repeats` is unused (forced false/ignored) and `repeat_days`
+  // is REPURPOSED to hold the parsed day-of-week mask (same AC_DAY_* bits)
+  // instead of the legacy weekly-repeat days — no separate field needed
+  // since it's exactly the same bitmask shape either way. `skip_next` is
+  // ALSO reused (not repurposed -- same "skip just the next occurrence"
+  // meaning as legacy): ac_cron_next_offset_days() skips the very next
+  // matching minute and reports the one after when it's set, exactly
+  // mirroring how ac_next_offset_days already does this for legacy alarms.
+  // It's cleared by the caller (main.c) once the resumed (non-skipped)
+  // occurrence actually fires.
   bool is_cron;
   uint64_t cron_min_mask;    // bit i (0-59) set => minute i matches
   uint32_t cron_hour_mask;   // bit i (0-23) set => hour i matches
@@ -168,7 +176,10 @@ bool ac_cron_parse_field(const char *text, int min_val, int max_val, uint64_t *o
 // out_minute left unset) if no bit is set anywhere in any of the three masks
 // — shouldn't happen with a validated field (even "*" sets every bit), but
 // guarded defensively since a caller could hand in an all-zero mask.
-int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask,
+// `skip_next`: same meaning as ac_next_offset_days's own skip_next handling
+// -- when true, the first match is skipped and the SECOND match strictly
+// after `now` is reported instead.
+int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint8_t dow_mask, bool skip_next,
                               int now_wday, int now_hour, int now_min,
                               int *out_hour, int *out_minute);
 
