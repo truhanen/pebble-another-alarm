@@ -59,6 +59,12 @@
     "resources": {
       "media": [
         {
+          "menuIcon": true,
+          "type": "bitmap",
+          "name": "MENU_ICON",
+          "file": "images/menuicon.png"
+        },
+        {
           "type": "bitmap",
           "name": "IMAGE_SHIFT_OFF",
           "file": "images/shift-off.png"
