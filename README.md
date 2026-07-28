@@ -1,10 +1,21 @@
 # pebble-another-alarm
 
-A multi-alarm watchapp for Pebble (emery/Pebble Time 2 only): an on-watch
-list of alarms with time, repeat days, snooze, vibration, and sound
-settings, plus a phone-side Clay config page for global settings (first day
-of week, vibration pattern, default snooze). See `SPEC.md` for the full
-design and `CLAUDE.md` for architecture details.
+![Main alarm list](screenshots/01_main_view.png)
+
+A multi-alarm watchapp for Pebble (emery/Pebble Time 2 only). See `CLAUDE.md`
+for architecture details.
+
+## Features
+
+- Multiple alarms with time, weekday repeat, snooze, vibration, and sound
+  settings
+- Cron-syntax alarms (minute/hour/day-of-week patterns) for repeating
+  schedules that don't fit a simple weekday repeat
+- Skip-next-occurrence and one-time-vs-repeating alarm states, cycled with
+  a short main-list press
+- Per-alarm vibration pattern, increasing-volume ramp, and auto-stop
+- Phone-side Clay config page for global settings (first day of week,
+  default vibe pattern, default snooze, alarm volume)
 
 ## Building & running
 
@@ -58,9 +69,6 @@ tests/                    C (gcc, manual run) and node:test (npm test) tests
 package.json              Project metadata (UUID, platforms, resources, message keys)
 wscript                   Build rules — compiles TypeScript, then bundles as usual
 ```
-
-By default this project is configured as a watchapp. To make it a watchface,
-set `pebble.watchapp.watchface` to `true` in `package.json`.
 
 ## Documentation
 
