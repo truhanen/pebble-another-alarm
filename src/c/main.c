@@ -125,6 +125,8 @@ static void open_edit_window(int idx);
 static void start_new_alarm_flow(void);
 static void resync_last_fired_for_schedule_change(Alarm *a);
 static void confirm_window_push(const char *label0, const char *label1, void (*cb)(int, void *), void *ctx);
+static int16_t bottom_bar_top_for_bounds(GRect bounds);
+static Layer *bottom_bar_attach(Layer *root);
 
 // ================================= main list =================================
 
@@ -1027,6 +1029,7 @@ static void dial_box_area(int window_h, int top_label_h, int *out_by, int *out_b
 
 static Window *s_time_window;
 static Layer *s_time_layer;
+static Layer *s_time_bottom_bar;
 static uint8_t s_time_hour, s_time_minute;
 static int s_time_field;   // 0 = hour, 1 = minute
 static void (*s_time_on_confirm)(uint8_t hour, uint8_t minute, void *ctx);
@@ -1046,7 +1049,7 @@ static void time_layer_update(Layer *l, GContext *ctx) {
   // unambiguous +/- stepping, regardless of the system's 12h/24h style.
   GFont hf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   graphics_draw_text(ctx, "Time", hf, GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 
   int margin = 8, gap = 6;
   int bw = (b.size.w - margin * 2 - gap) / 2;
@@ -1115,12 +1118,17 @@ static void time_click_config(void *ctx) {
 }
 static void time_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_time_layer = layer_create(layer_get_bounds(root));
+  GRect bounds = layer_get_bounds(root);
+  GRect content_bounds = bounds;
+  content_bounds.size.h = bottom_bar_top_for_bounds(bounds);
+  s_time_layer = layer_create(content_bounds);
   layer_set_update_proc(s_time_layer, time_layer_update);
   layer_add_child(root, s_time_layer);
+  s_time_bottom_bar = bottom_bar_attach(root);
 }
 static void time_window_unload(Window *w) {
   layer_destroy(s_time_layer); s_time_layer = NULL;
+  layer_destroy(s_time_bottom_bar); s_time_bottom_bar = NULL;
 }
 static void time_edit_window_push(uint8_t hour, uint8_t minute,
     void (*on_confirm)(uint8_t, uint8_t, void *), void (*on_cancel)(void *),
@@ -1190,7 +1198,7 @@ static void cron_help_header_update_proc(Layer *l, GContext *ctx) {
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, "Cron help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
 static void cron_help_window_load(Window *w) {
@@ -1252,6 +1260,7 @@ static void cron_help_window_push(void) {
 
 static Window *s_cron_window;
 static MenuLayer *s_cron_menu;
+static Layer *s_cron_bottom_bar;
 static char s_cron_min[CRON_FIELD_LEN], s_cron_hour[CRON_FIELD_LEN], s_cron_dow[CRON_FIELD_LEN];
 static void (*s_cron_on_confirm)(const char *min_str, const char *hour_str, const char *dow_str, void *ctx);
 static void (*s_cron_on_cancel)(void *ctx);
@@ -1396,7 +1405,7 @@ static void cron_click_config(void *ctx) {
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, cron_select_long, NULL);
   window_long_click_subscribe(BUTTON_ID_BACK, 500, cron_back_long, NULL);
 }
-// Left-aligned title, same style as the "Time"/"Repeat" editor headers.
+// Centered title, same style as the "Time"/"Repeat" editor headers.
 static Layer *s_cron_header;
 #define CRON_HEADER_H 30
 static void cron_header_update_proc(Layer *l, GContext *ctx) {
@@ -1406,7 +1415,7 @@ static void cron_header_update_proc(Layer *l, GContext *ctx) {
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, "Cron", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 static void cron_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
@@ -1414,7 +1423,8 @@ static void cron_window_load(Window *w) {
   s_cron_header = layer_create(GRect(0, 0, bounds.size.w, CRON_HEADER_H));
   layer_set_update_proc(s_cron_header, cron_header_update_proc);
   layer_add_child(root, s_cron_header);
-  GRect menu_bounds = GRect(0, CRON_HEADER_H, bounds.size.w, bounds.size.h - CRON_HEADER_H);
+  GRect menu_bounds = GRect(0, CRON_HEADER_H, bounds.size.w,
+                            bottom_bar_top_for_bounds(bounds) - CRON_HEADER_H);
   s_cron_menu = menu_layer_create(menu_bounds);
   menu_layer_set_callbacks(s_cron_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = cron_num_rows, .get_cell_height = cron_cell_height,
@@ -1423,10 +1433,12 @@ static void cron_window_load(Window *w) {
   menu_layer_set_highlight_colors(s_cron_menu, GColorBlack, GColorWhite);
   layer_add_child(root, menu_layer_get_layer(s_cron_menu));
   window_set_click_config_provider(w, cron_click_config);
+  s_cron_bottom_bar = bottom_bar_attach(root);
 }
 static void cron_window_unload(Window *w) {
   menu_layer_destroy(s_cron_menu); s_cron_menu = NULL;
   layer_destroy(s_cron_header); s_cron_header = NULL;
+  layer_destroy(s_cron_bottom_bar); s_cron_bottom_bar = NULL;
 }
 static void cron_edit_window_push(const char *min_str, const char *hour_str, const char *dow_str,
     void (*on_confirm)(const char *min_str, const char *hour_str, const char *dow_str, void *ctx),
@@ -1558,7 +1570,7 @@ static void repeat_click_config(void *ctx) {
   window_long_click_subscribe(BUTTON_ID_SELECT, 500, repeat_select_long, NULL);
   window_long_click_subscribe(BUTTON_ID_BACK, 500, repeat_back_long, NULL);
 }
-// Left-aligned title, same style as the cron editor's "Cron" header.
+// Centered title, same style as the cron editor's "Cron" header.
 static Layer *s_repeat_header;
 #define REPEAT_HEADER_H 30
 static void repeat_header_update_proc(Layer *l, GContext *ctx) {
@@ -1568,7 +1580,7 @@ static void repeat_header_update_proc(Layer *l, GContext *ctx) {
   graphics_context_set_text_color(ctx, GColorBlack);
   graphics_draw_text(ctx, "Repeat", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 static void repeat_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
@@ -1641,7 +1653,7 @@ static void snooze_layer_update(Layer *l, GContext *ctx) {
 
   GFont hf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   graphics_draw_text(ctx, "Snooze", hf, GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 
   int margin = 8, gap = 6;
   int bw = (b.size.w - margin * 2 - gap) / 2;
@@ -1748,6 +1760,7 @@ static void remove_alarm_at(int idx) {
 
 static Window *s_edit_window;
 static MenuLayer *s_edit_menu;
+static Layer *s_edit_bottom_bar;
 static int s_edit_idx = -1;
 
 static const char *vibe_pattern_name(uint8_t pattern) {
@@ -2103,7 +2116,10 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
 
 static void edit_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_edit_menu = menu_layer_create(layer_get_bounds(root));
+  GRect bounds = layer_get_bounds(root);
+  GRect menu_bounds = bounds;
+  menu_bounds.size.h = bottom_bar_top_for_bounds(bounds);
+  s_edit_menu = menu_layer_create(menu_bounds);
   menu_layer_set_callbacks(s_edit_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = edit_num_rows, .get_cell_height = edit_cell_height,
     .draw_row = edit_draw_row, .select_click = edit_select });
@@ -2111,9 +2127,11 @@ static void edit_window_load(Window *w) {
   menu_layer_set_highlight_colors(s_edit_menu, GColorBlack, GColorWhite);
   menu_layer_set_click_config_onto_window(s_edit_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_edit_menu));
+  s_edit_bottom_bar = bottom_bar_attach(root);
 }
 static void edit_window_unload(Window *w) {
   menu_layer_destroy(s_edit_menu); s_edit_menu = NULL;
+  layer_destroy(s_edit_bottom_bar); s_edit_bottom_bar = NULL;
 }
 
 static void open_edit_window(int idx) {
@@ -2316,8 +2334,21 @@ static void draw_bottom_bar(GContext *ctx, GRect bounds) {
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
 }
 
-static void main_bottom_bar_update_proc(Layer *l, GContext *ctx) {
+static void bottom_bar_update_proc(Layer *l, GContext *ctx) {
   draw_bottom_bar(ctx, layer_get_bounds(l));
+}
+
+// Shared by every window that shows the bottom bar (main list, time/repeat/
+// cron editors, alarm edit menu): creates and attaches the bar layer to
+// `root`, sized/positioned via bottom_bar_rect_for_bounds. Callers must
+// separately shrink their own content area to bottom_bar_top_for_bounds()
+// so the bar doesn't overlap it -- this helper only adds the bar itself.
+static Layer *bottom_bar_attach(Layer *root) {
+  GRect bounds = layer_get_bounds(root);
+  Layer *bar = layer_create(bottom_bar_rect_for_bounds(bounds));
+  layer_set_update_proc(bar, bottom_bar_update_proc);
+  layer_add_child(root, bar);
+  return bar;
 }
 
 // One-alarm hint, adapted from pebble-another-timer's empty_hint_update_proc
@@ -2368,9 +2399,7 @@ static void main_window_load(Window *w) {
   layer_set_update_proc(s_main_hint_layer, main_hint_update_proc);
   layer_add_child(root, s_main_hint_layer);
 
-  s_bottom_bar_layer = layer_create(bottom_bar_rect_for_bounds(bounds));
-  layer_set_update_proc(s_bottom_bar_layer, main_bottom_bar_update_proc);
-  layer_add_child(root, s_bottom_bar_layer);
+  s_bottom_bar_layer = bottom_bar_attach(root);
 }
 
 static void main_window_unload(Window *w) {
@@ -2379,13 +2408,15 @@ static void main_window_unload(Window *w) {
   layer_destroy(s_bottom_bar_layer); s_bottom_bar_layer = NULL;
 }
 
-// Ticks the bottom bar's clock (and "Next" text, since crossing a minute
-// boundary can change which alarm is soonest) once a minute while the main
-// window is the one on screen.
+// Ticks every bottom bar's clock (and "Next" text, since crossing a minute
+// boundary can change which alarm is soonest) once a minute, but only for
+// whichever of these windows is currently the one on screen.
 static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
-  if (s_bottom_bar_layer && window_stack_get_top_window() == s_window) {
-    layer_mark_dirty(s_bottom_bar_layer);
-  }
+  Window *top = window_stack_get_top_window();
+  if (s_bottom_bar_layer && top == s_window) { layer_mark_dirty(s_bottom_bar_layer); }
+  if (s_time_bottom_bar && top == s_time_window) { layer_mark_dirty(s_time_bottom_bar); }
+  if (s_cron_bottom_bar && top == s_cron_window) { layer_mark_dirty(s_cron_bottom_bar); }
+  if (s_edit_bottom_bar && top == s_edit_window) { layer_mark_dirty(s_edit_bottom_bar); }
 }
 
 // ================================= AppMessage (phone settings) =================================

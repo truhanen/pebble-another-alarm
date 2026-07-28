@@ -538,16 +538,40 @@ in this app at all, so every message key is now just an ordinary scalar at
   - The main window has a bottom bar (`draw_bottom_bar`/
     `bottom_bar_rect_for_bounds`), a direct port of timer's own bottom bar:
     a thin divider line + black strip pinned to the bottom, reducing the
-    `MenuLayer`'s height by `BOTTOM_BAR_H` rather than overlaying it. Current
+    content above it by `BOTTOM_BAR_H` rather than overlaying it. Current
     time (system 12h/24h-aware `clock_copy_time_string`) on the left; the
     next scheduled alarm's due time on the right via `compute_next_fire_time`
     — "Next: HH:MM" (no day label) if it lands on today's calendar date,
     "Next: <Day> HH:MM" otherwise, including tomorrow (e.g. "Next: Sat
     06:00" — just the weekday abbreviation, no separate "Tomorrow" case), or
     "Next: --" if nothing is scheduled. Refreshed once a minute via
-    `tick_timer_service_subscribe`
-    (`handle_minute_tick`), guarded on the main window actually being the
-    top of the window stack.
+    `tick_timer_service_subscribe` (`handle_minute_tick`), guarded per-window
+    on that window actually being the top of the window stack.
+  - **The bottom bar isn't main-window-only**: `bottom_bar_attach()` (takes a
+    window's root `Layer`, creates/adds the bar child, returns it) and
+    `bottom_bar_top_for_bounds()` are shared, forward-declared near the top
+    of `main.c` so the window-load functions defined earlier in the file
+    (time/cron editors, the alarm edit menu) can call them before the bar's
+    own implementation appears later in the file. Each of those three
+    windows shrinks its own content (the custom time-editor `Layer`, or a
+    `MenuLayer` for cron/edit) to `bottom_bar_top_for_bounds()` (minus its
+    own header height, for the cron editor) and calls `bottom_bar_attach()`
+    in `_window_load`, destroying the returned layer in `_window_unload` —
+    same shape as the main window's own `s_bottom_bar_layer`, just one
+    static `Layer*` per window (`s_time_bottom_bar`/`s_cron_bottom_bar`/
+    `s_edit_bottom_bar`). `handle_minute_tick` checks all four against
+    `window_stack_get_top_window()` individually rather than a single
+    shared flag, since exactly one of them (if any) is on top at a time.
+    The "+ New alarm" wizard reuses the same cached time/cron windows as
+    the per-alarm editors, so it gets the bar for free there with no
+    separate wiring. The **repeat editor deliberately does NOT get one** —
+    it had it briefly, but it was removed on request; `repeat_window_load`
+    just sizes its `MenuLayer` to the window's full height again, with no
+    `bottom_bar_attach()` call and no `s_repeat_bottom_bar` variable. The
+    cron *help* screen and the generic 2-choice confirm window were never
+    given one either — neither was asked for, and the help screen's
+    scrollable text content makes a fixed-height reduction less obviously
+    correct there.
   - Itemized menus (`confirm_window`, `repeat_window`, `edit_window`) use
     `menu_layer_set_normal_colors`/`menu_layer_set_highlight_colors`
     (white/black, black/white) instead of manually painting each row —
