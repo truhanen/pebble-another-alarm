@@ -3,6 +3,7 @@ const config = [
     type: 'section',
     items: [
       { type: 'heading', defaultValue: 'New Alarm Defaults' },
+      { type: 'text', defaultValue: 'Defaults for newly created alarms. Can be changed per alarm from the watch\'s alarm edit menu.'},
       { type: 'toggle', messageKey: 'DefaultSnoozeEnabled', label: 'Snooze enabled',
         defaultValue: true },
       { type: 'input', messageKey: 'DefaultSnoozeMinutes', label: 'Snooze duration (minutes)',
