@@ -220,11 +220,11 @@ static void test_format_time(void) {
   ac_format_time(buf, sizeof(buf), 7, 5, true);
   assert(strcmp(buf, "07:05") == 0);
   ac_format_time(buf, sizeof(buf), 0, 0, false);
-  assert(strcmp(buf, "12:00 AM") == 0);
+  assert(strcmp(buf, "12:00 am") == 0);
   ac_format_time(buf, sizeof(buf), 13, 30, false);
-  assert(strcmp(buf, "1:30 PM") == 0);
+  assert(strcmp(buf, "1:30 pm") == 0);
   ac_format_time(buf, sizeof(buf), 12, 0, false);
-  assert(strcmp(buf, "12:00 PM") == 0);
+  assert(strcmp(buf, "12:00 pm") == 0);
 }
 
 static void test_format_repeat_summary(void) {

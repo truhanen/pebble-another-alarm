@@ -1060,8 +1060,10 @@ static void time_layer_update(Layer *l, GContext *ctx) {
 
   // Header: just "Time" -- the boxes below already show the staged value
   // directly, so a redundant formatted-value readout on the header's right
-  // side was removed. The boxes always edit the raw 24h hour field for
-  // unambiguous +/- stepping, regardless of the system's 12h/24h style.
+  // side was removed. The hour box always steps the raw 24h field for
+  // unambiguous +/- stepping; only its displayed text follows the system's
+  // 12h/24h style ("18" vs "6 PM"), same convention as every other time
+  // display in the app (clock_is_24h_style()).
   GFont hf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   graphics_draw_text(ctx, "Time", hf, GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
@@ -1071,8 +1073,14 @@ static void time_layer_update(Layer *l, GContext *ctx) {
   int by, bh;
   dial_box_area(b.size.h, 0, &by, &bh);
 
-  char hbuf[4], mbuf[4];
-  snprintf(hbuf, sizeof(hbuf), "%d", s_time_hour);
+  char hbuf[8], mbuf[4];
+  if (clock_is_24h_style()) {
+    snprintf(hbuf, sizeof(hbuf), "%d", s_time_hour);
+  } else {
+    int h12 = s_time_hour % 12;
+    if (h12 == 0) { h12 = 12; }
+    snprintf(hbuf, sizeof(hbuf), "%d %s", h12, s_time_hour < 12 ? "am" : "pm");
+  }
   snprintf(mbuf, sizeof(mbuf), "%02d", s_time_minute);
   const char *texts[2] = { hbuf, mbuf };
   dial_draw_number_boxes(ctx, GRect(margin, by, bw * 2 + gap, bh), 2, texts, NULL, 0, s_time_field);
@@ -2256,6 +2264,19 @@ static GRect bottom_bar_rect_for_bounds(GRect bounds) {
 
 static const char *const BOTTOM_BAR_WDAY_ABBR[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
+// Bottom bar is tight on horizontal space, so its time strings compact the
+// trailing " am"/" pm"/" AM"/" PM" (whether from our own ac_format_time or
+// the system's clock_copy_time_string) down to a single lowercase indicator
+// glued directly to the time, e.g. "6:30pm" instead of "6:30 pm".
+static void bottom_bar_compact_ampm(char *buf) {
+  size_t len = strlen(buf);
+  if (len < 3 || buf[len - 3] != ' ') { return; }
+  char c2 = buf[len - 2], c1 = buf[len - 1];
+  if ((c1 != 'M' && c1 != 'm') || (c2 != 'A' && c2 != 'a' && c2 != 'P' && c2 != 'p')) { return; }
+  buf[len - 3] = (c2 == 'A' || c2 == 'a') ? 'a' : 'p';
+  buf[len - 2] = '\0';
+}
+
 static void format_next_alarm(char *buf, size_t n) {
   int64_t fire_time;
   int idx;
@@ -2289,8 +2310,10 @@ static void draw_bottom_bar(GContext *ctx, GRect bounds) {
 
   char left[16];
   clock_copy_time_string(left, sizeof(left));
+  bottom_bar_compact_ampm(left);
   char right[32];
   format_next_alarm(right, sizeof(right));
+  bottom_bar_compact_ampm(right);
 
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   const int th = 28;

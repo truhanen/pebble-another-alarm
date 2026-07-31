@@ -85,7 +85,7 @@ void ac_format_time(char *buf, size_t n, uint8_t hour, uint8_t minute, bool use_
   } else {
     int h12 = hour % 12;
     if (h12 == 0) { h12 = 12; }
-    snprintf(buf, n, "%d:%02d %s", h12, minute, hour < 12 ? "AM" : "PM");
+    snprintf(buf, n, "%d:%02d %s", h12, minute, hour < 12 ? "am" : "pm");
   }
 }
 
