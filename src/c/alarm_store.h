@@ -15,11 +15,22 @@
 #define PERSIST_KEY_DEFAULT_VIBRATION_ENABLED 10
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
+#define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 8   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+#define STORE_SCHEMA 9   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
                           // then vibe_pattern (per-alarm vibration pattern override), then
-                          // increasing_volume (per-alarm ramp-up-to-max toggle).
+                          // increasing_volume (per-alarm ramp-up-to-max toggle), then cron
+                          // day-of-month/month fields (cron_dom_mask, cron_month_mask,
+                          // cron_dom, cron_month) for cron mode's 5-field extension.
+                          //
+                          // The cron_dom_mask/cron_month_mask bump needs more than just a
+                          // size-table entry: a freshly zero-filled mask on migration means
+                          // "matches nothing", unlike increasing_volume's 0=off (already the
+                          // right default) -- store_load() explicitly re-fills these to
+                          // AC_DOM_ALL/AC_MONTH_ALL (and cron_dom/cron_month to "*") for any
+                          // migrated is_cron alarm, or every existing cron alarm's day/month
+                          // matching would silently die the instant this shipped.
                           //
                           // Every field added to Alarm so far (including vibe_pattern and
                           // increasing_volume) was appended at the very end of the struct,
@@ -99,3 +110,9 @@ void store_save_default_sound_enabled(bool enabled);
 // existing alarms). See Alarm.increasing_volume (alarm_calc.h).
 bool store_load_default_increasing_volume(void);
 void store_save_default_increasing_volume(bool enabled);
+
+// Date format used by format_relative_fire_time()'s date-only tier (main.c)
+// -- 0=Day.Month ("1.6."), 1=Month/Day ("6/1"); defaults to 0 when unset.
+// Global, like AudioVolume: read live, not copied into anything per-alarm.
+int store_load_date_format(void);
+void store_save_date_format(int format);

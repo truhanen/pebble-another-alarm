@@ -8,6 +8,7 @@
 // ASCII-digit char (the workaround some Clay-based apps need instead).
 export interface ClaySettings {
   FirstDayOfWeek?: string;
+  DateFormat?: string;
   AlarmVibePattern?: string;
   DefaultSnoozeMinutes?: string;
   DefaultSnoozeMax?: string;
@@ -27,6 +28,7 @@ export function buildDict(settings: ClaySettings): Record<string, number> {
   const snoozeEnabled = settings.DefaultSnoozeEnabled ?? true;
   return {
     FirstDayOfWeek: toInt(settings.FirstDayOfWeek, 1),
+    DateFormat: toInt(settings.DateFormat, 0),
     AlarmVibePattern: toInt(settings.AlarmVibePattern, 0),
     // 0 reuses the watch's existing "snooze disabled outright" convention
     // (snooze_minutes == 0) rather than sending a wholly separate flag for

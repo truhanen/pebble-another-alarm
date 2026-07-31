@@ -141,6 +141,8 @@ than trusting a mental model of the numbering.
 | `TestAlarmAutoStop` | 10029 | int 0/1 | Sets `auto_stop` (see "Key design points" below). |
 | `TestAlarmVibePattern` | 10030 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
 | `TestAlarmIncreasingVolume` | 10031 | int 0/1 | Sets `increasing_volume` directly (see "Key design points" below). |
+| `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
+| `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -183,20 +185,24 @@ as every other alarm-mutating code path.
 
 ### Phone side (`src/ts/`)
 
-- **`config_clay.ts`** — three sections: (1) `FirstDayOfWeek` (radiogroup,
-  Sunday/Monday); (2) "New alarm defaults" — everything here only pre-fills
-  a newly created alarm's own fields, never touches existing ones: a
-  `DefaultSnoozeEnabled` toggle + `DefaultSnoozeMinutes`/`DefaultSnoozeMax`
-  number inputs (the latter labeled "Repeats", matching the on-watch snooze
-  editor's own field name for the same value — see the snooze design point
-  below), `DefaultSoundEnabled`/`DefaultVibrationEnabled` (two independent
+- **`config_clay.ts`** — two sections: (1) "New alarm defaults" —
+  everything here only pre-fills a newly created alarm's own fields, never
+  touches existing ones: a `DefaultSnoozeEnabled` toggle +
+  `DefaultSnoozeMinutes`/`DefaultSnoozeMax` number inputs (the latter
+  labeled "Repeats", matching the on-watch snooze editor's own field name
+  for the same value — see the snooze design point below),
+  `DefaultSoundEnabled`/`DefaultVibrationEnabled` (two independent
   `toggle`s, in that order — Sound above Vibration) and `AlarmVibePattern`
   (select, Double/Short/Long — only seeds a new alarm's own `vibe_pattern`;
-  see the per-alarm vibration pattern design point below); (3) "Alarm
-  volume" — just `AudioVolume` (slider, 0-100, 0=disabled — see sound design
-  point below), given its own section because, unlike everything in (2),
-  it's read live by every alarm's ring screen rather than copied once at
-  creation.
+  see the per-alarm vibration pattern design point below); (2) "Other" —
+  `FirstDayOfWeek` (radiogroup, Sunday/Monday), `DateFormat` (select,
+  Day.Month/Month.Day, right after `FirstDayOfWeek` — read live by
+  `format_relative_fire_time()`'s date-only tier, `main.c`, since Pebble's C
+  API has no date-order equivalent of `clock_is_24h_style()` to fall back
+  on for this), and `AudioVolume` (slider, 0-100, 0=disabled — see sound
+  design point below), given its own place at the bottom because, unlike
+  everything in (1), it's read live by every alarm's ring screen rather
+  than copied once at creation.
 - **`dict.ts`** — pure `buildDict()` transform, `parseInt`s each Clay string
   value into a real int32. Because `index.ts` builds the AppMessage dict
   manually (`autoHandleEvents: false`), the watch reads plain ints directly —
@@ -223,8 +229,12 @@ as every other alarm-mutating code path.
 AppMessage keys (`package.json`'s `pebble.messageKeys`, used as
 `MESSAGE_KEY_*` in C): `FirstDayOfWeek`, `AlarmVibePattern`,
 `DefaultSnoozeMinutes`, `DefaultSnoozeMax`, `AudioVolume`,
-`DefaultSoundEnabled`, `DefaultVibrationEnabled` — phone→watch only, all
-plain scalars, no array-type key. (`DefaultSnoozeEnabled` is a real Clay
+`DefaultSoundEnabled`, `DefaultVibrationEnabled`, `DateFormat` — phone→watch
+only, all plain scalars, no array-type key. `DateFormat` was appended at the
+very end of the declared list (after every `Test*` key) rather than next to
+`FirstDayOfWeek` despite being thematically related, per the "IDs are
+`10000 + declaration index`, never insert" rule below — it landed at 10034.
+(`DefaultSnoozeEnabled` is a real Clay
 field but intentionally has no corresponding watch-side message key at all
 — see `dict.ts` above.) This used to need declaring `DefaultAlarmSignal[2]`
 with Clay's array-key syntax for a `checkboxgroup` component, plus a fair
@@ -356,6 +366,42 @@ in this app at all, so every message key is now just an ordinary scalar at
   throwaway build installed over an emulator instance with existing schema-7
   data, confirming the alarm survived instead of being wiped (see
   `TODO.md`).
+- **A field-append migration isn't always a free pass, though**: adding
+  `cron_dom_mask`/`cron_month_mask` (schema 9, cron mode's day-of-month/month
+  fields — see "Cron-syntax alarms" below) is the first bump where the
+  zero-fill-on-migration default is actively WRONG, not just unused. Every
+  earlier append (`vibe_pattern`, `increasing_volume`) happened to have 0 as
+  its correct default; a zero-filled bitmask instead means "matches
+  nothing", which for an existing cron alarm would silently and permanently
+  stop its day/month matching the instant this shipped. `store_load()`
+  handles this with an explicit fixup, not just a size-table entry: for any
+  alarm loaded from `stored_schema < 9` where `is_cron` is true, it
+  overwrites `cron_dom_mask`/`cron_month_mask` to `AC_DOM_ALL`/`AC_MONTH_ALL`
+  (and the raw `cron_dom`/`cron_month` text to `"*"`) right after the
+  `persist_read_data` copy. Worth checking for on every FUTURE append too —
+  the "zero is a safe default" assumption doesn't automatically hold just
+  because the previous several bumps got lucky.
+- **Never copy a `MAX_ALARMS`-sized array of `Alarm` structs onto the
+  stack** — a real crash, not a theoretical one: growing `Alarm` to 248
+  bytes (from 184) for the schema-9 cron dom/month fields made
+  `compute_next_fire_time()`'s old `Alarm scan[MAX_ALARMS]` local (a
+  filtered copy it built just to hand to `ac_next_occurrence()`) balloon to
+  ~4KB of stack, several call-frames deep from `init()`
+  (`init()` → `rearm_wakeup()` → `compute_next_fire_time()`). Installing a
+  build with this change over any existing installation that had a real
+  alarm saved crashed immediately on launch — `App fault! PC: 0 LR: 0`, the
+  classic signature of a stack overflow corrupting a return address, not a
+  logic bug in the new cron math itself (confirmed by reproducing it in the
+  emulator: build the pre-change version, seed alarms via test hooks,
+  install the new build **over** that data without wiping — the exact
+  upgrade scenario — and it fails the same way; a fresh/wiped install never
+  hit it, since `s_count == 0` skips the array entirely). Fixed by scanning
+  `s_alarms[i]` directly instead of copying into a filtered local array,
+  the same style the cron loop right below it already used — no behavior
+  change, just removes the copy. The lesson generalizes: any local
+  `Alarm[MAX_ALARMS]`-shaped variable is a stack-budget risk that gets
+  worse every time `Alarm` grows, and won't show up in `pebble build`, only
+  by actually installing over real persisted data.
 - **`auto_stop` alarms still show the ring screen, but only briefly**:
   `trigger_alarm()` branches on `a->auto_stop` — an auto-stop alarm fires
   vibration/sound (via its own existing `vibration_enabled`/`sound_enabled`
@@ -548,10 +594,19 @@ in this app at all, so every message key is now just an ordinary scalar at
     content above it by `BOTTOM_BAR_H` rather than overlaying it. Current
     time (system 12h/24h-aware `clock_copy_time_string`) on the left; the
     next scheduled alarm's due time on the right via `compute_next_fire_time`
-    — "Next: HH:MM" (no day label) if it lands on today's calendar date,
-    "Next: <Day> HH:MM" otherwise, including tomorrow (e.g. "Next: Sat
-    06:00" — just the weekday abbreviation, no separate "Tomorrow" case), or
-    "Next: --" if nothing is scheduled. Refreshed once a minute via
+    and the shared `format_relative_fire_time()` helper (`main.c`) — "Next:
+    --" if nothing is scheduled, otherwise a 3-tier format depending on how
+    far out the next fire time is: today shows time only ("Next: 07:00", no
+    weekday or date — redundant otherwise); within the next week (1-7 days
+    out) shows a weekday abbreviation + time ("Next: Sat 06:00"); further out
+    shows date only, no time ("Next: 1.6." — neither day nor month
+    zero-padded) — this last tier only matters
+    for cron alarms (a legacy alarm's own scheduling model can never put its
+    next occurrence more than a week out), but the rule is unconditional so
+    the two code paths sharing this formatter never disagree. Day-granularity
+    is computed via `day_diff()` (zeroing both instants to midnight and
+    `mktime()`-diffing them, not dividing the raw epoch difference by 86400,
+    which breaks across DST transitions). Refreshed once a minute via
     `tick_timer_service_subscribe` (`handle_minute_tick`), guarded per-window
     on that window actually being the top of the window stack.
   - **The bottom bar isn't main-window-only**: `bottom_bar_attach()` (takes a
@@ -602,13 +657,53 @@ in this app at all, so every message key is now just an ordinary scalar at
 ## Cron-syntax alarms
 
 A third alarm schedule shape, alongside the fixed hour:minute+`repeat_days`
-legacy mode: `is_cron` alarms are defined by three independent cron-style
-fields — minute (0-59), hour (0-23), day-of-week (0-6) — each written as
-`*`, `N`, `N-M`, `*/N`, `N-M/N2`, or a comma-list of these (e.g. `"*/20"`,
-`"9-17/2"`, `"1,5,10-15"`), parsed by `ac_cron_parse_field` into a bitmask.
-Deliberately **3 fields only** (no day-of-month/month — this app has no
-calendar-date concept anywhere, and building one just for this feature was
-rejected in favor of reusing the weekday-bitmask model already in place).
+legacy mode: `is_cron` alarms are defined by five independent cron-style
+fields — minute (0-59), hour (0-23), day-of-month (1-31), month (1-12),
+day-of-week (0-6) — each written as `*`, `N`, `N-M`, `*/N`, `N-M/N2`, or a
+comma-list of these (e.g. `"*/20"`, `"9-17/2"`, `"1,5,10-15"`), parsed by
+`ac_cron_parse_field` into a bitmask. Day-of-month and month were a later
+addition on top of the original 3-field (minute/hour/day-of-week) design —
+adding them required real calendar-date math (month lengths, leap years),
+which is why `alarm_calc.c` gained the small self-contained
+`ac_is_leap_year`/`ac_days_in_month`/`ac_day_of_week` (Sakamoto's algorithm)/
+`ac_advance_calendar_day` helpers below, all still pure integer math with no
+`<time.h>` dependency, preserving the host-testable-core design.
+
+**Every combination of the five fields is allowed** — there is no rejection
+of "conflicting" or rare/impossible combinations at all, a deliberate design
+choice (and a reversal of an earlier, more restrictive version of this
+feature — see git history if curious):
+
+- **Day-of-month and day-of-week can both be a real restriction on the same
+  alarm, and they're ANDed together, not OR'd**: real cron's traditional
+  rule when both are restricted is to OR them ("fire on the 1st OR any
+  Monday"); this app always ANDs instead, which is what makes "day 1-7 AND
+  weekday Monday" (first Monday of every month) expressible at all —
+  `ac_cron_is_due`/`ac_cron_first_match_after` just AND `cron_dom_mask` and
+  `repeat_days` together like every other field, with no special case for
+  "both restricted." Implementing real cron's OR rule was deliberately
+  rejected in favor of this simpler, more useful (for this app's purposes)
+  semantics.
+- **Rare or literally impossible combinations (day 29 + February, day 31 +
+  April) are accepted too** — there's no validation rejecting them, because
+  `ac_cron_next_offset_days`'s bounded forward search
+  (`CRON_DAY_SCAN_MAX` = 400 days, `alarm_calc.c`, deliberately sized to
+  match `wakeup_schedule()`'s own ~1-year scheduling horizon rather than
+  "large enough to always eventually find a match") already has a
+  well-defined answer for "no match within the horizon that matters": it
+  returns -1, same as it would for a genuinely malformed mask. The cron
+  editor surfaces this as a live "(Next: ...)" preview on its Apply row (see
+  `cron_apply_preview()`, `main.c`) instead of a validity error — a rare
+  pattern shows its real (possibly months/years-away) next date when one
+  exists within the search bound, formatted via the same
+  `format_relative_fire_time()` 3-tier rule the bottom bar's own "Next: ..."
+  uses (today: time only; within a week: weekday + time; further out: date
+  only — see the bottom bar design point above), or "(Next: never/1y)" when
+  no match exists within the bound, letting the user judge a pattern by its
+  actual computed effect rather than an abstract rule about which fields may
+  be combined. This preview is cron-editor-only — the main list and edit
+  menu's Cron row summary both still just show the raw configured fields
+  (`ac_format_cron_summary`), unchanged.
 
 - **True multi-fire semantics, a deliberate departure from every other
   alarm in the app**: a cron alarm can ring many times a day if its pattern
@@ -638,9 +733,15 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   `ac_cron_next_offset_days()` (`alarm_calc.c`) takes a `skip_next` param and
   reports the SECOND matching (day-offset, hour, minute) instead of the
   first when set — mirroring `ac_next_offset_days`'s own skip handling,
-  factored through a shared `ac_cron_first_match_after()` scan helper since
-  cron's match search is 3-dimensional (day/hour/minute) rather than a
-  single day loop. `ac_cron_is_due()` itself stays skip-unaware, exactly
+  factored through a shared `ac_cron_first_match_after()` scan helper. That
+  scan walks real calendar days (`now_year`/`now_month`/`now_day` in, up to
+  `CRON_DAY_SCAN_MAX` days ahead) rather than either a bare 7-day weekday
+  wraparound (the original 3-field design) or a 3-dimensional day/hour/minute
+  loop with no calendar awareness — `month_mask`/`cron_dom_mask` restrict
+  which calendar dates match, so the walk needs `ac_days_in_month`/
+  `ac_is_leap_year` to advance correctly across month and year boundaries,
+  and `ac_day_of_week` to still evaluate `dow_mask` per candidate date.
+  `ac_cron_is_due()` itself stays skip-unaware, exactly
   like legacy's `ac_is_due()` — the skip is enforced entirely by
   `rearm_wakeup()` (via `compute_next_fire_time()`) never scheduling a
   wakeup for the skipped minute in the first place, which is sufficient
@@ -670,18 +771,18 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   5th `on_chord` callback parameter for this. A hint ("Long-press select\nto
   enter cron mode", `GOTHIC_24`, horizontally centered) is drawn in whatever
   room is left below the hour/minute boxes whenever `on_chord` is non-NULL.
-  The cron fields default to everyday (`dow = "*"`) rather than `"*/*/* "` in
-  both cases, but the hour/minute default differs by call site: converting
-  an already-existing alarm (`edit_on_time_chord`) keeps the exact
-  currently-staged hour/minute (e.g. `"30 20 *"` for 20:30, read directly off
-  `s_time_hour`/`s_time_minute`, still valid at the moment `on_chord` runs
-  since popping the time window doesn't reset them) — editing an existing
-  schedule shouldn't silently change the time itself. The "+ New alarm"
-  wizard (`new_alarm_time_chord`) instead defaults minute to `"0"` and hour
-  to the *next* full hour (`s_time_hour + 1` if `s_time_minute > 0`, else
-  unchanged) — a brand new cron alarm is far more likely to want "top of the
-  hour" than whatever incidental minute the time editor happened to be
-  showing.
+  The cron fields default to everyday/every-day-of-month/every-month
+  (`dow = dom = month = "*"`) in both cases, but the hour/minute default
+  differs by call site: converting an already-existing alarm
+  (`edit_on_time_chord`) keeps the exact currently-staged hour/minute (e.g.
+  `"30 20 * * *"` for 20:30, read directly off `s_time_hour`/`s_time_minute`,
+  still valid at the moment `on_chord` runs since popping the time window
+  doesn't reset them) — editing an existing schedule shouldn't silently
+  change the time itself. The "+ New alarm" wizard (`new_alarm_time_chord`)
+  instead defaults minute to `"0"` and hour to the *next* full hour
+  (`s_time_hour + 1` if `s_time_minute > 0`, else unchanged) — a brand new
+  cron alarm is far more likely to want "top of the hour" than whatever
+  incidental minute the time editor happened to be showing.
 - **One `cron_edit_window_push()` window serves every call site** — the "+
   New alarm" wizard (the long-press replaces the Time+Repeat steps, skipping
   straight to Snooze), converting an existing normal alarm (long-press on
@@ -689,20 +790,27 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   cancel, not `NULL`, since there's no prior cron state to revert to), and
   re-editing an existing cron alarm (its edit menu's Cron row — real `NULL`
   snapshot-revert cancel semantics apply here). `MenuLayer`-based: row 0
-  "Apply", rows 1-3 the three fields in display order Minute, Hour,
-  Weekday — `CRON_ROW_MINUTE`/`CRON_ROW_HOUR`/`CRON_ROW_DOW` assigned row
-  numbers 1/2/3 in that order, matching the `min_str, hour_str, dow_str`
-  parameter order every function signature in this file uses
-  (`cron_edit_window_push`, `ac_format_cron_summary`, `ac_cron_*`) — row
-  order and parameter order are the same convention everywhere, deliberately
-  kept in sync rather than letting the on-watch display order drift from the
-  code's own field order. Each row opens the shared multitap keyboard to
-  edit its raw text; live "(invalid)" annotation if `ac_cron_parse_field`
-  currently fails, checked on every draw but never blocking typing — only
-  Apply is gated on all three parsing cleanly. BACK follows the same
-  on_cancel-vs-snapshot-revert convention as the time/repeat/snooze editors.
-  Long-press SELECT submits outright regardless of cursor position;
-  long-press BACK is a no-op.
+  "Apply", rows 1-5 the five fields in display order Minute, Hour, Day,
+  Month, Weekday — `CRON_ROW_MINUTE`/`CRON_ROW_HOUR`/`CRON_ROW_DAY`/
+  `CRON_ROW_MONTH`/`CRON_ROW_DOW` assigned row numbers 1-5 in that order,
+  matching the `min_str, hour_str, dom_str, month_str, dow_str` parameter
+  order every function signature in this file uses (`cron_edit_window_push`,
+  `ac_format_cron_summary`, `ac_cron_*`) — row order and parameter order are
+  the same convention everywhere, deliberately kept in sync rather than
+  letting the on-watch display order drift from the code's own field order.
+  Each row opens the shared multitap keyboard to edit its raw text; live
+  "(invalid)" annotation if `ac_cron_parse_field` currently fails for that
+  field — never blocks typing, only Apply (`cron_submit()`) is gated on
+  every field parsing cleanly (there's no cross-field validity check any
+  more — see above). The Apply row itself (`CRON_ROW_SUBMIT`) draws a live
+  "next: ..." preview (`cron_apply_preview()`) alongside the "Apply" label,
+  same key/value layout as every other row, computed from the currently-
+  staged fields against real "now" — blank if any field is currently
+  unparseable (a preview isn't meaningful for invalid syntax, and the
+  field's own "(invalid)" tag already covers that case). BACK follows the
+  same on_cancel-vs-snapshot-revert convention as the time/repeat/snooze
+  editors. Long-press SELECT submits outright regardless of cursor
+  position; long-press BACK is a no-op.
 - **Edit menu display**: `edit_build_rows()` builds the ordered row-kind
   list for the current alarm (collapsing Time+Repeat into one `EDIT_ROW_CRON`
   row when `is_cron`) so `edit_num_rows`/`edit_draw_row`/`edit_select` share
@@ -715,7 +823,7 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   destructive by itself), and Time/Cron comes next ahead of Label/State,
   unlike every other row grouping in this app which puts Label first.
 - **Main list display**: the bold time slot shows "Cron" instead of a
-  formatted time; the summary line below shows the three raw cron fields
+  formatted time; the summary line below shows all five raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.
   Sort key (`cron_sort_key`, display/tie-breaking only, not used for actual
   scheduling): lowest set bit in `cron_hour_mask`/`cron_min_mask` converted
@@ -747,9 +855,14 @@ rejected in favor of reusing the weekday-bitmask model already in place).
   repeating occurrence math (today/tomorrow/no-day-this-week/wraparound),
   `skip_next`, `ac_mark_fired`, the format helpers, and the `ac_cron_*`
   family (field parsing incl. every malformed-syntax case, next-occurrence
-  math incl. multi-fire progression across successive calls, due-check incl.
+  math incl. multi-fire progression across successive calls, month/day-of-
+  month-restricted scans crossing a month boundary, the day-of-month-AND-
+  day-of-week "first Monday of every month" case, a rare leap-day pattern
+  legitimately reporting no match within the bounded search, due-check incl.
   the older-`last_fired_min`-still-due multi-fire case, and summary
-  formatting).
+  formatting). All calendar-dependent tests share one fixed reference date
+  (`REF_YEAR`/`REF_MONTH`/`REF_DAY` = 2024-01-03, a Wednesday) so day-offset
+  assertions stay easy to hand-verify.
 - `tests/dict.test.js` — Node's built-in `node:test` + `node:assert`, run
   against **compiled** `src/pkjs/dict.js` (not `src/ts` directly), which is
   why `npm test` has a `pretest: tsc` step.

@@ -35,6 +35,16 @@ const config = [
           { label: 'Monday', value: '1' },
           { label: 'Sunday', value: '0' },
         ] },
+      // Used in the "next occurrence" text (main list bottom bar, cron
+      // editor's Apply-row preview) whenever it falls back to showing a
+      // bare date -- Pebble's C API exposes a 12h/24h time-format query
+      // (clock_is_24h_style()) but nothing equivalent for date order, so
+      // unlike time this needs its own manual setting.
+      { type: 'select', messageKey: 'DateFormat', label: 'Date format',
+        defaultValue: '0', options: [
+          { label: 'day.month.', value: '0' },
+          { label: 'month/day', value: '1' },
+        ] },
       // Unlike everything in "New alarm defaults" below, this isn't a
       // default copied at creation time -- it's read live by every alarm's
       // ring screen (an alarm's own Sound toggle is an additional gate on

@@ -20,6 +20,7 @@ Pebble.addEventListener('webviewclosed', (e: any) => {
   });
   const settings: ClaySettings = {
     FirstDayOfWeek: s.FirstDayOfWeek,
+    DateFormat: s.DateFormat,
     AlarmVibePattern: s.AlarmVibePattern,
     DefaultSnoozeMinutes: s.DefaultSnoozeMinutes,
     DefaultSnoozeMax: s.DefaultSnoozeMax,
