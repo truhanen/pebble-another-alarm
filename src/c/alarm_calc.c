@@ -214,6 +214,52 @@ static void ac_advance_calendar_day(int *year, int *month, int *day) {
   (*year)++;
 }
 
+// 1-indexed day-of-year (Jan 1 = 1), via the same leap-aware ac_days_in_month
+// table already used for calendar walking.
+static int ac_day_of_year(int year, int month, int day) {
+  int doy = day;
+  for (int m = 1; m < month; m++) { doy += ac_days_in_month(year, m); }
+  return doy;
+}
+
+// ISO 8601 weekday: 1=Monday..7=Sunday, unlike ac_day_of_week's 0=Sunday..6=Saturday.
+static int ac_iso_weekday(int wday) {
+  return (wday == 0) ? 7 : wday;
+}
+
+// True if `year` has 53 ISO weeks (most years have 52) -- iff Jan 1 is a
+// Thursday, or `year` is a leap year and Jan 1 is a Wednesday. Needed by
+// ac_iso_week_number to resolve the "is a would-be week 53 actually week 1
+// of next year" boundary case.
+static bool ac_iso_year_has_53_weeks(int year) {
+  int jan1_wday = ac_day_of_week(year, 1, 1);
+  if (jan1_wday == 4) { return true; }   // Thursday
+  if (ac_is_leap_year(year) && jan1_wday == 3) { return true; }   // Wednesday, leap
+  return false;
+}
+
+// ISO 8601 week-of-year (1-53). Week boundaries don't align with calendar
+// year boundaries: the first few days of January can belong to the last
+// week of the PREVIOUS year, and the last few days of December can belong
+// to week 1 of the FOLLOWING year -- both handled below via the standard
+// ISO formula plus the two edge-case corrections it implies. Still pure
+// integer math, no <time.h>, consistent with every other helper here.
+static int ac_iso_week_number(int year, int month, int day) {
+  int doy = ac_day_of_year(year, month, day);
+  int isodow = ac_iso_weekday(ac_day_of_week(year, month, day));
+  int week = (doy - isodow + 10) / 7;
+  if (week < 1) {
+    // Belongs to the previous ISO week-year's last week (52 or 53).
+    return ac_iso_year_has_53_weeks(year - 1) ? 53 : 52;
+  }
+  if (week > 52 && !ac_iso_year_has_53_weeks(year)) {
+    // A would-be week 53 that this year doesn't actually have -> it's
+    // really week 1 of the following year.
+    return 1;
+  }
+  return week;
+}
+
 // Upper bound on how many calendar days ac_cron_first_match_after ever
 // walks -- deliberately NOT "large enough to always find a match": every
 // (dom_mask, month_mask, dow_mask) combination is allowed, including ones
@@ -234,17 +280,18 @@ static void ac_advance_calendar_day(int *year, int *month, int *day) {
 // more from just after it) to implement skip_next, without duplicating the
 // nested day/hour/minute scan.
 static int ac_cron_first_match_after(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask,
-                                      uint16_t month_mask, uint8_t dow_mask,
+                                      uint16_t month_mask, uint8_t dow_mask, uint64_t week_mask,
                                       int from_year, int from_month, int from_day,
                                       int from_hour, int from_min,
                                       int *out_hour, int *out_minute) {
-  if (min_mask == 0 || hour_mask == 0 || dom_mask == 0 || month_mask == 0 || dow_mask == 0) { return -1; }
+  if (min_mask == 0 || hour_mask == 0 || dom_mask == 0 || month_mask == 0 || dow_mask == 0 || week_mask == 0) { return -1; }
   int year = from_year, month = from_month, day = from_day;
   for (int off = 0; off <= CRON_DAY_SCAN_MAX; off++) {
     if (off > 0) { ac_advance_calendar_day(&year, &month, &day); }
     bool day_ok = (month_mask & AC_MONTH_BIT(month))
                && (dom_mask & AC_DOM_BIT(day))
-               && (dow_mask & AC_DAY_BIT(ac_day_of_week(year, month, day)));
+               && (dow_mask & AC_DAY_BIT(ac_day_of_week(year, month, day)))
+               && (week_mask & AC_WEEK_BIT(ac_iso_week_number(year, month, day)));
     if (!day_ok) { continue; }
     int start_hour = (off == 0) ? from_hour : 0;
     for (int hour = start_hour; hour <= 23; hour++) {
@@ -263,11 +310,11 @@ static int ac_cron_first_match_after(uint64_t min_mask, uint32_t hour_mask, uint
 }
 
 int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask,
-                              uint16_t month_mask, uint8_t dow_mask, bool skip_next,
+                              uint16_t month_mask, uint8_t dow_mask, uint64_t week_mask, bool skip_next,
                               int now_year, int now_month, int now_day, int now_hour, int now_min,
                               int *out_hour, int *out_minute) {
   int hour1, min1;
-  int off1 = ac_cron_first_match_after(min_mask, hour_mask, dom_mask, month_mask, dow_mask,
+  int off1 = ac_cron_first_match_after(min_mask, hour_mask, dom_mask, month_mask, dow_mask, week_mask,
                                         now_year, now_month, now_day, now_hour, now_min, &hour1, &min1);
   if (off1 < 0 || !skip_next) {
     if (off1 >= 0) {
@@ -281,7 +328,7 @@ int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint32_t dom
   // to get the skipped match's own calendar date to resume from.
   int year2 = now_year, month2 = now_month, day2 = now_day;
   for (int i = 0; i < off1; i++) { ac_advance_calendar_day(&year2, &month2, &day2); }
-  int off2 = ac_cron_first_match_after(min_mask, hour_mask, dom_mask, month_mask, dow_mask,
+  int off2 = ac_cron_first_match_after(min_mask, hour_mask, dom_mask, month_mask, dow_mask, week_mask,
                                         year2, month2, day2, hour1, min1, out_hour, out_minute);
   if (off2 < 0) {
     // Unreachable given validated non-zero masks (same guarantee as
@@ -295,21 +342,24 @@ int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint32_t dom
 }
 
 bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, uint16_t month_mask,
-                     uint8_t dow_mask, bool enabled,
-                     int now_month, int now_day, int now_wday, int now_hour, int now_min,
+                     uint8_t dow_mask, uint64_t week_mask, bool enabled,
+                     int now_year, int now_month, int now_day, int now_wday, int now_hour, int now_min,
                      int32_t now_epoch_min, int32_t last_fired_min) {
   if (!enabled) { return false; }
   if (last_fired_min == now_epoch_min) { return false; }   // already handled this exact minute
   if (!(month_mask & AC_MONTH_BIT(now_month))) { return false; }
   if (!(dom_mask & AC_DOM_BIT(now_day))) { return false; }
   if (!(dow_mask & AC_DAY_BIT(now_wday))) { return false; }
+  if (!(week_mask & AC_WEEK_BIT(ac_iso_week_number(now_year, now_month, now_day)))) { return false; }
   if (!(hour_mask & (1u << now_hour))) { return false; }
   if (!(min_mask & (1ULL << now_min))) { return false; }
   return true;
 }
 
 void ac_format_cron_summary(char *buf, size_t n, const char *min_str, const char *hour_str,
-                             const char *dom_str, const char *month_str, const char *dow_str) {
-  snprintf(buf, n, "%s %s %s %s %s", min_str ? min_str : "*", hour_str ? hour_str : "*",
-           dom_str ? dom_str : "*", month_str ? month_str : "*", dow_str ? dow_str : "*");
+                             const char *dom_str, const char *month_str, const char *dow_str,
+                             const char *week_str) {
+  snprintf(buf, n, "%s %s %s %s %s %s", min_str ? min_str : "*", hour_str ? hour_str : "*",
+           dom_str ? dom_str : "*", month_str ? month_str : "*", dow_str ? dow_str : "*",
+           week_str ? week_str : "*");
 }

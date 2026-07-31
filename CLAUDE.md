@@ -143,6 +143,7 @@ than trusting a mental model of the numbering.
 | `TestAlarmIncreasingVolume` | 10031 | int 0/1 | Sets `increasing_volume` directly (see "Key design points" below). |
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
+| `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -378,9 +379,11 @@ in this app at all, so every message key is now just an ordinary scalar at
   alarm loaded from `stored_schema < 9` where `is_cron` is true, it
   overwrites `cron_dom_mask`/`cron_month_mask` to `AC_DOM_ALL`/`AC_MONTH_ALL`
   (and the raw `cron_dom`/`cron_month` text to `"*"`) right after the
-  `persist_read_data` copy. Worth checking for on every FUTURE append too —
-  the "zero is a safe default" assumption doesn't automatically hold just
-  because the previous several bumps got lucky.
+  `persist_read_data` copy. Schema 10 (`cron_week_mask`, cron mode's
+  ISO-week field) needed the identical fixup, gated on its own
+  `stored_schema < 10` check — worth checking for on every FUTURE append
+  too, the "zero is a safe default" assumption doesn't automatically hold
+  just because the previous several bumps got lucky.
 - **Never copy a `MAX_ALARMS`-sized array of `Alarm` structs onto the
   stack** — a real crash, not a theoretical one: growing `Alarm` to 248
   bytes (from 184) for the schema-9 cron dom/month fields made
@@ -657,19 +660,29 @@ in this app at all, so every message key is now just an ordinary scalar at
 ## Cron-syntax alarms
 
 A third alarm schedule shape, alongside the fixed hour:minute+`repeat_days`
-legacy mode: `is_cron` alarms are defined by five independent cron-style
+legacy mode: `is_cron` alarms are defined by six independent cron-style
 fields — minute (0-59), hour (0-23), day-of-month (1-31), month (1-12),
-day-of-week (0-6) — each written as `*`, `N`, `N-M`, `*/N`, `N-M/N2`, or a
-comma-list of these (e.g. `"*/20"`, `"9-17/2"`, `"1,5,10-15"`), parsed by
-`ac_cron_parse_field` into a bitmask. Day-of-month and month were a later
-addition on top of the original 3-field (minute/hour/day-of-week) design —
-adding them required real calendar-date math (month lengths, leap years),
-which is why `alarm_calc.c` gained the small self-contained
-`ac_is_leap_year`/`ac_days_in_month`/`ac_day_of_week` (Sakamoto's algorithm)/
-`ac_advance_calendar_day` helpers below, all still pure integer math with no
-`<time.h>` dependency, preserving the host-testable-core design.
+day-of-week (0-6), ISO 8601 week-of-year (1-53) — each written as `*`, `N`,
+`N-M`, `*/N`, `N-M/N2`, or a comma-list of these (e.g. `"*/20"`, `"9-17/2"`,
+`"1,5,10-15"`), parsed by `ac_cron_parse_field` into a bitmask. Day-of-month
+and month were a later addition on top of the original 3-field
+(minute/hour/day-of-week) design — adding them required real calendar-date
+math (month lengths, leap years), which is why `alarm_calc.c` gained the
+small self-contained `ac_is_leap_year`/`ac_days_in_month`/`ac_day_of_week`
+(Sakamoto's algorithm)/`ac_advance_calendar_day` helpers below, all still
+pure integer math with no `<time.h>` dependency, preserving the
+host-testable-core design. Week-of-year was a further addition on top of
+that: `ac_day_of_year`/`ac_iso_weekday`/`ac_iso_year_has_53_weeks`/
+`ac_iso_week_number` implement the ISO week calculation, the single trickiest
+piece of pure math in this file — week boundaries don't align with calendar
+year boundaries (the first few days of January can belong to the LAST week
+of the previous year, and the last few days of December can belong to week 1
+of the FOLLOWING year), both handled by the standard ISO formula plus its
+two edge-case corrections. Verified against Python's `datetime.isocalendar()`
+(the reference implementation) for both boundary directions before being
+wired into the rest of the engine.
 
-**Every combination of the five fields is allowed** — there is no rejection
+**Every combination of the six fields is allowed** — there is no rejection
 of "conflicting" or rare/impossible combinations at all, a deliberate design
 choice (and a reversal of an earlier, more restrictive version of this
 feature — see git history if curious):
@@ -684,8 +697,16 @@ feature — see git history if curious):
   "both restricted." Implementing real cron's OR rule was deliberately
   rejected in favor of this simpler, more useful (for this app's purposes)
   semantics.
+- **Week-of-year is ANDed in the same unconditional way** — `cron_week_mask`
+  joins `dom_mask`/`month_mask`/`dow_mask`/`hour_mask`/`min_mask` as one more
+  flat AND term in `ac_cron_first_match_after`'s day-matching check, with no
+  special case. This is what makes biweekly alarms expressible: `"*/2"` in
+  week (odd ISO weeks) combined with a specific weekday and time gives "every
+  other Monday at 07:00", something neither the legacy weekly-repeat model
+  nor the original 3-field cron could express at all.
 - **Rare or literally impossible combinations (day 29 + February, day 31 +
-  April) are accepted too** — there's no validation rejecting them, because
+  April, week 53 in a year that doesn't have one) are accepted too** —
+  there's no validation rejecting them, because
   `ac_cron_next_offset_days`'s bounded forward search
   (`CRON_DAY_SCAN_MAX` = 400 days, `alarm_calc.c`, deliberately sized to
   match `wakeup_schedule()`'s own ~1-year scheduling horizon rather than
@@ -790,20 +811,23 @@ feature — see git history if curious):
   cancel, not `NULL`, since there's no prior cron state to revert to), and
   re-editing an existing cron alarm (its edit menu's Cron row — real `NULL`
   snapshot-revert cancel semantics apply here). `MenuLayer`-based: row 0
-  "Apply", rows 1-5 the five fields in display order Minute, Hour, Day,
-  Month, Weekday — `CRON_ROW_MINUTE`/`CRON_ROW_HOUR`/`CRON_ROW_DAY`/
-  `CRON_ROW_MONTH`/`CRON_ROW_DOW` assigned row numbers 1-5 in that order,
-  matching the `min_str, hour_str, dom_str, month_str, dow_str` parameter
-  order every function signature in this file uses (`cron_edit_window_push`,
-  `ac_format_cron_summary`, `ac_cron_*`) — row order and parameter order are
-  the same convention everywhere, deliberately kept in sync rather than
-  letting the on-watch display order drift from the code's own field order.
-  Each row opens the shared multitap keyboard to edit its raw text; live
-  "(invalid)" annotation if `ac_cron_parse_field` currently fails for that
-  field — never blocks typing, only Apply (`cron_submit()`) is gated on
-  every field parsing cleanly (there's no cross-field validity check any
-  more — see above). The Apply row itself (`CRON_ROW_SUBMIT`) draws a live
-  "next: ..." preview (`cron_apply_preview()`) alongside the "Apply" label,
+  "Apply", rows 1-6 the six fields in display order Minute, Hour, Day,
+  Month, Weekday, Week — `CRON_ROW_MINUTE`/`CRON_ROW_HOUR`/`CRON_ROW_DAY`/
+  `CRON_ROW_MONTH`/`CRON_ROW_DOW`/`CRON_ROW_WEEK` assigned row numbers 1-6 in
+  that order, matching the `min_str, hour_str, dom_str, month_str, dow_str,
+  week_str` parameter order every function signature in this file uses
+  (`cron_edit_window_push`, `ac_format_cron_summary`, `ac_cron_*`) — row
+  order and parameter order are the same convention everywhere, deliberately
+  kept in sync rather than letting the on-watch display order drift from the
+  code's own field order. Weekday comes before Week (not the field-addition
+  order they were introduced in) since it reads more naturally that way on
+  the watch. Each row opens the shared multitap keyboard to
+  edit its raw text; live "(invalid)" annotation if `ac_cron_parse_field`
+  currently fails for that field — never blocks typing, only Apply
+  (`cron_submit()`) is gated on every field parsing cleanly (there's no
+  cross-field validity check any more — see above). The Apply row itself
+  (`CRON_ROW_SUBMIT`) draws a live "(Next: ...)" preview
+  (`cron_apply_preview()`) alongside the "Apply" label,
   same key/value layout as every other row, computed from the currently-
   staged fields against real "now" — blank if any field is currently
   unparseable (a preview isn't meaningful for invalid syntax, and the
@@ -823,7 +847,7 @@ feature — see git history if curious):
   destructive by itself), and Time/Cron comes next ahead of Label/State,
   unlike every other row grouping in this app which puts Label first.
 - **Main list display**: the bold time slot shows "Cron" instead of a
-  formatted time; the summary line below shows all five raw cron fields
+  formatted time; the summary line below shows all six raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.
   Sort key (`cron_sort_key`, display/tie-breaking only, not used for actual
   scheduling): lowest set bit in `cron_hour_mask`/`cron_min_mask` converted
@@ -858,11 +882,13 @@ feature — see git history if curious):
   math incl. multi-fire progression across successive calls, month/day-of-
   month-restricted scans crossing a month boundary, the day-of-month-AND-
   day-of-week "first Monday of every month" case, a rare leap-day pattern
-  legitimately reporting no match within the bounded search, due-check incl.
-  the older-`last_fired_min`-still-due multi-fire case, and summary
-  formatting). All calendar-dependent tests share one fixed reference date
-  (`REF_YEAR`/`REF_MONTH`/`REF_DAY` = 2024-01-03, a Wednesday) so day-offset
-  assertions stay easy to hand-verify.
+  legitimately reporting no match within the bounded search, a biweekly
+  (week `*/2`) progression, a rare week-53 pattern legitimately reporting no
+  match, the January-belongs-to-the-previous-ISO-year boundary case,
+  due-check incl. the older-`last_fired_min`-still-due multi-fire case, and
+  summary formatting). All calendar-dependent tests share one fixed
+  reference date (`REF_YEAR`/`REF_MONTH`/`REF_DAY` = 2024-01-03, a
+  Wednesday) so day-offset assertions stay easy to hand-verify.
 - `tests/dict.test.js` — Node's built-in `node:test` + `node:assert`, run
   against **compiled** `src/pkjs/dict.js` (not `src/ts` directly), which is
   why `npm test` has a `pretest: tsc` step.

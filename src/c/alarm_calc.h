@@ -27,6 +27,13 @@
 #define AC_MONTH_BIT(m) (1u << (m))
 #define AC_MONTH_ALL 0x1FFEu       // bits 1-12 set
 
+// ISO 8601 week-of-year (1-53) bitmask for cron mode's week field --
+// 1-indexed like AC_DOM_BIT/AC_MONTH_BIT. Needs a 64-bit mask: bit 53
+// doesn't fit in a uint32_t the way AC_DOM_BIT/AC_MONTH_BIT's smaller
+// ranges do.
+#define AC_WEEK_BIT(w) (1ULL << (w))
+#define AC_WEEK_ALL 0x3FFFFFFFFFFFFEULL   // bits 1-53 set
+
 typedef struct {
   uint32_t id;             // stable identity, 0 = none assigned yet
   char name[NAME_LEN + 1];
@@ -65,8 +72,8 @@ typedef struct {
 
   // ---- cron mode (see ac_cron_* below) ----
   // A third schedule shape, alongside the hour/minute+repeat_days fields
-  // above: minute/hour/day-of-month/month/day-of-week each given as an
-  // independent cron-style field ("*", "12", "1-2", "*/20", "4-45/10",
+  // above: minute/hour/day-of-month/month/ISO-week/day-of-week each given as
+  // an independent cron-style field ("*", "12", "1-2", "*/20", "4-45/10",
   // comma-lists of these), matched every minute rather than fired at most
   // once per day. When is_cron, `repeats` is unused (forced false/ignored)
   // and `repeat_days` is REPURPOSED to hold the parsed day-of-week mask
@@ -79,14 +86,17 @@ typedef struct {
   // alarms. It's cleared by the caller (main.c) once the resumed
   // (non-skipped) occurrence actually fires.
   //
-  // Every combination of the five fields is allowed, including day-of-month
+  // Every combination of the six fields is allowed, including day-of-month
   // AND day-of-week both restricted at once, and day 29 combined with
   // February -- unlike real cron, this engine always ANDs cron_dom_mask and
   // repeat_days together rather than OR-ing them when both are restricted,
   // which is what makes patterns like "day 1-7 AND weekday Monday" (first
   // Monday of every month) expressible at all, with no special-case
-  // matching logic. There's no validation rejecting rare-or-impossible
-  // combinations (e.g. day 29 + February, or day 31 + April) either --
+  // matching logic. cron_week_mask (ISO 8601 week-of-year, 1-53) is ANDed in
+  // the same unconditional way, which is what makes biweekly patterns
+  // ("*/2" in week) expressible. There's no validation rejecting
+  // rare-or-impossible combinations (e.g. day 29 + February, day 31 +
+  // April, or week 53 in a year that doesn't have one) either --
   // ac_cron_next_offset_days() simply may not find a match within its
   // bounded forward search (CRON_DAY_SCAN_MAX, alarm_calc.c, tied to
   // wakeup_schedule()'s own ~1-year scheduling horizon), which the cron
@@ -132,6 +142,12 @@ typedef struct {
   uint16_t cron_month_mask;  // bit i (1-12, AC_MONTH_BIT) set => month i matches
   char cron_dom[CRON_FIELD_LEN];    // raw text, e.g. "1,15" — parses into cron_dom_mask
   char cron_month[CRON_FIELD_LEN];  // raw text, e.g. "3-9" — parses into cron_month_mask
+  // cron_week_mask (and its raw text) are appended here for the same reason
+  // -- see AC_WEEK_ALL's migration-fixup note in alarm_store.c. ISO 8601
+  // week-of-year (1-53), ANDed in alongside every other cron field with no
+  // special case, same as dom/month before it.
+  uint64_t cron_week_mask;   // bit i (1-53, AC_WEEK_BIT) set => ISO week i matches
+  char cron_week[CRON_FIELD_LEN];   // raw text, e.g. "*/2" — parses into cron_week_mask
 } Alarm;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
@@ -205,52 +221,56 @@ bool ac_cron_parse_field(const char *text, int min_val, int max_val, uint64_t *o
 // Day offset (0..CRON_DAY_SCAN_MAX, see alarm_calc.c) + hour/minute of this
 // cron pattern's next match STRICTLY after `now` (mirroring
 // ac_next_offset_days always reporting the next FUTURE occurrence).
-// dom_mask uses AC_DOM_BIT, month_mask uses AC_MONTH_BIT, dow_mask uses
-// AC_DAY_BIT like repeat_days. now_year/now_month/now_day are needed (unlike
-// the 3-field original) because dom_mask/month_mask restrict which real
+// dom_mask uses AC_DOM_BIT, month_mask uses AC_MONTH_BIT, week_mask uses
+// AC_WEEK_BIT (ISO 8601 week-of-year), dow_mask uses AC_DAY_BIT like
+// repeat_days. now_year/now_month/now_day are needed (unlike the 3-field
+// original) because dom_mask/month_mask/week_mask restrict which real
 // calendar dates match, which requires walking real calendar days (month
-// lengths, leap years) rather than a bare 7-day weekday wraparound --
-// alarm_calc.c still has no <time.h> dependency; see ac_is_leap_year/
-// ac_days_in_month/ac_day_of_week in alarm_calc.c, all pure integer math.
-// dom_mask/month_mask are ANDed in alongside dow_mask/hour_mask/min_mask
-// with NO special case for both being restricted at once -- unlike real
-// cron, which ORs day-of-month and day-of-week together when both are
-// restricted, this engine always ANDs them, which is what makes patterns
-// like "day 1-7 AND weekday Monday" (first Monday of every month)
+// lengths, leap years, ISO week-year boundaries) rather than a bare 7-day
+// weekday wraparound -- alarm_calc.c still has no <time.h> dependency; see
+// ac_is_leap_year/ac_days_in_month/ac_day_of_week/ac_iso_week_number in
+// alarm_calc.c, all pure integer math. dom_mask/month_mask/week_mask are
+// ANDed in alongside dow_mask/hour_mask/min_mask with NO special case for
+// multiple fields being restricted at once -- unlike real cron, which ORs
+// day-of-month and day-of-week together when both are restricted, this
+// engine always ANDs them, which is what makes patterns like "day 1-7 AND
+// weekday Monday" (first Monday of every month) or "week */2" (biweekly)
 // expressible. Every combination is allowed, including ones that rarely or
-// never produce a real calendar date (day 29 + February, day 31 + April) --
-// this function just may not find a match within CRON_DAY_SCAN_MAX days,
-// which is an ordinary, expected result (see that constant's own comment),
-// not a sign of invalid input. Returns -1 (out_hour/out_minute left unset)
-// if no bit is set anywhere in any of the five masks, or no match is found
-// within the scan bound.
+// never produce a real calendar date (day 29 + February, day 31 + April,
+// week 53 in a year without one) -- this function just may not find a
+// match within CRON_DAY_SCAN_MAX days, which is an ordinary, expected
+// result (see that constant's own comment), not a sign of invalid input.
+// Returns -1 (out_hour/out_minute left unset) if no bit is set anywhere in
+// any of the six masks, or no match is found within the scan bound.
 // `skip_next`: same meaning as ac_next_offset_days's own skip_next handling
 // -- when true, the first match is skipped and the SECOND match strictly
 // after `now` is reported instead.
 int ac_cron_next_offset_days(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask,
-                              uint16_t month_mask, uint8_t dow_mask, bool skip_next,
+                              uint16_t month_mask, uint8_t dow_mask, uint64_t week_mask, bool skip_next,
                               int now_year, int now_month, int now_day, int now_hour, int now_min,
                               int *out_hour, int *out_minute);
 
-// True if the cron pattern matches the EXACT current (now_month, now_day,
-// now_wday, now_hour, now_min) and hasn't already been marked fired for
-// this exact minute. now_epoch_min (caller-computed, e.g. now_s()/60 in
-// main.c) is the minute-granularity sibling of ac_is_due's today_day_id —
-// alarm_calc.c stays <time.h>-free, main.c owns turning wall-clock time
-// into it. No now_year needed: matching a single already-known instant,
-// not walking forward across a potential Feb 29 leap boundary, so leap-year
-// status never matters here. Unlike ac_is_due, there is no "already fired
-// today" guard: a cron alarm can fire many times a day, so only exact-minute
-// dedup (last_fired_min == now_epoch_min) blocks a re-trigger, never a
-// whole day.
+// True if the cron pattern matches the EXACT current (now_year, now_month,
+// now_day, now_wday, now_hour, now_min) and hasn't already been marked
+// fired for this exact minute. now_epoch_min (caller-computed, e.g.
+// now_s()/60 in main.c) is the minute-granularity sibling of ac_is_due's
+// today_day_id — alarm_calc.c stays <time.h>-free, main.c owns turning
+// wall-clock time into it. now_year IS needed here (unlike the 5-field
+// version of this function) because ac_iso_week_number() needs it to
+// resolve ISO week-year boundary cases (a late-December date can belong to
+// week 1 of the FOLLOWING year). Unlike ac_is_due, there is no "already
+// fired today" guard: a cron alarm can fire many times a day, so only
+// exact-minute dedup (last_fired_min == now_epoch_min) blocks a
+// re-trigger, never a whole day.
 bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, uint16_t month_mask,
-                     uint8_t dow_mask, bool enabled,
-                     int now_month, int now_day, int now_wday, int now_hour, int now_min,
+                     uint8_t dow_mask, uint64_t week_mask, bool enabled,
+                     int now_year, int now_month, int now_day, int now_wday, int now_hour, int now_min,
                      int32_t now_epoch_min, int32_t last_fired_min);
 
 // Space-joined raw cron field strings in cron field order, e.g.
-// "0-59/20 * 1 3-9 1-5" (min hour dom month dow) — truncated by the
+// "0-59/20 * 1 3-9 1-5 27" (min hour dom month dow week) — truncated by the
 // caller's own draw call (GTextOverflowModeTrailingEllipsis), same as every
 // other ac_format_* helper. Writes into buf (size n).
 void ac_format_cron_summary(char *buf, size_t n, const char *min_str, const char *hour_str,
-                             const char *dom_str, const char *month_str, const char *dow_str);
+                             const char *dom_str, const char *month_str, const char *dow_str,
+                             const char *week_str);

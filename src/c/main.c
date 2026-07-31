@@ -345,10 +345,10 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   }
 
   // Line 2: repeat summary (or the raw cron fields for cron alarms).
-  char repeat_buf[64];
+  char repeat_buf[80];
   if (a->is_cron) {
     ac_format_cron_summary(repeat_buf, sizeof(repeat_buf), a->cron_min, a->cron_hour,
-                            a->cron_dom, a->cron_month, a->cron_dow);
+                            a->cron_dom, a->cron_month, a->cron_dow, a->cron_week);
   }
   else { ac_format_repeat_summary(repeat_buf, sizeof(repeat_buf), a->repeats, a->repeat_days, s_first_day_of_week); }
   graphics_draw_text(ctx, repeat_buf, lf,
@@ -483,7 +483,7 @@ static bool compute_next_fire_time(int64_t *out_time, int *out_idx) {
     if (!a->is_cron || !a->enabled || a->snooze_until > 0) { continue; }
     int oh, om;
     int off = ac_cron_next_offset_days(a->cron_min_mask, a->cron_hour_mask, a->cron_dom_mask,
-                                        a->cron_month_mask, a->repeat_days, a->skip_next,
+                                        a->cron_month_mask, a->repeat_days, a->cron_week_mask, a->skip_next,
                                         year, month, day, hour, min, &oh, &om);
     if (off < 0) { continue; }
     time_t candidate = occurrence_to_epoch_hm(off, oh, om);
@@ -542,7 +542,6 @@ static bool sweep_due_alarms(void) {
   int32_t epoch_min = (int32_t)(now / 60);
   int cal_year, month, day;
   now_calendar(&cal_year, &month, &day);
-  (void)cal_year;   // ac_cron_is_due matches a single instant, no leap-year math needed
   bool any = false;
   for (int i = 0; i < s_count; i++) {
     Alarm *a = &s_alarms[i];
@@ -557,8 +556,8 @@ static bool sweep_due_alarms(void) {
     }
     if (a->is_cron) {
       if (!ac_cron_is_due(a->cron_min_mask, a->cron_hour_mask, a->cron_dom_mask, a->cron_month_mask,
-                           a->repeat_days, a->enabled,
-                           month, day, wday, hour, min, epoch_min, a->cron_last_fired_min)) { continue; }
+                           a->repeat_days, a->cron_week_mask, a->enabled,
+                           cal_year, month, day, wday, hour, min, epoch_min, a->cron_last_fired_min)) { continue; }
       // Multi-fire, deliberately no suppression window beyond the exact-
       // minute dedup above: the very next matching minute (e.g. every
       // minute for "*") fires again right after this one is stopped/
@@ -1266,7 +1265,9 @@ static const char *const CRON_HELP_TEXT =
   "of month, the firing of the "
   "alarm may be less regular "
   "due to leap days & half of "
-  "months missing the 31st day.\n"
+  "months missing the 31st day. "
+  "The same applies to week 53, "
+  "which not every year has.\n"
   "\n"
   "Example patterns:\n"
   "\n"
@@ -1287,15 +1288,19 @@ static const char *const CRON_HELP_TEXT =
   "fires every 20 minutes\n"
   "\n"
   "Range & step:\n"
-  "\"8-16/2\" in hour\n"
-  "fires every other hour\n"
-  "between 8-16 o'clock,\n"
-  "starting at 8\n"
+  "\"1-25/2\" in week\n"
+  "fires every other week\n"
+  "between ISO weeks 1-25\n"
   "\n"
   "Day of month + weekday:\n"
   "\"1-7\" in day, \"1\" in\n"
   "weekday fires on the first\n"
-  "Monday of every month.";
+  "Monday of every month.\n"
+  "\n"
+  "Week (ISO week-of-year):\n"
+  "\"*/2\" in week fires every\n"
+  "other week -- lets you set\n"
+  "up biweekly alarms.";
 
 static void cron_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
@@ -1363,16 +1368,17 @@ static void cron_help_window_push(void) {
 #define CRON_ROW_DAY     3
 #define CRON_ROW_MONTH   4
 #define CRON_ROW_DOW     5
-#define CRON_ROW_HELP    6
-#define CRON_ROW_COUNT   7
+#define CRON_ROW_WEEK    6
+#define CRON_ROW_HELP    7
+#define CRON_ROW_COUNT   8
 
 static Window *s_cron_window;
 static MenuLayer *s_cron_menu;
 static Layer *s_cron_bottom_bar;
 static char s_cron_min[CRON_FIELD_LEN], s_cron_hour[CRON_FIELD_LEN], s_cron_dom[CRON_FIELD_LEN],
-    s_cron_month[CRON_FIELD_LEN], s_cron_dow[CRON_FIELD_LEN];
+    s_cron_month[CRON_FIELD_LEN], s_cron_dow[CRON_FIELD_LEN], s_cron_week[CRON_FIELD_LEN];
 static void (*s_cron_on_confirm)(const char *min_str, const char *hour_str, const char *dom_str,
-                                  const char *month_str, const char *dow_str, void *ctx);
+                                  const char *month_str, const char *dow_str, const char *week_str, void *ctx);
 static void (*s_cron_on_cancel)(void *ctx);
 static void *s_cron_ctx;
 
@@ -1401,18 +1407,19 @@ static bool cron_field_valid(const char *text, int min_val, int max_val) {
 // for a rare/impossible combination, not an error.
 static void cron_apply_preview(char *buf, size_t n) {
   buf[0] = '\0';
-  uint64_t min_mask, hour_mask64, dom_mask64, month_mask64, dow_mask;
+  uint64_t min_mask, hour_mask64, dom_mask64, month_mask64, dow_mask, week_mask;
   if (!ac_cron_parse_field(s_cron_min, 0, 59, &min_mask)) { return; }
   if (!ac_cron_parse_field(s_cron_hour, 0, 23, &hour_mask64)) { return; }
   if (!ac_cron_parse_field(s_cron_dom, 1, 31, &dom_mask64)) { return; }
   if (!ac_cron_parse_field(s_cron_month, 1, 12, &month_mask64)) { return; }
   if (!ac_cron_parse_field(s_cron_dow, 0, 6, &dow_mask)) { return; }
+  if (!ac_cron_parse_field(s_cron_week, 1, 53, &week_mask)) { return; }
   int cal_year, month, day, wday, hour, min;
   now_calendar(&cal_year, &month, &day);
   now_wall(&wday, &hour, &min);
   int oh, om;
   int off = ac_cron_next_offset_days(min_mask, (uint32_t)hour_mask64, (uint32_t)dom_mask64,
-                                      (uint16_t)month_mask64, (uint8_t)dow_mask, false,
+                                      (uint16_t)month_mask64, (uint8_t)dow_mask, week_mask, false,
                                       cal_year, month, day, hour, min, &oh, &om);
   if (off < 0) { snprintf(buf, n, "(Next: never/1y)"); return; }
   time_t t = occurrence_to_epoch_hm(off, oh, om);
@@ -1457,6 +1464,10 @@ static void cron_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       key = "Weekday";
       snprintf(value, sizeof(value), "%s%s", s_cron_dow, cron_field_valid(s_cron_dow, 0, 6) ? "" : " (invalid)");
       break;
+    case CRON_ROW_WEEK:
+      key = "Week";
+      snprintf(value, sizeof(value), "%s%s", s_cron_week, cron_field_valid(s_cron_week, 1, 53) ? "" : " (invalid)");
+      break;
     case CRON_ROW_HELP:
       graphics_draw_text(ctx, "Help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                          GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
@@ -1475,7 +1486,8 @@ static void cron_field_done(const char *text, void *ctx) {
   int row = (int)(intptr_t)ctx;
   if (text) {
     char *dst = (row == CRON_ROW_MINUTE) ? s_cron_min : (row == CRON_ROW_HOUR) ? s_cron_hour :
-                (row == CRON_ROW_DAY) ? s_cron_dom : (row == CRON_ROW_MONTH) ? s_cron_month : s_cron_dow;
+                (row == CRON_ROW_DAY) ? s_cron_dom : (row == CRON_ROW_MONTH) ? s_cron_month :
+                (row == CRON_ROW_DOW) ? s_cron_dow : s_cron_week;
     strncpy(dst, text, CRON_FIELD_LEN - 1);
     dst[CRON_FIELD_LEN - 1] = '\0';
   }
@@ -1488,17 +1500,19 @@ static void cron_submit(void) {
   if (!cron_field_valid(s_cron_dom, 1, 31)) { return; }
   if (!cron_field_valid(s_cron_month, 1, 12)) { return; }
   if (!cron_field_valid(s_cron_dow, 0, 6)) { return; }
+  if (!cron_field_valid(s_cron_week, 1, 53)) { return; }
   char min_str[CRON_FIELD_LEN], hour_str[CRON_FIELD_LEN], dom_str[CRON_FIELD_LEN],
-      month_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN];
+      month_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN], week_str[CRON_FIELD_LEN];
   strncpy(min_str, s_cron_min, sizeof(min_str)); min_str[sizeof(min_str) - 1] = '\0';
   strncpy(hour_str, s_cron_hour, sizeof(hour_str)); hour_str[sizeof(hour_str) - 1] = '\0';
   strncpy(dom_str, s_cron_dom, sizeof(dom_str)); dom_str[sizeof(dom_str) - 1] = '\0';
   strncpy(month_str, s_cron_month, sizeof(month_str)); month_str[sizeof(month_str) - 1] = '\0';
   strncpy(dow_str, s_cron_dow, sizeof(dow_str)); dow_str[sizeof(dow_str) - 1] = '\0';
+  strncpy(week_str, s_cron_week, sizeof(week_str)); week_str[sizeof(week_str) - 1] = '\0';
   void *c = s_cron_ctx;
-  void (*cb)(const char *, const char *, const char *, const char *, const char *, void *) = s_cron_on_confirm;
+  void (*cb)(const char *, const char *, const char *, const char *, const char *, const char *, void *) = s_cron_on_confirm;
   window_stack_pop(true);
-  if (cb) { cb(min_str, hour_str, dom_str, month_str, dow_str, c); }
+  if (cb) { cb(min_str, hour_str, dom_str, month_str, dow_str, week_str, c); }
 }
 
 static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
@@ -1519,6 +1533,9 @@ static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
     case CRON_ROW_DOW:
       multitap_keyboard_window_push_numeric(cron_field_done, s_cron_dow, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_DOW);
       break;
+    case CRON_ROW_WEEK:
+      multitap_keyboard_window_push_numeric(cron_field_done, s_cron_week, CRON_FIELD_LEN - 1, (void *)(intptr_t)CRON_ROW_WEEK);
+      break;
     case CRON_ROW_HELP:
       cron_help_window_push();
       break;
@@ -1531,7 +1548,8 @@ static void cron_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
 // still call on_confirm with that unchanged snapshot" so callers reusing
 // this window for in-place editing never have to special-case cancel.
 static char s_cron_snapshot_min[CRON_FIELD_LEN], s_cron_snapshot_hour[CRON_FIELD_LEN],
-    s_cron_snapshot_dom[CRON_FIELD_LEN], s_cron_snapshot_month[CRON_FIELD_LEN], s_cron_snapshot_dow[CRON_FIELD_LEN];
+    s_cron_snapshot_dom[CRON_FIELD_LEN], s_cron_snapshot_month[CRON_FIELD_LEN],
+    s_cron_snapshot_dow[CRON_FIELD_LEN], s_cron_snapshot_week[CRON_FIELD_LEN];
 static void cron_back(ClickRecognizerRef r, void *ctx) {
   if (s_cron_on_cancel) {
     void *c = s_cron_ctx;
@@ -1541,16 +1559,17 @@ static void cron_back(ClickRecognizerRef r, void *ctx) {
     return;
   }
   char min_str[CRON_FIELD_LEN], hour_str[CRON_FIELD_LEN], dom_str[CRON_FIELD_LEN],
-      month_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN];
+      month_str[CRON_FIELD_LEN], dow_str[CRON_FIELD_LEN], week_str[CRON_FIELD_LEN];
   strncpy(min_str, s_cron_snapshot_min, sizeof(min_str)); min_str[sizeof(min_str) - 1] = '\0';
   strncpy(hour_str, s_cron_snapshot_hour, sizeof(hour_str)); hour_str[sizeof(hour_str) - 1] = '\0';
   strncpy(dom_str, s_cron_snapshot_dom, sizeof(dom_str)); dom_str[sizeof(dom_str) - 1] = '\0';
   strncpy(month_str, s_cron_snapshot_month, sizeof(month_str)); month_str[sizeof(month_str) - 1] = '\0';
   strncpy(dow_str, s_cron_snapshot_dow, sizeof(dow_str)); dow_str[sizeof(dow_str) - 1] = '\0';
+  strncpy(week_str, s_cron_snapshot_week, sizeof(week_str)); week_str[sizeof(week_str) - 1] = '\0';
   void *c = s_cron_ctx;
-  void (*cb)(const char *, const char *, const char *, const char *, const char *, void *) = s_cron_on_confirm;
+  void (*cb)(const char *, const char *, const char *, const char *, const char *, const char *, void *) = s_cron_on_confirm;
   window_stack_pop(true);
-  if (cb) { cb(min_str, hour_str, dom_str, month_str, dow_str, c); }
+  if (cb) { cb(min_str, hour_str, dom_str, month_str, dow_str, week_str, c); }
 }
 // Long-press SELECT submits outright regardless of cursor position; long-
 // press BACK is an explicit no-op (matches the repeat editor's convention).
@@ -1616,20 +1635,22 @@ static void cron_window_unload(Window *w) {
   layer_destroy(s_cron_bottom_bar); s_cron_bottom_bar = NULL;
 }
 static void cron_edit_window_push(const char *min_str, const char *hour_str, const char *dom_str,
-    const char *month_str, const char *dow_str,
+    const char *month_str, const char *dow_str, const char *week_str,
     void (*on_confirm)(const char *min_str, const char *hour_str, const char *dom_str,
-                        const char *month_str, const char *dow_str, void *ctx),
+                        const char *month_str, const char *dow_str, const char *week_str, void *ctx),
     void (*on_cancel)(void *ctx), void *ctx) {
   strncpy(s_cron_min, min_str ? min_str : "*", CRON_FIELD_LEN - 1); s_cron_min[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_cron_hour, hour_str ? hour_str : "*", CRON_FIELD_LEN - 1); s_cron_hour[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_cron_dom, dom_str ? dom_str : "*", CRON_FIELD_LEN - 1); s_cron_dom[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_cron_month, month_str ? month_str : "*", CRON_FIELD_LEN - 1); s_cron_month[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_cron_dow, dow_str ? dow_str : "*", CRON_FIELD_LEN - 1); s_cron_dow[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_cron_week, week_str ? week_str : "*", CRON_FIELD_LEN - 1); s_cron_week[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_cron_snapshot_min, s_cron_min, CRON_FIELD_LEN);
   strncpy(s_cron_snapshot_hour, s_cron_hour, CRON_FIELD_LEN);
   strncpy(s_cron_snapshot_dom, s_cron_dom, CRON_FIELD_LEN);
   strncpy(s_cron_snapshot_month, s_cron_month, CRON_FIELD_LEN);
   strncpy(s_cron_snapshot_dow, s_cron_dow, CRON_FIELD_LEN);
+  strncpy(s_cron_snapshot_week, s_cron_week, CRON_FIELD_LEN);
   s_cron_on_confirm = on_confirm; s_cron_on_cancel = on_cancel; s_cron_ctx = ctx;
   if (!s_cron_window) {
     s_cron_window = window_create();
@@ -2015,7 +2036,7 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
   edit_build_rows(kinds, a->is_cron);
   GRect b = layer_get_bounds(cell_layer);
   const char *key = "";
-  char value[64] = "";
+  char value[80] = "";
   switch (kinds[cell_index->row]) {
     case EDIT_ROW_LABEL:
       key = "Label";
@@ -2043,7 +2064,7 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
     case EDIT_ROW_CRON:
       key = "Cron";
       ac_format_cron_summary(value, sizeof(value), a->cron_min, a->cron_hour,
-                              a->cron_dom, a->cron_month, a->cron_dow);
+                              a->cron_dom, a->cron_month, a->cron_dow, a->cron_week);
       break;
     case EDIT_ROW_SNOOZE:
       key = "Snooze";
@@ -2135,7 +2156,7 @@ static void edit_on_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
 // alarm (its Cron row) -- both just need the alarm's schedule fields
 // replaced with a fresh parse, so one function handles both.
 static void edit_on_cron_confirm(const char *min_str, const char *hour_str, const char *dom_str,
-                                  const char *month_str, const char *dow_str, void *ctx) {
+                                  const char *month_str, const char *dow_str, const char *week_str, void *ctx) {
   if (s_edit_idx >= 0 && s_edit_idx < s_count) {
     Alarm *a = &s_alarms[s_edit_idx];
     a->is_cron = true;
@@ -2156,11 +2177,15 @@ static void edit_on_cron_confirm(const char *min_str, const char *hour_str, cons
     uint64_t dow_mask = 0;
     if (!ac_cron_parse_field(dow_str, 0, 6, &dow_mask)) { ac_cron_parse_field("*", 0, 6, &dow_mask); }
     a->repeat_days = (uint8_t)dow_mask;
+    uint64_t week_mask = 0;
+    if (!ac_cron_parse_field(week_str, 1, 53, &week_mask)) { ac_cron_parse_field("*", 1, 53, &week_mask); }
+    a->cron_week_mask = week_mask;
     strncpy(a->cron_min, min_str, CRON_FIELD_LEN - 1); a->cron_min[CRON_FIELD_LEN - 1] = '\0';
     strncpy(a->cron_hour, hour_str, CRON_FIELD_LEN - 1); a->cron_hour[CRON_FIELD_LEN - 1] = '\0';
     strncpy(a->cron_dom, dom_str, CRON_FIELD_LEN - 1); a->cron_dom[CRON_FIELD_LEN - 1] = '\0';
     strncpy(a->cron_month, month_str, CRON_FIELD_LEN - 1); a->cron_month[CRON_FIELD_LEN - 1] = '\0';
     strncpy(a->cron_dow, dow_str, CRON_FIELD_LEN - 1); a->cron_dow[CRON_FIELD_LEN - 1] = '\0';
+    strncpy(a->cron_week, week_str, CRON_FIELD_LEN - 1); a->cron_week[CRON_FIELD_LEN - 1] = '\0';
     // No eager-fire guard needed (see alarm_calc.h's is_cron doc comment):
     // firing right away if the freshly-edited pattern currently matches is
     // correct multi-fire cron behavior, not a bug to suppress.
@@ -2178,7 +2203,7 @@ static void edit_on_time_chord(void *ctx) {
   char min_str[8], hour_str[8];
   snprintf(min_str, sizeof(min_str), "%d", s_time_minute);
   snprintf(hour_str, sizeof(hour_str), "%d", s_time_hour);
-  cron_edit_window_push(min_str, hour_str, "*", "*", "*", edit_on_cron_confirm, edit_cron_convert_cancel, NULL);
+  cron_edit_window_push(min_str, hour_str, "*", "*", "*", "*", edit_on_cron_confirm, edit_cron_convert_cancel, NULL);
 }
 
 static void edit_on_repeat_confirm(bool repeats, uint8_t repeat_days, void *ctx) {
@@ -2233,7 +2258,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       repeat_edit_window_push(a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
       break;
     case EDIT_ROW_CRON:
-      cron_edit_window_push(a->cron_min, a->cron_hour, a->cron_dom, a->cron_month, a->cron_dow,
+      cron_edit_window_push(a->cron_min, a->cron_hour, a->cron_dom, a->cron_month, a->cron_dow, a->cron_week,
                              edit_on_cron_confirm, NULL, NULL);
       break;
     case EDIT_ROW_SNOOZE:
@@ -2356,7 +2381,7 @@ static void new_alarm_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
 // and Repeat is skipped entirely (day-of-week now lives in the cron dow
 // field) -- straight on to Snooze.
 static void new_alarm_cron_confirm(const char *min_str, const char *hour_str, const char *dom_str,
-                                    const char *month_str, const char *dow_str, void *ctx) {
+                                    const char *month_str, const char *dow_str, const char *week_str, void *ctx) {
   s_draft.is_cron = true;
   s_draft.repeats = false;
   ac_cron_parse_field(min_str, 0, 59, &s_draft.cron_min_mask);
@@ -2372,11 +2397,15 @@ static void new_alarm_cron_confirm(const char *min_str, const char *hour_str, co
   uint64_t dow_mask = 0;
   ac_cron_parse_field(dow_str, 0, 6, &dow_mask);
   s_draft.repeat_days = (uint8_t)dow_mask;
+  uint64_t week_mask = 0;
+  ac_cron_parse_field(week_str, 1, 53, &week_mask);
+  s_draft.cron_week_mask = week_mask;
   strncpy(s_draft.cron_min, min_str, CRON_FIELD_LEN - 1); s_draft.cron_min[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_draft.cron_hour, hour_str, CRON_FIELD_LEN - 1); s_draft.cron_hour[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_draft.cron_dom, dom_str, CRON_FIELD_LEN - 1); s_draft.cron_dom[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_draft.cron_month, month_str, CRON_FIELD_LEN - 1); s_draft.cron_month[CRON_FIELD_LEN - 1] = '\0';
   strncpy(s_draft.cron_dow, dow_str, CRON_FIELD_LEN - 1); s_draft.cron_dow[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(s_draft.cron_week, week_str, CRON_FIELD_LEN - 1); s_draft.cron_week[CRON_FIELD_LEN - 1] = '\0';
   s_draft.cron_last_fired_min = -1;
   multitap_keyboard_window_push_ex(new_alarm_label_done, "", NAME_LEN, NULL);
 }
@@ -2389,7 +2418,7 @@ static void new_alarm_time_chord(void *ctx) {
   char hour_str[8];
   int next_full_hour = (s_time_minute > 0) ? (s_time_hour + 1) % 24 : s_time_hour;
   snprintf(hour_str, sizeof(hour_str), "%d", next_full_hour);
-  cron_edit_window_push("0", hour_str, "*", "*", "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
+  cron_edit_window_push("0", hour_str, "*", "*", "*", "*", new_alarm_cron_confirm, new_alarm_wizard_cancel, NULL);
 }
 
 static void start_new_alarm_flow(void) {
@@ -2708,6 +2737,16 @@ static bool handle_test_message(DictionaryIterator *iter) {
           APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmCronMonth %s", a->cron_month);
         }
         a->cron_month_mask = (uint16_t)month_mask64;
+        changed = true;
+      }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronWeek))) {
+        strncpy(a->cron_week, t->value->cstring, CRON_FIELD_LEN - 1);
+        a->cron_week[CRON_FIELD_LEN - 1] = '\0';
+        uint64_t week_mask = 0;
+        if (!ac_cron_parse_field(a->cron_week, 1, 53, &week_mask)) {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmCronWeek %s", a->cron_week);
+        }
+        a->cron_week_mask = week_mask;
         changed = true;
       }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmCronDow))) {

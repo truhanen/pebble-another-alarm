@@ -17,20 +17,23 @@
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 9   // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+#define STORE_SCHEMA 10  // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
                           // then vibe_pattern (per-alarm vibration pattern override), then
                           // increasing_volume (per-alarm ramp-up-to-max toggle), then cron
                           // day-of-month/month fields (cron_dom_mask, cron_month_mask,
-                          // cron_dom, cron_month) for cron mode's 5-field extension.
+                          // cron_dom, cron_month) for cron mode's 5-field extension, then
+                          // cron_week_mask/cron_week (ISO week-of-year) for the 6-field
+                          // extension.
                           //
-                          // The cron_dom_mask/cron_month_mask bump needs more than just a
-                          // size-table entry: a freshly zero-filled mask on migration means
-                          // "matches nothing", unlike increasing_volume's 0=off (already the
-                          // right default) -- store_load() explicitly re-fills these to
-                          // AC_DOM_ALL/AC_MONTH_ALL (and cron_dom/cron_month to "*") for any
-                          // migrated is_cron alarm, or every existing cron alarm's day/month
-                          // matching would silently die the instant this shipped.
+                          // The cron_dom_mask/cron_month_mask/cron_week_mask bumps need more
+                          // than just a size-table entry: a freshly zero-filled mask on
+                          // migration means "matches nothing", unlike increasing_volume's
+                          // 0=off (already the right default) -- store_load() explicitly
+                          // re-fills these to AC_DOM_ALL/AC_MONTH_ALL/AC_WEEK_ALL (and
+                          // cron_dom/cron_month/cron_week to "*") for any migrated is_cron
+                          // alarm, or every existing cron alarm's matching would silently die
+                          // the instant this shipped.
                           //
                           // Every field added to Alarm so far (including vibe_pattern and
                           // increasing_volume) was appended at the very end of the struct,

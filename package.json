@@ -58,7 +58,8 @@
       "TestAlarmIncreasingVolume",
       "TestAlarmCronDom",
       "TestAlarmCronMonth",
-      "DateFormat"
+      "DateFormat",
+      "TestAlarmCronWeek"
     ],
     "resources": {
       "media": [

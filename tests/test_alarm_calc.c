@@ -309,7 +309,7 @@ static void test_cron_next_offset_days_matches_now_reports_next_future(void) {
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
   // Every minute matches; "now" itself doesn't count -- next hit is the very next minute.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 0 && oh == 10 && om == 31);
 }
@@ -319,10 +319,10 @@ static void test_cron_next_offset_days_later_same_day(void) {
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 5, &oh, &om);
   assert(off == 0 && oh == 10 && om == 20);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                   REF_YEAR, REF_MONTH, REF_DAY, 10, 45, &oh, &om);
   assert(off == 0 && oh == 11 && om == 0);   // rolls into next matching hour
 }
@@ -333,7 +333,7 @@ static void test_cron_next_offset_days_tomorrow_when_dow_skips_today(void) {
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
   // Today is Wed (Jan 3); only Mon matches -> next Monday, Jan 8 -> 5 days out.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, false,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 5);
 }
@@ -346,13 +346,13 @@ static void test_cron_next_offset_days_multi_fire_progression(void) {
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh, om;
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 23, 45, &oh, &om);
   assert(off == 1 && oh == 0 && om == 0);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                   REF_YEAR, REF_MONTH, REF_DAY, 0, 0, &oh, &om);
   assert(off == 0 && oh == 0 && om == 20);
-  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
+  off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                   REF_YEAR, REF_MONTH, REF_DAY, 0, 20, &oh, &om);
   assert(off == 0 && oh == 0 && om == 40);
 }
@@ -366,7 +366,7 @@ static void test_cron_next_offset_days_skip_next_same_day(void) {
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
   int oh = -1, om = -1;
   // Without skip: next hit after 10:05 is 10:20.
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 5, &oh, &om);
   assert(off == 0 && oh == 10 && om == 40);   // 10:20 skipped -> 10:40
 }
@@ -379,7 +379,7 @@ static void test_cron_next_offset_days_skip_next_across_day_boundary(void) {
   // First hit after 23:45 is tomorrow 00:00; skipping it lands on 00:20,
   // still tomorrow (offset 1, not 2) -- the skip must resume the scan from
   // the skipped hit's own day, not from `now`'s day again.
-  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
+  int off = ac_cron_next_offset_days(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
                                       REF_YEAR, REF_MONTH, REF_DAY, 23, 45, &oh, &om);
   assert(off == 1 && oh == 0 && om == 20);
 }
@@ -395,7 +395,7 @@ static void test_cron_next_offset_days_skip_next_across_dow_gap(void) {
   // First hit from Wed (Jan 3) 10:30 is next Monday, Jan 8 (offset 5);
   // skipping it must land on the Monday AFTER THAT, Jan 15 (offset 12), not
   // the very next day.
-  int off = ac_cron_next_offset_days(min30, (uint32_t)hour10, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, true,
+  int off = ac_cron_next_offset_days(min30, (uint32_t)hour10, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, AC_WEEK_ALL, true,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 12 && oh == 10 && om == 30);
 }
@@ -411,7 +411,7 @@ static void test_cron_next_offset_days_month_restricted(void) {
   // (leap year) -> (31-3) + 29 + 1 = 58). A future day (off > 0) always
   // starts its own hour/minute scan from 0:00, unlike off == 0 which
   // continues from `now`'s own hour/minute.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, (uint16_t)month_mar, AC_DAY_ALL, false,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, (uint16_t)month_mar, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 58 && oh == 0 && om == 0);
 }
@@ -425,7 +425,7 @@ static void test_cron_next_offset_days_dom_restricted_skips_short_month(void) {
   assert(ac_cron_parse_field("31", 1, 31, &dom31));
   int oh, om;
   // From Jan 3, the next 31st is Jan 31 itself (28 days out).
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom31, AC_MONTH_ALL, AC_DAY_ALL, false,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom31, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 28);
 }
@@ -441,7 +441,7 @@ static void test_cron_next_offset_days_leap_day_with_safe_fallback(void) {
   assert(ac_cron_parse_field("2", 1, 12, &month_feb));
   int oh, om;
   int off = ac_cron_next_offset_days((uint64_t)min_all, (uint32_t)hour_all, (uint32_t)dom_15_29,
-                                      (uint16_t)month_feb, AC_DAY_ALL, false,
+                                      (uint16_t)month_feb, AC_DAY_ALL, AC_WEEK_ALL, false,
                                       REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   // From Jan 3 2024 (a leap year, so Feb 29 exists this very year), the next
   // match is still Feb 15 (day 15 comes before day 29): 12 days left in Jan + 15 = 43.
@@ -452,16 +452,16 @@ static void test_cron_is_due_matches_and_not_yet_fired_this_minute(void) {
   uint64_t m20, hour_all;
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == true);
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == true);
 }
 
 static void test_cron_is_due_already_fired_this_exact_minute(void) {
   uint64_t m20, hour_all;
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 1000) == false);
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 1000) == false);
 }
 
 // Multi-fire: an older last_fired_min doesn't block the CURRENT match, unlike
@@ -470,38 +470,43 @@ static void test_cron_is_due_older_last_fired_still_due(void) {
   uint64_t m20, hour_all;
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 980) == true);
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 980) == true);
 }
 
 static void test_cron_is_due_field_mismatch(void) {
   uint64_t m20, hour_all;
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 21, 1000, 999) == false);   // minute mismatch
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);   // dow mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 21, 1000, 999) == false);   // minute mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);   // dow mismatch
   uint64_t hour9;
   assert(ac_cron_parse_field("9", 0, 23, &hour9));
-  assert(ac_cron_is_due(m20, (uint32_t)hour9, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // hour mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour9, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // hour mismatch
   uint64_t dom_9;
   assert(ac_cron_parse_field("9", 1, 31, &dom_9));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, (uint32_t)dom_9, AC_MONTH_ALL, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // dom mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, (uint32_t)dom_9, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // dom mismatch
   uint64_t month_6;
   assert(ac_cron_parse_field("6", 1, 12, &month_6));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, (uint16_t)month_6, AC_DAY_ALL, true,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // month mismatch
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, (uint16_t)month_6, AC_DAY_ALL, AC_WEEK_ALL, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // month mismatch
+  // Jan 3 2024 is ISO week 1 -- pick a week it ISN'T to test the mismatch.
+  uint64_t week_2;
+  assert(ac_cron_parse_field("2", 1, 53, &week_2));
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, week_2, true,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);      // week mismatch
 }
 
 static void test_cron_is_due_disabled_never(void) {
   uint64_t m20, hour_all;
   assert(ac_cron_parse_field("*/20", 0, 59, &m20));
   assert(ac_cron_parse_field("*", 0, 23, &hour_all));
-  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, false,
-                         REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);
+  assert(ac_cron_is_due(m20, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL, false,
+                         REF_YEAR, REF_MONTH, REF_DAY, 3, 10, 20, 1000, 999) == false);
 }
 
 // AND semantics (not real cron's OR-when-both-restricted rule): day-of-month
@@ -516,7 +521,7 @@ static void test_cron_next_offset_days_dom_and_dow_first_monday_of_month(void) {
   int oh, om;
   // From Jan 3 2024 (Wed): Jan's first Monday (Jan 1) already passed, so the
   // next "day 1-7 AND Monday" match is Feb 5, 2024 -- 33 days out.
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom_1_7, AC_MONTH_ALL, (uint8_t)dow_mon,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom_1_7, AC_MONTH_ALL, (uint8_t)dow_mon, AC_WEEK_ALL,
                                       false, REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
   assert(off == 33 && oh == 0 && om == 0);
 }
@@ -534,17 +539,76 @@ static void test_cron_next_offset_days_rare_leap_day_reports_no_match(void) {
   assert(ac_cron_parse_field("29", 1, 31, &dom_29));
   assert(ac_cron_parse_field("2", 1, 12, &month_feb));
   int oh, om;
-  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom_29, (uint16_t)month_feb, AC_DAY_ALL,
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, (uint32_t)dom_29, (uint16_t)month_feb, AC_DAY_ALL, AC_WEEK_ALL,
                                       false, 2024, 3, 1, 10, 30, &oh, &om);
   assert(off == -1);
 }
 
+// Biweekly pattern: week restricted to "*/2" (odd ISO weeks starting at 1).
+// Biweekly pattern: a single weekly Monday-00:00 slot, restricted to odd ISO
+// weeks (1,3,5,...,53) -- this is what "*/2" in week actually buys you: with
+// minute/hour left wide open, every minute of every odd week would match
+// (nothing to skip TO but the next minute), so this test pins minute/hour/
+// weekday down to one occurrence per week to make the biweekly cadence
+// observable.
+static void test_cron_next_offset_days_biweekly(void) {
+  uint64_t min0, hour0, week_odd, dow_mon;
+  assert(ac_cron_parse_field("0", 0, 59, &min0));
+  assert(ac_cron_parse_field("0", 0, 23, &hour0));
+  assert(ac_cron_parse_field("1-53/2", 1, 53, &week_odd));   // odd weeks: 1,3,5,...,53
+  assert(ac_cron_parse_field("1", 0, 6, &dow_mon));
+  int oh, om;
+  // From Jan 3 2024 (Wed, week 1) 10:30: the first Monday-00:00-in-an-odd-week
+  // is Jan 15 2024 (week 3, since week 2's Monday, Jan 8, is an EVEN week) --
+  // 12 days out.
+  int off = ac_cron_next_offset_days(min0, (uint32_t)hour0, AC_DOM_ALL, AC_MONTH_ALL, (uint8_t)dow_mon, week_odd, false,
+                                      REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
+  assert(off == 12 && oh == 0 && om == 0);
+  // skip_next jumps two weeks further: week 5's Monday, Jan 29 2024 -- 26 days out.
+  off = ac_cron_next_offset_days(min0, (uint32_t)hour0, AC_DOM_ALL, AC_MONTH_ALL, (uint8_t)dow_mon, week_odd, true,
+                                  REF_YEAR, REF_MONTH, REF_DAY, 10, 30, &oh, &om);
+  assert(off == 26 && oh == 0 && om == 0);
+}
+
+// week 53 doesn't exist in every year (2025 has only 52 ISO weeks) -- from
+// 2025-01-01, searching week 53 only doesn't resolve within the bound (next
+// real week 53 is 2026-12-28, far beyond CRON_DAY_SCAN_MAX).
+static void test_cron_next_offset_days_rare_week53_reports_no_match(void) {
+  uint64_t min_all, hour_all, week53;
+  assert(ac_cron_parse_field("*", 0, 59, &min_all));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_parse_field("53", 1, 53, &week53));
+  int oh, om;
+  int off = ac_cron_next_offset_days(min_all, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, week53,
+                                      false, 2025, 1, 1, 10, 30, &oh, &om);
+  assert(off == -1);
+}
+
+// The January-belongs-to-previous-ISO-year boundary: 2027-01-01 (a Friday)
+// is still ISO week 53 of 2026 (since 2026 has 53 weeks), NOT week 1 of
+// 2027. Restricted to Friday + week 53 (rather than leaving weekday/minute/
+// hour wide open, which would trivially match at the very next minute
+// without ever exercising the year-boundary logic): from 2026-12-31
+// (Thursday, also week 53), the next Friday-in-week-53 is 2027-01-01 --
+// 1 day out, not a multi-year hunt for 2032's week 53's Friday.
+static void test_cron_next_offset_days_week_crosses_new_year(void) {
+  uint64_t min0, hour0, week53, dow_fri;
+  assert(ac_cron_parse_field("0", 0, 59, &min0));
+  assert(ac_cron_parse_field("0", 0, 23, &hour0));
+  assert(ac_cron_parse_field("53", 1, 53, &week53));
+  assert(ac_cron_parse_field("5", 0, 6, &dow_fri));
+  int oh, om;
+  int off = ac_cron_next_offset_days(min0, (uint32_t)hour0, AC_DOM_ALL, AC_MONTH_ALL, (uint8_t)dow_fri, week53,
+                                      false, 2026, 12, 31, 0, 0, &oh, &om);
+  assert(off == 1);
+}
+
 static void test_format_cron_summary(void) {
   char buf[64];
-  ac_format_cron_summary(buf, sizeof(buf), "*/20", "*", "1", "3-9", "1-5");
-  assert(strcmp(buf, "*/20 * 1 3-9 1-5") == 0);
-  ac_format_cron_summary(buf, sizeof(buf), NULL, NULL, NULL, NULL, NULL);
-  assert(strcmp(buf, "* * * * *") == 0);
+  ac_format_cron_summary(buf, sizeof(buf), "*/20", "*", "1", "3-9", "1-5", "27");
+  assert(strcmp(buf, "*/20 * 1 3-9 1-5 27") == 0);
+  ac_format_cron_summary(buf, sizeof(buf), NULL, NULL, NULL, NULL, NULL, NULL);
+  assert(strcmp(buf, "* * * * * *") == 0);
 }
 
 int main(void) {
@@ -599,6 +663,9 @@ int main(void) {
   test_cron_is_due_disabled_never();
   test_cron_next_offset_days_dom_and_dow_first_monday_of_month();
   test_cron_next_offset_days_rare_leap_day_reports_no_match();
+  test_cron_next_offset_days_biweekly();
+  test_cron_next_offset_days_rare_week53_reports_no_match();
+  test_cron_next_offset_days_week_crosses_new_year();
   test_format_cron_summary();
   printf("all alarm_calc tests passed\n");
   return 0;

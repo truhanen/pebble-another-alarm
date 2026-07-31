@@ -23,10 +23,12 @@ static size_t alarm_size_for_schema(int schema) {
     case 9: return 248;   // + cron_dom_mask (uint32) + cron_month_mask (uint16)
                            // + cron_dom/cron_month (CRON_FIELD_LEN each) --
                            // frozen sizeof(Alarm) captured at the moment
-                           // schema became 9, for the NEXT bump to forward-
-                           // migrate from (this entry is otherwise unused
-                           // until then, since store_load() only consults
-                           // this table for schemas OLDER than STORE_SCHEMA)
+                           // schema became 9, for forward migration from it
+    case 10: return 288;  // + cron_week_mask (uint64) + cron_week
+                           // (CRON_FIELD_LEN) for cron mode's ISO-week field
+                           // -- frozen sizeof(Alarm) captured at the moment
+                           // schema became 10, for the NEXT bump to
+                           // forward-migrate from
     default: return 0;
   }
 }
@@ -62,17 +64,22 @@ int store_load(Alarm *out) {
     if (persist_exists(PERSIST_KEY_ALARM_BASE + i)) {
       persist_read_data(PERSIST_KEY_ALARM_BASE + i, &out[i], sizeof(Alarm));
     }
-    // cron_dom_mask/cron_month_mask are new in schema 9 -- a stored blob
-    // older than that has them zero-filled by the memset above, which means
-    // "matches nothing" rather than the intended "unrestricted" default.
-    // Only cron alarms care (the fields are unused otherwise), but for one
-    // of those, leaving them at 0 would silently and permanently stop its
-    // day/month matching the instant this schema bump ships.
+    // cron_dom_mask/cron_month_mask are new in schema 9, cron_week_mask in
+    // schema 10 -- a stored blob older than each has that field zero-filled
+    // by the memset above, which means "matches nothing" rather than the
+    // intended "unrestricted" default. Only cron alarms care (the fields
+    // are unused otherwise), but for one of those, leaving them at 0 would
+    // silently and permanently stop its matching the instant this schema
+    // bump ships.
     if (migrating && stored_schema < 9 && out[i].is_cron) {
       out[i].cron_dom_mask = AC_DOM_ALL;
       out[i].cron_month_mask = AC_MONTH_ALL;
       strcpy(out[i].cron_dom, "*");
       strcpy(out[i].cron_month, "*");
+    }
+    if (migrating && stored_schema < 10 && out[i].is_cron) {
+      out[i].cron_week_mask = AC_WEEK_ALL;
+      strcpy(out[i].cron_week, "*");
     }
   }
   if (migrating) {
