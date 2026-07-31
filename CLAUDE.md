@@ -473,21 +473,26 @@ in this app at all, so every message key is now just an ordinary scalar at
   the cycle replaces that guard with reversibility instead — every state is
   one more short-press away from undoing itself, so there's no destructive
   step to guard. The edit menu's own State row (`edit_select`'s
-  `EDIT_ROW_ENABLE` case) is unchanged and still uses the confirm-prompt
-  version (`edit_on_enable_choice`) — this cycle is specific to the main
-  list. Long-press opens the full edit menu (`open_edit_window`), which every
-  other field lives behind now. The "+ New alarm" row only responds to
-  short-press (starts the wizard); long-press on it is an explicit no-op,
-  not "open some nonexistent edit menu for it".
-- **`skip_next` toggles both ways from either entry point**: the main list's
-  cycle sets it on the disabled -> enabled-with-skip transition and clears it
-  on the enabled-with-skip -> enabled (normal) transition; the edit menu's
-  State row still goes through the "Disable" / "Skip next occurrence" (or
-  "Enable next occurrence", if a skip is already pending) confirm prompt
-  (`edit_on_enable_choice`), same choice-slot-undoes-itself convention as
-  before. The edit menu's State row surfaces the pending state too: it reads
-  "Skip next" (not "Enabled") whenever `enabled && repeats && skip_next`, so
-  it isn't otherwise invisible until its occurrence silently doesn't ring.
+  `EDIT_ROW_ENABLE` case) now shares this exact cycle too — it just calls
+  `ml_cycle_alarm_state(s_edit_idx)` directly (`s_edit_idx` indexes
+  `s_alarms` the same way the main list's row index does after resolving
+  `s_order`), then reloads the edit `MenuLayer` itself since `reload_ui()`
+  doesn't know about it. This used to be a separate confirm-prompt version
+  (`edit_on_enable_choice`, now removed) that asked "Disable" vs "Skip next
+  occurrence" — replaced for the same reversibility reason the main list's
+  own confirm prompt was dropped, and so the two entry points no longer
+  diverge in behavior. Long-press opens the full edit menu
+  (`open_edit_window`), which every other field lives behind now. The "+ New
+  alarm" row only responds to short-press (starts the wizard); long-press on
+  it is an explicit no-op, not "open some nonexistent edit menu for it".
+- **`skip_next` toggles both ways from either entry point**: both the main
+  list's cycle and the edit menu's State row now go through the same
+  `ml_cycle_alarm_state` — it sets `skip_next` on the disabled ->
+  enabled-with-skip transition and clears it on the enabled-with-skip ->
+  enabled (normal) transition. The edit menu's State row surfaces the
+  pending state too: it reads "Skip next" (not "Enabled") whenever
+  `enabled && (repeats || is_cron) && skip_next`, so it isn't otherwise
+  invisible until its occurrence silently doesn't ring.
 - **Visual style matches `pebble-another-timer`**, ported deliberately:
   - The main list (`ml_row_colors`/`ml_draw_alarm_row`) mirrors timer's
     `ml_row_colors`/`ml_draw_row` — per-row state tinting (snoozing=red,

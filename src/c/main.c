@@ -2025,18 +2025,6 @@ static void edit_on_snooze_confirm(uint16_t minutes, uint8_t max_count, void *ct
   if (s_edit_menu) { menu_layer_reload_data(s_edit_menu); }
 }
 
-static void edit_on_enable_choice(int choice, void *ctx) {
-  // choice 0 = "Disable", choice 1 = "Skip next occurrence" / "Enable next
-  // occurrence" — toggles skip_next either way, so a pending skip can be
-  // undone the same way it was set.
-  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
-  Alarm *a = &s_alarms[s_edit_idx];
-  if (choice == 0) { a->enabled = false; a->skip_next = false; }
-  else { a->skip_next = !a->skip_next; }
-  persist_all(); rearm_wakeup(); reload_ui();
-  if (s_edit_menu) { menu_layer_reload_data(s_edit_menu); }
-}
-
 static void edit_on_delete_choice(int choice, void *ctx) {
   if (choice != 0) { return; }   // 0 = "Delete", 1 = "Cancel"
   if (s_edit_idx >= 0 && s_edit_idx < s_count) {
@@ -2056,33 +2044,11 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       multitap_keyboard_window_push_ex(edit_on_label_done, a->name, NAME_LEN, NULL);
       break;
     case EDIT_ROW_ENABLE:
-      if ((a->repeats || a->is_cron) && a->enabled) {
-        const char *label1 = a->skip_next ? "Enable next occurrence" : "Skip next occurrence";
-        confirm_window_push("Disable", label1, edit_on_enable_choice, NULL);
-      } else {
-        bool was_enabled = a->enabled;
-        a->enabled = !a->enabled;
-        // Re-enabling must resync a stale last_fired_day — a one-time alarm
-        // auto-disables (ac_mark_fired) and stamps last_fired_day to the day
-        // it fired. Blindly clearing it to -1 fixes re-enabling-then-picking-
-        // a-later-time-today, but if the alarm's (possibly unchanged) time
-        // has already passed today, that same unconditional clear makes it
-        // look immediately due the instant the app is reopened — resync
-        // instead, which correctly waits for its real next occurrence.
-        if (!was_enabled && a->enabled) {
-          // resync_last_fired_for_schedule_change reads repeat_days under
-          // LEGACY (weekly-repeat weekday) semantics -- a cron alarm
-          // repurposes repeat_days as its day-of-week mask, so it must take
-          // the "no eager-fire guard needed" cron path instead (see
-          // alarm_calc.h's is_cron doc comment): the pattern currently
-          // matching right now IS the real next occurrence for cron.
-          if (a->is_cron) { a->cron_last_fired_min = -1; }
-          else { resync_last_fired_for_schedule_change(a); }
-        }
-        if (!a->enabled) { a->skip_next = false; }
-        persist_all(); rearm_wakeup(); reload_ui();
-        menu_layer_reload_data(s_edit_menu);
-      }
+      // Same three-state (or two-state, for a plain one-time alarm) cycle as
+      // the main list's short-press — no confirm prompt, since every state
+      // is one more press away from undoing itself.
+      ml_cycle_alarm_state(s_edit_idx);
+      menu_layer_reload_data(s_edit_menu);
       break;
     case EDIT_ROW_TIME:
       time_edit_window_push(a->hour, a->minute, edit_on_time_confirm, NULL, edit_on_time_chord, NULL);
