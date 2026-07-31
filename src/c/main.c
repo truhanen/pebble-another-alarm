@@ -2247,7 +2247,7 @@ static void start_new_alarm_flow(void) {
 static Layer *s_bottom_bar_layer;
 
 static int16_t bottom_bar_top_for_bounds(GRect bounds) {
-  return bounds.size.h - BOTTOM_BAR_H;
+  return bounds.size.h - BOTTOM_BAR_H + 2;
 }
 
 static GRect bottom_bar_rect_for_bounds(GRect bounds) {
@@ -2294,7 +2294,11 @@ static void draw_bottom_bar(GContext *ctx, GRect bounds) {
 
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   const int th = 28;
-  const int ty = bounds.origin.y + (bounds.size.h - th) / 2;
+  // bottom_bar_top_for_bounds() shifts the bar's top edge down 2px (so this
+  // layer's own bounds.origin.y is 2px lower on screen than before); pull
+  // the text up by that same 2px so it stays put relative to the screen's
+  // bottom edge instead of following the bar down.
+  const int ty = bounds.origin.y + (bounds.size.h - th) / 2 - 2;
   graphics_context_set_text_color(ctx, GColorWhite);
 
   // Size the left (clock) box to its actual measured width rather than a
