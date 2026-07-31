@@ -39,9 +39,9 @@ const config = [
       // default copied at creation time -- it's read live by every alarm's
       // ring screen (an alarm's own Sound toggle is an additional gate on
       // top of this, not a replacement for it).
-      { type: 'slider', messageKey: 'AudioVolume', label: 'Alarm volume (0 to disable)',
+      { type: 'slider', messageKey: 'AudioVolume',
+        label: 'Alarm volume. Set to 0 to disable sound for all alarms. Used as maximum for alarms with increasing volume.',
         defaultValue: 5, min: 0, max: 100, step: 5 },
-      { type: 'text', defaultValue: 'Maximum for alarms with increasing volume.' },
     ],
   },
   { type: 'submit', defaultValue: 'Save' },
