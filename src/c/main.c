@@ -208,6 +208,7 @@ static void resync_last_fired_for_schedule_change(Alarm *a);
 static void confirm_window_push(const char *label0, const char *label1, void (*cb)(int, void *), void *ctx);
 static int16_t bottom_bar_top_for_bounds(GRect bounds);
 static Layer *bottom_bar_attach(Layer *root);
+static void bottom_bar_compact_ampm(char *buf);
 
 // ================================= main list =================================
 
@@ -1492,6 +1493,12 @@ static void cron_apply_preview(char *buf, size_t n) {
   time_t t = occurrence_to_epoch_hm(off, oh, om);
   char rel[24];
   format_relative_fire_time(rel, sizeof(rel), t);
+  // Compact e.g. "6:00 am" to "6:00a", same as the bottom bar's own
+  // "Next: ..." text -- this row is tight on horizontal space too (it
+  // shares the line with the "Apply" label), and a no-op for the
+  // within-a-week/date-only tiers, which have no "am"/"pm" suffix to
+  // compact in the first place.
+  bottom_bar_compact_ampm(rel);
   snprintf(buf, n, "(Next: %s)", rel);
 }
 
