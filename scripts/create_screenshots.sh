@@ -114,8 +114,12 @@ IS_CRON_KEY="$(message_key TestAlarmIsCron)"
 CRON_MINUTE_KEY="$(message_key TestAlarmCronMinute)"
 CRON_HOUR_KEY="$(message_key TestAlarmCronHour)"
 CRON_DOW_KEY="$(message_key TestAlarmCronDow)"
+CRON_DOM_KEY="$(message_key TestAlarmCronDom)"
+CRON_MONTH_KEY="$(message_key TestAlarmCronMonth)"
+CRON_WEEK_KEY="$(message_key TestAlarmCronWeek)"
 for v in CLEAR_KEY INDEX_KEY HOUR_KEY MINUTE_KEY REPEATS_KEY REPEAT_DAYS_KEY ENABLED_KEY \
-         SKIP_NEXT_KEY NAME_KEY IS_CRON_KEY CRON_MINUTE_KEY CRON_HOUR_KEY CRON_DOW_KEY; do
+         SKIP_NEXT_KEY NAME_KEY IS_CRON_KEY CRON_MINUTE_KEY CRON_HOUR_KEY CRON_DOW_KEY \
+         CRON_DOM_KEY CRON_MONTH_KEY CRON_WEEK_KEY; do
   if [ -z "${!v}" ]; then
     echo "Could not resolve message key $v from build/src/message_keys.auto.c - was this built with APP_TEST_HOOKS=1?" >&2
     exit 1
@@ -149,10 +153,11 @@ pebble send-app-message --vnc \
   --string "${NAME_KEY}=Wakeup"
 sleep 1
 
-log "Creating alarm 1: 'Pomodoro' (cron: */25 9-17 1-5, disabled)"
+log "Creating alarm 1: 'Pomodoro' (cron: */25 9-17 * * 1-5 *, disabled)"
 pebble send-app-message --vnc \
   --int "${INDEX_KEY}=1" "${IS_CRON_KEY}=1" "${ENABLED_KEY}=0" \
-  --string "${NAME_KEY}=Pomodoro" "${CRON_MINUTE_KEY}=*/25" "${CRON_HOUR_KEY}=9-17" "${CRON_DOW_KEY}=1-5"
+  --string "${NAME_KEY}=Pomodoro" "${CRON_MINUTE_KEY}=*/25" "${CRON_HOUR_KEY}=9-17" \
+           "${CRON_DOW_KEY}=1-5" "${CRON_DOM_KEY}=*" "${CRON_MONTH_KEY}=*" "${CRON_WEEK_KEY}=*"
 sleep 1
 
 log "Creating alarm 2: 'Movie' (20:00, one-time)"
