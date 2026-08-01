@@ -24,19 +24,39 @@ static size_t alarm_size_for_schema(int schema) {
                            // + cron_dom/cron_month (CRON_FIELD_LEN each) --
                            // frozen sizeof(Alarm) captured at the moment
                            // schema became 9, for forward migration from it
-    case 10: return 288;  // + cron_week_mask (uint64) + cron_week
-                           // (CRON_FIELD_LEN) for cron mode's ISO-week field
-                           // -- frozen sizeof(Alarm) captured at the moment
-                           // schema became 10, for the NEXT bump to
-                           // forward-migrate from
+    case 10: return 248;  // NOT 288 -- see STORE_SCHEMA's comment
+                           // (alarm_store.h) for the full story: schema 10
+                           // was SUPPOSED to add cron_week_mask/cron_week (a
+                           // real 288-byte struct), but persist_write_data's
+                           // 256B/key cap silently rejected every attempt to
+                           // write that, so no schema-10 install's on-disk
+                           // main blob was ever actually bigger than
+                           // schema 9's. This entry reflects on-disk
+                           // reality, not the (never-achieved) struct size.
+    case 11: return 248;  // the schema-10 fix: cron_week_mask/cron_week moved
+                           // to their own extension key (see store_load/
+                           // store_save below), so the frozen MAIN blob size
+                           // is unchanged from schema 9/10.
     default: return 0;
   }
 }
 
-// One Alarm per persist key (PERSIST_KEY_ALARM_BASE+i), same rationale as
-// timer_store.c: persist_write_data caps at 256B/key, so MAX_ALARMS Alarms
-// packed into one blob would risk exceeding that as the struct grows.
-//
+// The per-alarm blob is split across two persist keys, not one -- see
+// STORE_SCHEMA's comment (alarm_store.h) for the full story. The MAIN blob
+// (PERSIST_KEY_ALARM_BASE+i) covers everything up to (not including)
+// cron_week_mask and is frozen at exactly that offset forever; the
+// EXTENSION blob (PERSIST_KEY_ALARM_EXT_BASE+i) covers cron_week_mask
+// through the end of the struct, so any future field appended after it (per
+// the ground rules below) grows the extension blob, not the frozen main
+// one. Both are asserted at compile time to stay under
+// PERSIST_DATA_MAX_LENGTH.
+#define ALARM_MAIN_SIZE (offsetof(Alarm, cron_week_mask))
+#define ALARM_EXT_SIZE  (sizeof(Alarm) - offsetof(Alarm, cron_week_mask))
+_Static_assert(ALARM_MAIN_SIZE <= PERSIST_DATA_MAX_LENGTH,
+               "Alarm's main persisted blob exceeds persist_write_data's per-key cap");
+_Static_assert(ALARM_EXT_SIZE <= PERSIST_DATA_MAX_LENGTH,
+               "Alarm's extension persisted blob exceeds persist_write_data's per-key cap");
+
 // A stored schema older than STORE_SCHEMA is only trusted if
 // alarm_size_for_schema() has an entry for it -- in that case,
 // persist_read_data's own "copies min(buffer_size, actual_stored_size),
@@ -62,22 +82,29 @@ int store_load(Alarm *out) {
   for (int i = 0; i < count; i++) {
     memset(&out[i], 0, sizeof(Alarm));
     if (persist_exists(PERSIST_KEY_ALARM_BASE + i)) {
-      persist_read_data(PERSIST_KEY_ALARM_BASE + i, &out[i], sizeof(Alarm));
+      persist_read_data(PERSIST_KEY_ALARM_BASE + i, &out[i], ALARM_MAIN_SIZE);
     }
-    // cron_dom_mask/cron_month_mask are new in schema 9, cron_week_mask in
-    // schema 10 -- a stored blob older than each has that field zero-filled
-    // by the memset above, which means "matches nothing" rather than the
-    // intended "unrestricted" default. Only cron alarms care (the fields
-    // are unused otherwise), but for one of those, leaving them at 0 would
-    // silently and permanently stop its matching the instant this schema
-    // bump ships.
+    // cron_dom_mask/cron_month_mask are new in schema 9 -- a stored blob
+    // older than that has them zero-filled by the memset above, which means
+    // "matches nothing" rather than the intended "unrestricted" default.
+    // Only cron alarms care (the fields are unused otherwise), but for one
+    // of those, leaving them at 0 would silently and permanently stop its
+    // matching the instant this schema bump ships.
     if (migrating && stored_schema < 9 && out[i].is_cron) {
       out[i].cron_dom_mask = AC_DOM_ALL;
       out[i].cron_month_mask = AC_MONTH_ALL;
       strcpy(out[i].cron_dom, "*");
       strcpy(out[i].cron_month, "*");
     }
-    if (migrating && stored_schema < 10 && out[i].is_cron) {
+    // cron_week_mask/cron_week live in their own extension key, never in the
+    // main blob above, on ANY schema -- so their presence is checked
+    // per-alarm rather than gated on the overall `migrating` flag (that
+    // flag can't be trusted for this one field: see STORE_SCHEMA's comment
+    // for why a schema-10 install's marker could say "up to date" while its
+    // extension data was never actually written).
+    if (persist_exists(PERSIST_KEY_ALARM_EXT_BASE + i)) {
+      persist_read_data(PERSIST_KEY_ALARM_EXT_BASE + i, &out[i].cron_week_mask, ALARM_EXT_SIZE);
+    } else if (out[i].is_cron) {
       out[i].cron_week_mask = AC_WEEK_ALL;
       strcpy(out[i].cron_week, "*");
     }
@@ -97,11 +124,13 @@ void store_save(const Alarm *a, int count) {
   persist_write_int(PERSIST_KEY_SCHEMA, STORE_SCHEMA);
   persist_write_int(PERSIST_KEY_COUNT, count);
   for (int i = 0; i < count; i++) {
-    persist_write_data(PERSIST_KEY_ALARM_BASE + i, &a[i], sizeof(Alarm));
+    persist_write_data(PERSIST_KEY_ALARM_BASE + i, &a[i], ALARM_MAIN_SIZE);
+    persist_write_data(PERSIST_KEY_ALARM_EXT_BASE + i, &a[i].cron_week_mask, ALARM_EXT_SIZE);
   }
   // drop any stale keys beyond the new count
   for (int i = count; i < MAX_ALARMS; i++) {
     if (persist_exists(PERSIST_KEY_ALARM_BASE + i)) { persist_delete(PERSIST_KEY_ALARM_BASE + i); }
+    if (persist_exists(PERSIST_KEY_ALARM_EXT_BASE + i)) { persist_delete(PERSIST_KEY_ALARM_EXT_BASE + i); }
   }
 }
 

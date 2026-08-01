@@ -144,16 +144,30 @@ static void persist_all(void) {
   store_save_default_increasing_volume(s_default_increasing_volume);
 }
 
-// Display-only sort key for a cron alarm: lowest set bit in cron_hour_mask/
-// cron_min_mask converted to hour*60+minute, same units as the legacy key,
-// so cron and legacy alarms interleave in one list ordered by "earliest
-// matching time-of-day, ignoring day-of-week" -- a deliberately simple
-// internal tie-breaker for display/sort convenience only, never used for
-// actual scheduling (compute_next_fire_time uses the real cron math).
-static int cron_sort_key(const Alarm *a) {
+// Lowest set bit in cron_hour_mask/cron_min_mask -- the day's earliest
+// matching hour and earliest matching minute, considered independently
+// (the two masks don't interact, so there's no need to search for a
+// joint hour+minute match: the earliest daily occurrence is always this
+// hour paired with this minute). Used for both the display-only sort key
+// below and the main list's "[HH:MM]" time-slot preview for a pattern
+// field; never used for actual scheduling (compute_next_fire_time uses
+// the real cron math).
+static void cron_first_hour_minute(const Alarm *a, int *out_hour, int *out_minute) {
   int hour = 0, minute = 0;
   for (int h = 0; h <= 23; h++) { if (a->cron_hour_mask & (1u << h)) { hour = h; break; } }
   for (int m = 0; m <= 59; m++) { if (a->cron_min_mask & (1ULL << m)) { minute = m; break; } }
+  *out_hour = hour;
+  *out_minute = minute;
+}
+
+// Display-only sort key for a cron alarm: converts cron_first_hour_minute
+// to hour*60+minute, same units as the legacy key, so cron and legacy
+// alarms interleave in one list ordered by "earliest matching time-of-day,
+// ignoring day-of-week" -- a deliberately simple internal tie-breaker for
+// display/sort convenience only.
+static int cron_sort_key(const Alarm *a) {
+  int hour, minute;
+  cron_first_hour_minute(a, &hour, &minute);
   return hour * 60 + minute;
 }
 
@@ -293,6 +307,46 @@ static void ml_draw_new_alarm_row(GContext *ctx, const Layer *cell_layer, bool s
                      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
+// A cron field that's just a plain decimal number (no `*`, `-`, `/`, `,`)
+// reads more naturally formatted like a normal alarm's own time (zero-padded,
+// no brackets) than as a "pattern" -- when both hour and minute are plain
+// numbers, the main list just shows them zero-padded ("09:05"); if either
+// is a genuine pattern (e.g. "*/20", "9-17/2"), there's no single
+// configured time to show, so the whole slot instead shows the day's
+// earliest occurrence (`cron_first_hour_minute`) surrounded by single
+// quotes ("'09:05'") to mark it as a computed preview, not the literal
+// configured value.
+static bool ml_cron_field_is_plain_number(const char *raw) {
+  if (!raw || !raw[0]) { return false; }
+  for (const char *p = raw; *p; p++) {
+    if (*p < '0' || *p > '9') { return false; }
+  }
+  return true;
+}
+
+static void ml_format_cron_time(char *out, size_t n, const Alarm *a) {
+  if (ml_cron_field_is_plain_number(a->cron_hour) && ml_cron_field_is_plain_number(a->cron_min)) {
+    snprintf(out, n, "%02d:%02d", atoi(a->cron_hour), atoi(a->cron_min));
+  } else {
+    int hour, minute;
+    cron_first_hour_minute(a, &hour, &minute);
+    snprintf(out, n, "'%02d:%02d'", hour, minute);
+  }
+}
+
+// Trimmed-down version of multitap_keyboard's shrink-to-fit text sizing
+// (prv_draw_text_fitted, multitap_keyboard.c): just two bold font sizes,
+// single line, no wrapping/truncation — the row's own
+// GTextOverflowModeTrailingEllipsis already covers the "still doesn't fit"
+// case, so there's no need for the keyboard widget's further truncate-with-
+// "..." fallback step here.
+static GFont ml_pick_label_font(const char *name, GFont primary, GFont secondary,
+                                 int avail_w, int box_w, int box_h) {
+  GSize sz = graphics_text_layout_get_content_size(name, primary, GRect(0, 0, box_w, box_h),
+                                                    GTextOverflowModeFill, GTextAlignmentLeft);
+  return (sz.w <= avail_w) ? primary : secondary;
+}
+
 static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, int row, bool selected) {
   const Alarm *a = &s_alarms[idx];
   GRect b = layer_get_bounds(cell_layer);
@@ -304,12 +358,11 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, fg);
 
-  // Line 1: fixed-width bold time (column-aligned, like timer's HH:MM:SS),
-  // then the label in a lighter weight — same visual
-  // hierarchy as timer's ml_draw_row single-line layout (main.c:2205-2231).
+  // Line 1: fixed-width bold time (column-aligned, like timer's HH:MM:SS)
+  // on the left, then the bold label right-aligned in the remaining space.
   bool small = (b.size.w <= 144);
   GFont tf = fonts_get_system_font(small ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_24_BOLD);
-  GFont nf = fonts_get_system_font(small ? FONT_KEY_GOTHIC_18 : FONT_KEY_GOTHIC_24);
+  GFont nf = fonts_get_system_font(small ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_24_BOLD);
   GFont lf = fonts_get_system_font(small ? FONT_KEY_GOTHIC_18 : FONT_KEY_GOTHIC_24);   // line 2, same size step as timer's detail row
   int th = small ? 22 : 28;
   int line2_h = th;
@@ -332,7 +385,7 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   int time_text_x = time_x + 16;
 
   char time_buf[16];
-  if (a->is_cron) { snprintf(time_buf, sizeof(time_buf), "Cron"); }
+  if (a->is_cron) { ml_format_cron_time(time_buf, sizeof(time_buf), a); }
   else { ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style()); }
   graphics_draw_text(ctx, time_buf, tf, GRect(time_text_x, ty, b.size.w - time_text_x - 4, th),
                      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
@@ -340,8 +393,16 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
     GRect(0, 0, b.size.w, th), GTextOverflowModeFill, GTextAlignmentLeft);
   int desc_x = time_text_x + tw.w + 8;
   if (a->name[0]) {
-    graphics_draw_text(ctx, a->name, nf, GRect(desc_x, ty, b.size.w - 4 - desc_x, th),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    int avail_w = b.size.w - 4 - desc_x;
+    GFont nf_small = fonts_get_system_font(small ? FONT_KEY_GOTHIC_14_BOLD : FONT_KEY_GOTHIC_18_BOLD);
+    GFont label_font = ml_pick_label_font(a->name, nf, nf_small, avail_w, b.size.w, th);
+    // The shrunk-down font sits in the same box as the bigger time text, so
+    // its optical center lands a bit differently — nudge it down 6px, the
+    // same hand-tuned "rise"-correction idea multitap_keyboard.c uses per
+    // font size, just applied only when the smaller tier was picked.
+    int label_ty = (label_font == nf_small) ? ty + 6 : ty;
+    graphics_draw_text(ctx, a->name, label_font, GRect(desc_x, label_ty, avail_w, th),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
   }
 
   // Line 2: repeat summary (or the raw cron fields for cron alarms).

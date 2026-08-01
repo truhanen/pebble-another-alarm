@@ -17,14 +17,56 @@
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
-#define STORE_SCHEMA 10  // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+// alarm i's trailing fields (from cron_week_mask onward -- see the
+// PERSIST_DATA_MAX_LENGTH note below) -> key 200+i. Kept well clear of
+// PERSIST_KEY_ALARM_BASE's own 100..115 range (MAX_ALARMS=16) with room to
+// grow.
+#define PERSIST_KEY_ALARM_EXT_BASE     200
+#define STORE_SCHEMA 11  // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
                           // then vibe_pattern (per-alarm vibration pattern override), then
                           // increasing_volume (per-alarm ramp-up-to-max toggle), then cron
                           // day-of-month/month fields (cron_dom_mask, cron_month_mask,
                           // cron_dom, cron_month) for cron mode's 5-field extension, then
                           // cron_week_mask/cron_week (ISO week-of-year) for the 6-field
-                          // extension.
+                          // extension (schema 10), then THIS bump: splitting
+                          // cron_week_mask/cron_week off of the main per-alarm blob into
+                          // their own persist key (PERSIST_KEY_ALARM_EXT_BASE).
+                          //
+                          // Why: sizeof(Alarm) had grown to 288 bytes by schema 10, but
+                          // persist_write_data() caps at PERSIST_DATA_MAX_LENGTH (256) bytes
+                          // per key -- a limit this file already warned about (see
+                          // store_save()'s own comment) without anyone re-checking it against
+                          // the struct's actual current size. On real firmware, a
+                          // persist_write_data() call over that cap is rejected outright
+                          // (nothing written), while store_save()'s separate
+                          // persist_write_int(PERSIST_KEY_SCHEMA, ...) call succeeds
+                          // unconditionally -- so every schema-10 install silently kept
+                          // writing its PERSIST_KEY_SCHEMA marker as 10 while every actual
+                          // per-alarm blob write failed and the on-disk data stayed frozen at
+                          // whatever the last successful (schema-9-sized, 248-byte) blob was.
+                          // Since stored_schema == STORE_SCHEMA on the next load, the
+                          // migration branch that would've defaulted cron_week_mask/cron_week
+                          // never ran either -- so any cron alarm's week field silently came
+                          // back empty (and invalid) after every relaunch. Not a display bug:
+                          // real, silent data loss, and it would have kept happening for any
+                          // schema-10 install indefinitely.
+                          //
+                          // The fix moves cron_week_mask/cron_week (the tail 40 bytes) to
+                          // their own small key per alarm instead of shrinking any existing
+                          // field: the main blob (PERSIST_KEY_ALARM_BASE+i) is capped at
+                          // exactly `offsetof(Alarm, cron_week_mask)` (248 bytes -- happens to
+                          // equal schema 9's own frozen size, since nothing before
+                          // cron_week_mask has changed since then) and stays frozen there
+                          // forever; the trailing extension blob
+                          // (PERSIST_KEY_ALARM_EXT_BASE+i) covers everything from
+                          // cron_week_mask to the end of the struct, currently 40 bytes with
+                          // ~216 bytes of headroom before it would need splitting again. Any
+                          // FUTURE field appended past cron_week_mask (ground rule #1 below)
+                          // automatically lands in this extension blob, not the frozen main
+                          // one -- see store_load()/store_save() in alarm_store.c, and the
+                          // _Static_assert there that fails the build if either blob ever
+                          // grows past PERSIST_DATA_MAX_LENGTH again.
                           //
                           // The cron_dom_mask/cron_month_mask/cron_week_mask bumps need more
                           // than just a size-table entry: a freshly zero-filled mask on
@@ -33,7 +75,11 @@
                           // re-fills these to AC_DOM_ALL/AC_MONTH_ALL/AC_WEEK_ALL (and
                           // cron_dom/cron_month/cron_week to "*") for any migrated is_cron
                           // alarm, or every existing cron alarm's matching would silently die
-                          // the instant this shipped.
+                          // the instant this shipped. cron_week_mask/cron_week's own default-
+                          // fill is no longer gated on the overall schema migration flag (see
+                          // above for why that flag can't be trusted for this field
+                          // specifically) -- it now runs whenever an alarm's extension key is
+                          // simply missing, regardless of stored_schema.
                           //
                           // Every field added to Alarm so far (including vibe_pattern and
                           // increasing_volume) was appended at the very end of the struct,
@@ -53,7 +99,10 @@
                           //     add it as a new `case <old schema>: return <that size>;` in
                           //     alarm_size_for_schema() -- a frozen literal, NOT `sizeof
                           //     (Alarm)` itself, which would silently track the wrong (new)
-                          //     struct once you've made the edit.
+                          //     struct once you've made the edit. Also check the new size
+                          //     against PERSIST_DATA_MAX_LENGTH (256) -- if the EXTENSION
+                          //     blob (not the frozen main one) would now exceed it, it needs
+                          //     splitting again the same way this bump did.
                           //  3. If the change genuinely can't be additive (a field removed,
                           //     reordered, or resized), just bump STORE_SCHEMA and don't add a
                           //     case for the old version -- alarm_size_for_schema()'s default

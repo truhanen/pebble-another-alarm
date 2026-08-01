@@ -546,8 +546,24 @@ in this app at all, so every message key is now just an ordinary scalar at
   - The main list (`ml_row_colors`/`ml_draw_alarm_row`) mirrors timer's
     `ml_row_colors`/`ml_draw_row` — per-row state tinting (snoozing=red,
     enabled=green, skip-pending=yellow, disabled=white; selected rows get a
-    darker/black variant of the same color), a fixed-width bold time
-    followed by a lighter-weight label, and a divider line under each row.
+    darker/black variant of the same color), a fixed-width bold time on the
+    left followed by a bold label right-aligned in the remaining row width,
+    and a divider line under each row. The label shrinks to fit rather than
+    ellipsis-truncating outright: `ml_pick_label_font()` measures the name at
+    the row's normal bold size (`GOTHIC_24_BOLD`, or `GOTHIC_18_BOLD` on the
+    `small` <=144px-wide layout) via `graphics_text_layout_get_content_size`
+    and drops one size (`GOTHIC_18_BOLD`, or `GOTHIC_14_BOLD` when `small`)
+    if it doesn't fit the space left after the time — a deliberately trimmed
+    port of `multitap_keyboard.c`'s `prv_draw_text_fitted` shrink-to-fit
+    ladder (single line, two font sizes, no wrapping/truncation step, since
+    the row's own `GTextOverflowModeTrailingEllipsis` already handles a name
+    that doesn't fit even at the smaller size). When the smaller font is
+    picked, its draw position is also nudged down 6px (`ml_draw_alarm_row`) —
+    empirically hand-tuned by screenshot comparison against the time text
+    it shares a row with, the same "each font size needs its own vertical
+    correction" issue `multitap_keyboard.c`'s own per-font `rise` offsets
+    exist to fix, just applied here as a single fixed offset since there are
+    only two font tiers in play rather than a whole ladder.
     skip-pending (`enabled && repeats && skip_next`) reuses timer's exact
     `TS_PAUSED` colors verbatim — `GColorYellow`/black unselected,
     `GColorArmyGreen`/white selected (`ml_row_colors` takes a `skip_pending`
@@ -846,8 +862,17 @@ feature — see git history if curious):
   still gated behind its own confirm prompt, so landing on it isn't
   destructive by itself), and Time/Cron comes next ahead of Label/State,
   unlike every other row grouping in this app which puts Label first.
-- **Main list display**: the bold time slot shows "Cron" instead of a
-  formatted time; the summary line below shows all six raw cron fields
+- **Main list display**: the bold time slot (`ml_format_cron_time`) shows
+  the hour/minute zero-padded, the same as a non-cron alarm's own time
+  (e.g. hour `"9"` + minute `"5"` reads as `"09:05"`), only when BOTH
+  fields are plain decimal numbers; if either is a genuine pattern (e.g.
+  `"*/20"`, `"9-17/2"`), there's no single configured time to show two
+  numbers for, so the whole slot instead shows the day's earliest matching
+  occurrence (`cron_first_hour_minute` — lowest set bit in
+  `cron_hour_mask`/`cron_min_mask`, each considered independently since
+  the two masks don't interact) surrounded by single quotes, e.g.
+  `"'09:20'"`, to mark it as a computed preview rather than the literal
+  configured value; the summary line below still shows all six raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.
   Sort key (`cron_sort_key`, display/tie-breaking only, not used for actual
   scheduling): lowest set bit in `cron_hour_mask`/`cron_min_mask` converted
