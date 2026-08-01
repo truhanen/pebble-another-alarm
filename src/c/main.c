@@ -308,14 +308,15 @@ static void ml_draw_new_alarm_row(GContext *ctx, const Layer *cell_layer, bool s
 }
 
 // A cron field that's just a plain decimal number (no `*`, `-`, `/`, `,`)
-// reads more naturally formatted like a normal alarm's own time (zero-padded,
-// no brackets) than as a "pattern" -- when both hour and minute are plain
-// numbers, the main list just shows them zero-padded ("09:05"); if either
-// is a genuine pattern (e.g. "*/20", "9-17/2"), there's no single
+// reads more naturally formatted like a normal alarm's own time (via
+// ac_format_time, same clock_is_24h_style()-aware "HH:MM"/"H:MM am" as
+// every other alarm) than as a "pattern" -- when both hour and minute are
+// plain numbers, the main list just shows the formatted time as-is; if
+// either is a genuine pattern (e.g. "*/20", "9-17/2"), there's no single
 // configured time to show, so the whole slot instead shows the day's
-// earliest occurrence (`cron_first_hour_minute`) surrounded by single
-// quotes ("'09:05'") to mark it as a computed preview, not the literal
-// configured value.
+// earliest occurrence (`cron_first_hour_minute`), same formatting,
+// surrounded by single quotes ("'9:05 am'") to mark it as a computed
+// preview, not the literal configured value.
 static bool ml_cron_field_is_plain_number(const char *raw) {
   if (!raw || !raw[0]) { return false; }
   for (const char *p = raw; *p; p++) {
@@ -325,13 +326,18 @@ static bool ml_cron_field_is_plain_number(const char *raw) {
 }
 
 static void ml_format_cron_time(char *out, size_t n, const Alarm *a) {
-  if (ml_cron_field_is_plain_number(a->cron_hour) && ml_cron_field_is_plain_number(a->cron_min)) {
-    snprintf(out, n, "%02d:%02d", atoi(a->cron_hour), atoi(a->cron_min));
+  bool both_plain = ml_cron_field_is_plain_number(a->cron_hour) && ml_cron_field_is_plain_number(a->cron_min);
+  int hour, minute;
+  if (both_plain) {
+    hour = atoi(a->cron_hour);
+    minute = atoi(a->cron_min);
   } else {
-    int hour, minute;
     cron_first_hour_minute(a, &hour, &minute);
-    snprintf(out, n, "'%02d:%02d'", hour, minute);
   }
+  char formatted[16];
+  ac_format_time(formatted, sizeof(formatted), (uint8_t)hour, (uint8_t)minute, clock_is_24h_style());
+  if (both_plain) { snprintf(out, n, "%s", formatted); }
+  else { snprintf(out, n, "'%s'", formatted); }
 }
 
 // Trimmed-down version of multitap_keyboard's shrink-to-fit text sizing
