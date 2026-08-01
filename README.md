@@ -1,7 +1,6 @@
 # pebble-another-alarm
 
 ![Main alarm list](screenshots/01_main_view.png)
-![Cron alarm configuration](screenshots/04_cron_config.png)
 
 A multi-alarm watchapp for Pebble (emery/Pebble Time 2 only). See `CLAUDE.md`
 for architecture details.
