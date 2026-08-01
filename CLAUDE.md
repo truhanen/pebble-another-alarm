@@ -845,7 +845,11 @@ feature — see git history if curious):
   (`CRON_ROW_SUBMIT`) draws a live "(Next: ...)" preview
   (`cron_apply_preview()`) alongside the "Apply" label,
   same key/value layout as every other row, computed from the currently-
-  staged fields against real "now" — blank if any field is currently
+  staged fields against real "now" — its time portion is run through
+  `bottom_bar_compact_ampm()` (same as the bottom bar's own "Next: ..."
+  text), so a 12h-style time reads as e.g. "6:00p" rather than "6:00 pm",
+  since this row is just as tight on horizontal space, sharing its line
+  with the "Apply" label itself — blank if any field is currently
   unparseable (a preview isn't meaningful for invalid syntax, and the
   field's own "(invalid)" tag already covers that case). BACK follows the
   same on_cancel-vs-snapshot-revert convention as the time/repeat/snooze
@@ -863,16 +867,18 @@ feature — see git history if curious):
   destructive by itself), and Time/Cron comes next ahead of Label/State,
   unlike every other row grouping in this app which puts Label first.
 - **Main list display**: the bold time slot (`ml_format_cron_time`) shows
-  the hour/minute zero-padded, the same as a non-cron alarm's own time
-  (e.g. hour `"9"` + minute `"5"` reads as `"09:05"`), only when BOTH
-  fields are plain decimal numbers; if either is a genuine pattern (e.g.
-  `"*/20"`, `"9-17/2"`), there's no single configured time to show two
-  numbers for, so the whole slot instead shows the day's earliest matching
-  occurrence (`cron_first_hour_minute` — lowest set bit in
-  `cron_hour_mask`/`cron_min_mask`, each considered independently since
-  the two masks don't interact) surrounded by single quotes, e.g.
-  `"'09:20'"`, to mark it as a computed preview rather than the literal
-  configured value; the summary line below still shows all six raw cron fields
+  the hour/minute formatted via `ac_format_time` — same
+  `clock_is_24h_style()`-aware `"HH:MM"`/`"H:MM am"` every non-cron alarm's
+  own time uses (e.g. hour `"9"` + minute `"5"` reads as `"09:05"` or
+  `"9:05 am"`) — only when BOTH fields are plain decimal numbers; if either
+  is a genuine pattern (e.g. `"*/20"`, `"9-17/2"`), there's no single
+  configured time to show two numbers for, so the whole slot instead shows
+  the day's earliest matching occurrence (`cron_first_hour_minute` —
+  lowest set bit in `cron_hour_mask`/`cron_min_mask`, each considered
+  independently since the two masks don't interact), same formatting, with
+  a trailing `+`, e.g. `"9:05 am+"`, to mark it as just the first of
+  potentially several fires that day rather than the alarm's one and only
+  time; the summary line below still shows all six raw cron fields
   space-joined (`ac_format_cron_summary`) instead of the repeat summary.
   Sort key (`cron_sort_key`, display/tie-breaking only, not used for actual
   scheduling): lowest set bit in `cron_hour_mask`/`cron_min_mask` converted
