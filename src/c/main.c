@@ -2925,8 +2925,13 @@ static void init(void) {
   if (fired) { show_next_pending_alarm(); }
 }
 
+// Every alarm mutation already calls persist_all() immediately, right where
+// it happens (create/edit/stop/snooze/toggle/test-hook/wakeup-fired -- see
+// each call site) -- so by the time deinit() runs, on-disk state already
+// matches memory and a save here would just redundantly re-flash unchanged
+// data. rearm_wakeup() still runs unconditionally: it's cheap in comparison
+// and guards against any path that left the wakeup un-rearmed.
 static void deinit(void) {
-  persist_all();
   rearm_wakeup();
   if (s_confirm_window) { window_destroy(s_confirm_window); }
   if (s_time_window) { window_destroy(s_time_window); }
