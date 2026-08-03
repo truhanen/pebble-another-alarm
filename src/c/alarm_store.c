@@ -198,7 +198,11 @@ void store_save_next_local_id(uint16_t v) {
 }
 
 int store_load_audio_volume(void) {
-  if (!persist_exists(PERSIST_KEY_AUDIO_VOLUME)) { return 0; }   // default: sound disabled
+  // Matches config_clay.ts's AudioVolume slider defaultValue, so a fresh
+  // install rings audibly out of the box even if the phone config page is
+  // never opened -- an alarm's own sound_enabled defaults to true, and a
+  // 0 here would silently defeat that regardless of the per-alarm toggle.
+  if (!persist_exists(PERSIST_KEY_AUDIO_VOLUME)) { return 50; }
   return persist_read_int(PERSIST_KEY_AUDIO_VOLUME);
 }
 

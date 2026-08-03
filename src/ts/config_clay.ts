@@ -51,7 +51,7 @@ const config = [
       // top of this, not a replacement for it).
       { type: 'slider', messageKey: 'AudioVolume',
         label: 'Alarm volume. Set to 0 to disable sound for all alarms. Used as maximum for alarms with increasing volume.',
-        defaultValue: 5, min: 0, max: 100, step: 5 },
+        defaultValue: 50, min: 0, max: 100, step: 5 },
     ],
   },
   { type: 'submit', defaultValue: 'Save' },
