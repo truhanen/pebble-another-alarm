@@ -16,7 +16,7 @@ for architecture details.
   (e.g. `'09:00'`) or the day's raw fields when they're plain numbers
 - Skip-next-occurrence and one-time-vs-repeating alarm states, cycled with
   a short main-list press
-- Per-alarm vibration pattern, increasing-volume ramp, and auto-stop
+- Per-alarm vibration pattern, increasing-volume ramp, and auto-dismiss
 - Phone-side Clay config page for global settings (first day of week, date
   format, default vibe pattern, default snooze, alarm volume)
 

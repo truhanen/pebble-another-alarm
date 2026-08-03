@@ -692,7 +692,7 @@ static bool show_next_pending_alarm(void) {
 
 #define ALARM_BUZZ_INTERVAL_MS 4000
 #define ALARM_BUZZ_MAX_S       600
-#define ALARM_AUTO_STOP_MS 2000   // "a couple seconds"
+#define ALARM_AUTO_DISMISS_MS 2000   // "a couple seconds"
 #define ALARM_VOLUME_STEP 10   // increasing_volume: volume units added per buzz cycle (after the initial 0->1->5 warm-up)
 
 static Window *s_alarm_window;
@@ -706,7 +706,7 @@ static char s_alarm_sub_buf[32];
 static AppTimer *s_alarm_buzz_timer;
 static int64_t s_alarm_buzz_start_s;
 static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
-static AppTimer *s_alarm_auto_stop_timer;   // auto_stop: auto-dismisses the ring screen
+static AppTimer *s_alarm_auto_dismiss_timer;   // auto_dismiss: dismisses the ring screen on its own
 
 static void alarm_vibrate(uint8_t pattern) {
   switch (pattern) {
@@ -740,7 +740,7 @@ static void alarm_play_audio(uint8_t volume) {
 // increasing_volume: driven by s_alarm_buzz_count (how many buzz cycles have
 // already happened since this ring started, reset alongside
 // s_alarm_buzz_start_s at the top of trigger_alarm() regardless of
-// auto_stop), NOT by elapsed time -- a fixed per-cycle step reads as a much
+// auto_dismiss), NOT by elapsed time -- a fixed per-cycle step reads as a much
 // more noticeably increasing ramp than a fixed total duration does, since
 // most of a duration-based ramp's early steps landed on volumes too low to
 // be audibly distinct from silence on the watch's speaker. Sequence: 0, 0
@@ -798,17 +798,17 @@ static void alarm_buzz_stop(void) {
 #endif // PBL_SPEAKER
 }
 
-// auto_stop's ring screen auto-dismisses itself via s_alarm_auto_stop_timer
+// auto_dismiss's ring screen dismisses itself via s_alarm_auto_dismiss_timer
 // (armed in trigger_alarm); a manual Stop or Snooze pressed before it fires
 // must cancel it, or it could fire moments later and clobber whatever the
 // user just did (re-clearing a snooze the user just set, or re-running the
 // "show next pending" chain a second time).
-static void alarm_cancel_auto_stop(void) {
-  if (s_alarm_auto_stop_timer) { app_timer_cancel(s_alarm_auto_stop_timer); s_alarm_auto_stop_timer = NULL; }
+static void alarm_cancel_auto_dismiss(void) {
+  if (s_alarm_auto_dismiss_timer) { app_timer_cancel(s_alarm_auto_dismiss_timer); s_alarm_auto_dismiss_timer = NULL; }
 }
 
 // Called once a ring screen has nothing left to chain to (see
-// show_next_pending_alarm) after a Stop/Snooze/auto-stop. If this whole app
+// show_next_pending_alarm) after a Stop/Snooze/auto-dismiss. If this whole app
 // process only exists because a wakeup relaunched it while it wasn't
 // already open, exit back out entirely (window_stack_pop_all -- the same
 // "closest thing to never having opened it" mechanism this app has used
@@ -826,7 +826,7 @@ static void alarm_finish_ring(void) {
 }
 
 static void alarm_do_stop(void) {
-  alarm_cancel_auto_stop();
+  alarm_cancel_auto_dismiss();
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
     s_alarms[s_alarm_idx].alarm_pending = false;
     s_alarms[s_alarm_idx].snooze_until = 0;
@@ -837,15 +837,15 @@ static void alarm_do_stop(void) {
 }
 static void alarm_stop(ClickRecognizerRef rec, void *ctx) { alarm_do_stop(); }
 
-// Fired ALARM_AUTO_STOP_MS after an auto_stop alarm's ring screen is shown
+// Fired ALARM_AUTO_DISMISS_MS after an auto_dismiss alarm's ring screen is shown
 // (see trigger_alarm) -- same end state as the user pressing Stop.
-static void alarm_auto_stop_cb(void *data) {
-  s_alarm_auto_stop_timer = NULL;
+static void alarm_auto_dismiss_cb(void *data) {
+  s_alarm_auto_dismiss_timer = NULL;
   alarm_do_stop();
 }
 
 static void alarm_snooze(ClickRecognizerRef rec, void *ctx) {
-  alarm_cancel_auto_stop();
+  alarm_cancel_auto_dismiss();
   int idx = s_alarm_idx;
   if (idx >= 0 && idx < s_count) {
     Alarm *a = &s_alarms[idx];
@@ -958,7 +958,7 @@ static void alarm_window_load(Window *w) {
 
 static void alarm_window_unload(Window *w) {
   alarm_buzz_stop();
-  alarm_cancel_auto_stop();
+  alarm_cancel_auto_dismiss();
   text_layer_destroy(s_alarm_title); s_alarm_title = NULL;
   text_layer_destroy(s_alarm_sub); s_alarm_sub = NULL;
   text_layer_destroy(s_alarm_lbl_up); s_alarm_lbl_up = NULL;
@@ -998,22 +998,22 @@ static void trigger_alarm(int idx, int count) {
     if (s_alarm_sub) { text_layer_set_text(s_alarm_sub, s_alarm_sub_buf); }
   }
 
-  alarm_cancel_auto_stop();   // never leave a stale timer armed against whichever alarm gets shown next
+  alarm_cancel_auto_dismiss();   // never leave a stale timer armed against whichever alarm gets shown next
   // Stamped/reset here (not just inside alarm_buzz_start()) so
   // alarm_current_volume()/s_alarm_buzz_count always start fresh for THIS
-  // ring, even for the auto_stop branch below, which never calls
+  // ring, even for the auto_dismiss branch below, which never calls
   // alarm_buzz_start() at all.
   s_alarm_buzz_start_s = now_s();
   s_alarm_buzz_count = 0;
-  if (a->auto_stop) {
+  if (a->auto_dismiss) {
     if (a->vibration_enabled) { alarm_vibrate(a->vibe_pattern); }
 #if PBL_SPEAKER
-    // Note: auto_stop only ever buzzes once, at buzz_count=0, so an
-    // increasing_volume alarm combined with auto_stop never reaches a
+    // Note: auto_dismiss only ever buzzes once, at buzz_count=0, so an
+    // increasing_volume alarm combined with auto_dismiss never reaches a
     // meaningfully ramped-up volume -- see alarm_current_volume().
     if (a->sound_enabled) { alarm_play_audio(alarm_current_volume(a)); }
 #endif // PBL_SPEAKER
-    s_alarm_auto_stop_timer = app_timer_register(ALARM_AUTO_STOP_MS, alarm_auto_stop_cb, NULL);
+    s_alarm_auto_dismiss_timer = app_timer_register(ALARM_AUTO_DISMISS_MS, alarm_auto_dismiss_cb, NULL);
   } else {
     alarm_buzz_start();
   }
@@ -2058,9 +2058,9 @@ static const char *vibe_pattern_name(uint8_t pattern) {
 #define EDIT_ROW_VIBE_PATTERN 7
 #define EDIT_ROW_SOUND    8
 #define EDIT_ROW_INCREASING_VOLUME 9
-#define EDIT_ROW_AUTO_STOP 10
+#define EDIT_ROW_AUTO_DISMISS 10
 #define EDIT_ROW_DELETE   11
-#define EDIT_ROW_MAX_COUNT 11   // LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/INCREASING_VOLUME/AUTO_STOP/DELETE
+#define EDIT_ROW_MAX_COUNT 11   // LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/INCREASING_VOLUME/AUTO_DISMISS/DELETE
 
 // Builds the ordered list of row "kinds" for the current alarm's mode into
 // out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
@@ -2085,7 +2085,7 @@ static int edit_build_rows(int *out_kinds, bool is_cron) {
   out_kinds[n++] = EDIT_ROW_VIBE_PATTERN;
   out_kinds[n++] = EDIT_ROW_SOUND;
   out_kinds[n++] = EDIT_ROW_INCREASING_VOLUME;
-  out_kinds[n++] = EDIT_ROW_AUTO_STOP;
+  out_kinds[n++] = EDIT_ROW_AUTO_DISMISS;
   return n;
 }
 
@@ -2163,9 +2163,9 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       key = "Increasing volume";
       snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
       break;
-    case EDIT_ROW_AUTO_STOP:
-      key = "Auto-stop";
-      snprintf(value, sizeof(value), "%s", a->auto_stop ? "On" : "Off");
+    case EDIT_ROW_AUTO_DISMISS:
+      key = "Auto-dismiss";
+      snprintf(value, sizeof(value), "%s", a->auto_dismiss ? "On" : "Off");
       break;
     case EDIT_ROW_DELETE:
       key = "Delete";   // action row, no value
@@ -2361,8 +2361,8 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
-    case EDIT_ROW_AUTO_STOP:
-      a->auto_stop = !a->auto_stop;
+    case EDIT_ROW_AUTO_DISMISS:
+      a->auto_dismiss = !a->auto_dismiss;
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
@@ -2841,7 +2841,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
         a->cron_last_fired_min = (t->value->int32 != 0) ? (int32_t)(now_s() / 60) : -1;
         changed = true;
       }
-      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoStop))) { a->auto_stop = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoDismiss))) { a->auto_dismiss = t->value->int32 != 0; changed = true; }
     }
   }
 

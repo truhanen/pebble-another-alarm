@@ -53,7 +53,7 @@
       "TestAlarmCronHour",
       "TestAlarmCronDow",
       "TestAlarmCronFiredNow",
-      "TestAlarmAutoStop",
+      "TestAlarmAutoDismiss",
       "TestAlarmVibePattern",
       "TestAlarmIncreasingVolume",
       "TestAlarmCronDom",

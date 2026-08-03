@@ -23,7 +23,7 @@
 // grow.
 #define PERSIST_KEY_ALARM_EXT_BASE     200
 #define STORE_SCHEMA 11  // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
-                          // cron_last_fired_min, cron_min/hour/dow strings), then auto_stop,
+                          // cron_last_fired_min, cron_min/hour/dow strings), then auto_dismiss,
                           // then vibe_pattern (per-alarm vibration pattern override), then
                           // increasing_volume (per-alarm ramp-up-to-max toggle), then cron
                           // day-of-month/month fields (cron_dom_mask, cron_month_mask,
