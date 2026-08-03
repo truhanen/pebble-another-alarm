@@ -19,6 +19,33 @@ export interface ClaySettings {
   AudioVolume?: string | number;     // Clay's slider type returns a number, not a string
 }
 
+// Clay config item/section shape is intentionally loose here (matches
+// config_clay.ts's own untyped array) -- this only cares about messageKey/
+// defaultValue, the two fields every component type actually has.
+interface ClayConfigItem {
+  type: string;
+  messageKey?: string;
+  defaultValue?: string | number | boolean;
+  items?: ClayConfigItem[];
+}
+
+// Walks a Clay config array (mirrors Clay's own internal _scanConfig
+// recursion in pebble-clay/index.js) and collects each item's own
+// defaultValue by messageKey. This is what a first-ever launch (before the
+// user has ever opened the phone config page, so there's nothing in
+// localStorage yet) sends to the watch -- keeping config_clay.ts as the
+// single place defaults are declared, rather than a second hardcoded object
+// that could drift out of sync with it.
+export function getDefaultClaySettings(config: ClayConfigItem[]): Record<string, any> {
+  const out: Record<string, any> = {};
+  function scan(item: ClayConfigItem) {
+    if (item.items) { item.items.forEach(scan); return; }
+    if (item.messageKey !== undefined) { out[item.messageKey] = item.defaultValue; }
+  }
+  config.forEach(scan);
+  return out;
+}
+
 function toInt(value: string | number | undefined, fallback: number): number {
   const n = parseInt(String(value ?? ''), 10);
   return Number.isNaN(n) ? fallback : n;

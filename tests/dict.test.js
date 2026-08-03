@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildDict } = require('../src/pkjs/dict');
+const { buildDict, getDefaultClaySettings } = require('../src/pkjs/dict');
+const clayConfig = require('../src/pkjs/config_clay').default;
 
 test('buildDict parses Clay string values to ints', () => {
   assert.deepStrictEqual(buildDict({
@@ -105,6 +106,28 @@ test('buildDict sends DefaultIncreasingVolume as an independent boolean', () => 
     DefaultIncreasingVolume: 1,
     AudioVolume: 0,
   });
+});
+
+test('getDefaultClaySettings extracts every messageKey/defaultValue from config_clay.ts', () => {
+  const defaults = getDefaultClaySettings(clayConfig);
+  assert.deepStrictEqual(defaults, {
+    DefaultSnoozeEnabled: true,
+    DefaultSnoozeMinutes: '10',
+    DefaultSnoozeMax: '3',
+    DefaultSoundEnabled: true,
+    DefaultIncreasingVolume: false,
+    DefaultVibrationEnabled: true,
+    AlarmVibePattern: '0',
+    FirstDayOfWeek: '1',
+    DateFormat: '0',
+    AudioVolume: 50,
+  });
+});
+
+test('getDefaultClaySettings output feeds buildDict a fully audible, in-sync first-run config', () => {
+  const dict = buildDict(getDefaultClaySettings(clayConfig));
+  assert.strictEqual(dict.AudioVolume, 50);
+  assert.strictEqual(dict.DefaultSoundEnabled, 1);
 });
 
 test('buildDict parses DateFormat', () => {
