@@ -90,6 +90,14 @@ void ac_format_time(char *buf, size_t n, uint8_t hour, uint8_t minute, bool use_
 }
 
 static const char *const DAY_ABBR[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+// One-letter-per-day grid used for any repeating multi/single-day schedule
+// that isn't "every day": position i is the (first_day_of_week + i)'th
+// weekday, filled with that day's first letter if selected or '_' if not,
+// space-separated -- e.g. Monday-first Mon-Sat is "M T W T F S _", Fri-Sun
+// is "_ _ _ _ F S S". Reads unambiguously at a glance without needing
+// per-combo special-cased strings (this replaced fixed "Mon-Fri"/"Sat, Sun"
+// strings and the generic comma-joined list previously used here).
+static const char DAY_LETTER[7] = { 'S', 'M', 'T', 'W', 'T', 'F', 'S' };  // Sun..Sat
 
 void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_days, int first_day_of_week) {
   if (n == 0) { return; }
@@ -104,15 +112,13 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
   }
   if (repeat_days == 0) { snprintf(buf, n, "Once"); return; }   // degenerate: repeating with no days picked
   if (repeat_days == AC_DAY_ALL) { snprintf(buf, n, "Every day"); return; }
-  if (repeat_days == (AC_DAY_MON|AC_DAY_TUE|AC_DAY_WED|AC_DAY_THU|AC_DAY_FRI)) { snprintf(buf, n, "Mon-Fri"); return; }
-  if (repeat_days == (AC_DAY_SAT|AC_DAY_SUN)) { snprintf(buf, n, "Sat, Sun"); return; }
   buf[0] = '\0';
   size_t used = 0;
   for (int i = 0; i < 7; i++) {
     int wday = (first_day_of_week + i) % 7;
-    if (!(repeat_days & AC_DAY_BIT(wday))) { continue; }
+    char c = (repeat_days & AC_DAY_BIT(wday)) ? DAY_LETTER[wday] : '_';
     if (used >= n) { break; }
-    int written = snprintf(buf + used, n - used, "%s%s", used ? ", " : "", DAY_ABBR[wday]);
+    int written = snprintf(buf + used, n - used, "%s%c", i ? " " : "", c);
     if (written < 0) { break; }
     used += (size_t)written;
   }

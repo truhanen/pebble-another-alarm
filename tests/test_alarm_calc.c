@@ -235,13 +235,16 @@ static void test_format_repeat_summary(void) {
   assert(strcmp(buf, "Once (Fri)") == 0);
   ac_format_repeat_summary(buf, sizeof(buf), true, AC_DAY_ALL, 1);
   assert(strcmp(buf, "Every day") == 0);
+  // Any repeating schedule other than "every day" now renders as a
+  // space-separated 7-letter grid (one char per day in first-day-of-week
+  // order, '_' for unselected) instead of per-combo special-cased strings.
   ac_format_repeat_summary(buf, sizeof(buf), true, AC_DAY_MON | AC_DAY_WED | AC_DAY_FRI, 1 /* Monday first */);
-  assert(strcmp(buf, "Mon, Wed, Fri") == 0);
+  assert(strcmp(buf, "M _ W _ F _ _") == 0);
   ac_format_repeat_summary(buf, sizeof(buf), true, AC_DAY_SUN | AC_DAY_SAT, 1 /* Monday first: Sat wraps before Sun */);
-  assert(strcmp(buf, "Sat, Sun") == 0);
+  assert(strcmp(buf, "_ _ _ _ _ S S") == 0);
   ac_format_repeat_summary(buf, sizeof(buf), true,
       AC_DAY_MON | AC_DAY_TUE | AC_DAY_WED | AC_DAY_THU | AC_DAY_FRI, 1);
-  assert(strcmp(buf, "Mon-Fri") == 0);
+  assert(strcmp(buf, "M T W T F _ _") == 0);
 }
 
 // ================================= cron mode =================================
