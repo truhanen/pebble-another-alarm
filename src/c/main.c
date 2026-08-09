@@ -273,8 +273,18 @@ static bool ml_is_boundary_row(int row) {
 // of its own), with a "1" digit cut into it in the row's `bg` tint for
 // contrast -- one specific occurrence is being skipped, not the alarm being
 // stopped outright.
-typedef enum { ML_ICON_PLAY, ML_ICON_STOP, ML_ICON_SKIP } MlIcon;
+typedef enum { ML_ICON_PLAY, ML_ICON_STOP, ML_ICON_SKIP, ML_ICON_SNOOZE } MlIcon;
 static void ml_draw_state_icon(GContext *ctx, int x, int y, MlIcon icon, GColor fg, GColor bg) {
+  if (icon == ML_ICON_SNOOZE) {
+    // Bold exclamation mark, drawn as two plain rectangles (no font) so it
+    // stays crisp at this tiny size like the other icons: a thick vertical
+    // bar and a square dot below it, sized to match the 11x11 play/stop/skip
+    // box (y+1..y+12).
+    graphics_context_set_fill_color(ctx, fg);
+    graphics_fill_rect(ctx, GRect(x + 3, y + 1, 5, 6), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(x + 3, y + 9, 5, 3), 0, GCornerNone);
+    return;
+  }
   if (icon == ML_ICON_SKIP) {
     graphics_context_set_fill_color(ctx, fg);
     graphics_fill_rect(ctx, GRect(x, y + 1, 11, 11), 0, GCornerNone);
@@ -360,8 +370,9 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   GRect b = layer_get_bounds(cell_layer);
 
   bool skip_pending = a->enabled && (a->repeats || a->is_cron) && a->skip_next;
+  bool snoozing = a->snooze_until > 0;
   GColor bg, fg;
-  ml_row_colors(a->enabled, a->snooze_until > 0, skip_pending, selected, &bg, &fg);
+  ml_row_colors(a->enabled, snoozing, skip_pending, selected, &bg, &fg);
   graphics_context_set_fill_color(ctx, bg);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, fg);
@@ -381,11 +392,13 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
   int ty = (b.size.h - (th + line2_h)) / 2 - 2;
   int time_x = 6;
 
-  // Leading play/stop/skip icon: enabled -> play; enabled but skipping its
-  // next occurrence (mirrors edit_draw_row's EDIT_ROW_ENABLE "Skip next"
-  // condition exactly) -> skip; otherwise (disabled) -> stop.
+  // Leading play/stop/skip/snooze icon: snoozing outranks everything else
+  // (same precedence as ml_row_colors' snoozing > skip_pending > enabled);
+  // otherwise enabled -> play, enabled but skipping its next occurrence
+  // (mirrors edit_draw_row's EDIT_ROW_ENABLE "Skip next" condition exactly)
+  // -> skip, otherwise (disabled) -> stop.
   int icon_y = ty + (th - 12) / 2 + 3;
-  MlIcon icon = !a->enabled ? ML_ICON_STOP : skip_pending ? ML_ICON_SKIP : ML_ICON_PLAY;
+  MlIcon icon = snoozing ? ML_ICON_SNOOZE : !a->enabled ? ML_ICON_STOP : skip_pending ? ML_ICON_SKIP : ML_ICON_PLAY;
   ml_draw_state_icon(ctx, time_x, icon_y, icon, fg, bg);
   // The skip icon's "1" digit sets the context's text color to bg; restore
   // it to fg before drawing the rest of the row's text.
