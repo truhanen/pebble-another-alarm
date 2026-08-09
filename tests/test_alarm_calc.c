@@ -239,6 +239,9 @@ static void test_format_repeat_summary(void) {
   assert(strcmp(buf, "Mon, Wed, Fri") == 0);
   ac_format_repeat_summary(buf, sizeof(buf), true, AC_DAY_SUN | AC_DAY_SAT, 1 /* Monday first: Sat wraps before Sun */);
   assert(strcmp(buf, "Sat, Sun") == 0);
+  ac_format_repeat_summary(buf, sizeof(buf), true,
+      AC_DAY_MON | AC_DAY_TUE | AC_DAY_WED | AC_DAY_THU | AC_DAY_FRI, 1);
+  assert(strcmp(buf, "Mon-Fri") == 0);
 }
 
 // ================================= cron mode =================================

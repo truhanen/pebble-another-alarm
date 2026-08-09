@@ -104,6 +104,8 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
   }
   if (repeat_days == 0) { snprintf(buf, n, "Once"); return; }   // degenerate: repeating with no days picked
   if (repeat_days == AC_DAY_ALL) { snprintf(buf, n, "Every day"); return; }
+  if (repeat_days == (AC_DAY_MON|AC_DAY_TUE|AC_DAY_WED|AC_DAY_THU|AC_DAY_FRI)) { snprintf(buf, n, "Mon-Fri"); return; }
+  if (repeat_days == (AC_DAY_SAT|AC_DAY_SUN)) { snprintf(buf, n, "Sat, Sun"); return; }
   buf[0] = '\0';
   size_t used = 0;
   for (int i = 0; i < 7; i++) {
