@@ -35,39 +35,10 @@ Other Makefile targets: `make clean`, `make kill_emulator`, `make wipe_emulator`
 
 ## Emulator testing (headless)
 
-Observed on **Pebble Tool v5.0.39, active SDK v4.17** (`pebble --version`).
-This section documents pebble-tool's *own* implementation quirks (verified by
-reading its Python source), not a stable Pebble platform fact — re-check
-`pebble --version` before trusting this, and if it's changed, re-verify the
-VNC-mismatch/kill-on-flag-change behavior in `pebble_tool/sdk/emulator.py`
-before relying on the steps below, since a tool upgrade could easily have
-fixed or changed this.
-
-Before a new round of manual testing (button-driven UI testing, wakeup/alarm
-timing tests, etc.), kill and wipe the emulator first, then relaunch it with
-`--vnc` on every command that touches it:
-
-1. `pebble kill` — kills whatever emulator(s) are running (no
-   `--emulator`-scoped kill exists; it's global).
-2. `pebble wipe` — clears persisted app storage for the current SDK's
-   platforms (add `--everything` only if you also want to wipe other SDK
-   versions / log out; not needed for routine test resets).
-3. `pebble install --emulator emery --vnc` — relaunches the emulator with VNC
-   enabled and installs the build.
-4. From then on, pass `--vnc` on **every** subsequent command that touches
-   this emulator in the same session: `pebble screenshot --vnc --no-open
-   <path>`, `pebble emu-button --vnc ...`, `pebble emu-set-time --vnc ...`,
-   etc. Dropping `--vnc` on any one of them risks the tool detecting a
-   VNC-state mismatch and silently restarting QEMU underneath you, resetting
-   the clock and losing in-memory app state.
-5. Only one Pebble tool connection to the emulator works reliably at a time —
-   don't run `pebble logs` as a separate concurrent background process while
-   also issuing `install`/`screenshot`/`emu-button` calls; it conflicts and
-   both sides time out. Use `pebble install --vnc --logs` to capture the
-   immediate post-install `init()` log output in the same connection instead.
-6. Screenshots actually work with `--vnc` in this headless environment (plain
-   `pebble screenshot` times out with no window server) — use them to
-   navigate the UI visually instead of pressing buttons blind.
+Before running `pebble` commands against the emulator, consult the
+`pebble-emulator` skill for general headless-emulator practices
+(`--vnc` consistency, kill+wipe hygiene, concurrent `pebble logs`,
+screenshot-based navigation). This app only targets `--emulator emery`.
 
 ## Test hooks (APP_TEST_HOOKS)
 
