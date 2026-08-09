@@ -201,8 +201,9 @@ button back 1 1   # BACK on the first field (hour) cancels/reverts, popping back
 log "Moving to the Repeat row"
 button down 3 1   # Time (1) -> Label (2) -> State (3) -> Repeat (4)
 
-log "Weekday repeat configuration screen"
-button select 1 1   # short-press: opens the weekday repeat editor directly (Apply row selected)
+log "Repeat preset menu"
+button select 1 1   # short-press: opens the repeat preset menu (Every day/Mon-Fri/Sat, Sun/Custom) -
+                     # cursor lands on "Mon-Fri" since Wakeup's repeat_days (62) matches that preset exactly
 shoot "03_repeat_config.png"
 
 log "Returning to edit menu"
