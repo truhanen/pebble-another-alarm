@@ -1816,7 +1816,7 @@ static void (*s_repeat_preset_on_cancel)(void *ctx);
 static void *s_repeat_preset_ctx;
 
 static const char *REPEAT_PRESET_LABEL[REPEAT_PRESET_ROW_COUNT] = {
-  "Once", "Every day", "Mon-Fri", "Sat, Sun", "Custom"
+  "Once", "Every day", "Weekdays  (Mon-Fri)", "Weekends  (Sat, Sun)", "Custom"
 };
 
 // Defined further below in this section -- forward-declared so the
