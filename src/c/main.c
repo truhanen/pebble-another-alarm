@@ -487,10 +487,30 @@ static void ml_cycle_alarm_state(int idx) {
   persist_all(); rearm_wakeup(); reload_ui();
 }
 
+// Clears a pending snooze without touching enabled/skip_next -- the
+// ring-screen-only parts of alarm_do_stop (alarm_pending, the auto-dismiss
+// timer, popping the ring window) don't apply here since this acts on an
+// arbitrary main-list row, not the currently-ringing alarm.
+static void ml_dismiss_snooze(int idx) {
+  if (idx < 0 || idx >= s_count) { return; }
+  Alarm *a = &s_alarms[idx];
+  a->snooze_until = 0;
+  a->snooze_count = 0;
+  persist_all(); rearm_wakeup(); reload_ui();
+}
+
 static void ml_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   int row = cell_index->row;
   if (row == s_count) { start_new_alarm_flow(); return; }
-  ml_cycle_alarm_state(s_order[row]);
+  int idx = s_order[row];
+  // Short-press on a snoozing alarm dismisses the snooze instead of cycling
+  // enabled/disabled/skip -- the state cycle only resumes once it's no
+  // longer snoozing.
+  if (idx >= 0 && idx < s_count && s_alarms[idx].snooze_until > 0) {
+    ml_dismiss_snooze(idx);
+    return;
+  }
+  ml_cycle_alarm_state(idx);
 }
 
 // Long-press SELECT opens the full edit menu — the main list's short-press
