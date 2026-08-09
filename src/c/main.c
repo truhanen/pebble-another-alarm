@@ -1753,6 +1753,176 @@ static void cron_edit_window_push(const char *min_str, const char *hour_str, con
 // specific weekday. This deliberately drops the old "pick exactly one day,
 // leave repeat off" one-time-on-a-specific-day state.
 
+// ============================ repeat presets (front screen) ============================
+//
+// Sits in front of the weekday picker below: "Once"/"Every day"/"Mon-Fri"/
+// "Sat, Sun" commit a schedule in one SELECT, "Custom" drops into the
+// unchanged weekday picker. Both former call sites of
+// repeat_edit_window_push now call this instead; repeat_edit_window_push
+// itself is otherwise untouched.
+
+#define REPEAT_PRESET_ONCE      0
+#define REPEAT_PRESET_EVERYDAY  1
+#define REPEAT_PRESET_WEEKDAYS  2
+#define REPEAT_PRESET_WEEKEND   3
+#define REPEAT_PRESET_CUSTOM    4
+#define REPEAT_PRESET_ROW_COUNT 5
+
+#define REPEAT_PRESET_EVERYDAY_MASK AC_DAY_ALL
+#define REPEAT_PRESET_WEEKDAYS_MASK (AC_DAY_MON|AC_DAY_TUE|AC_DAY_WED|AC_DAY_THU|AC_DAY_FRI)
+#define REPEAT_PRESET_WEEKEND_MASK  (AC_DAY_SAT|AC_DAY_SUN)
+
+// Shared header height for both this screen and the weekday picker below.
+#define REPEAT_HEADER_H 30
+
+static Window *s_repeat_preset_window;
+static MenuLayer *s_repeat_preset_menu;
+static uint8_t s_repeat_preset_days;   // seed for Custom / snapshot for cancel-revert
+static void (*s_repeat_preset_on_confirm)(bool repeats, uint8_t repeat_days, void *ctx);
+static void (*s_repeat_preset_on_cancel)(void *ctx);
+static void *s_repeat_preset_ctx;
+
+static const char *REPEAT_PRESET_LABEL[REPEAT_PRESET_ROW_COUNT] = {
+  "Once", "Every day", "Mon-Fri", "Sat, Sun", "Custom"
+};
+
+// Defined further below in this section -- forward-declared so the
+// "Custom" row can push it.
+static void repeat_edit_window_push(uint8_t repeat_days,
+    void (*on_confirm)(bool repeats, uint8_t repeat_days, void *ctx),
+    void (*on_cancel)(void *ctx), void *ctx);
+
+static uint16_t repeat_preset_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return REPEAT_PRESET_ROW_COUNT; }
+static int16_t repeat_preset_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
+
+static void repeat_preset_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
+  GRect b = layer_get_bounds(cell_layer);
+  graphics_draw_text(ctx, REPEAT_PRESET_LABEL[cell_index->row], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+static void repeat_preset_finish(bool repeats, uint8_t days) {
+  void (*cb)(bool, uint8_t, void *) = s_repeat_preset_on_confirm;
+  void *ctx = s_repeat_preset_ctx;
+  window_stack_pop(true);
+  if (cb) { cb(repeats, days, ctx); }
+}
+
+static void repeat_preset_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
+  switch (cell_index->row) {
+    case REPEAT_PRESET_ONCE:
+      repeat_preset_finish(false, 0);
+      break;
+    case REPEAT_PRESET_EVERYDAY:
+      repeat_preset_finish(true, REPEAT_PRESET_EVERYDAY_MASK);
+      break;
+    case REPEAT_PRESET_WEEKDAYS:
+      repeat_preset_finish(true, REPEAT_PRESET_WEEKDAYS_MASK);
+      break;
+    case REPEAT_PRESET_WEEKEND:
+      repeat_preset_finish(true, REPEAT_PRESET_WEEKEND_MASK);
+      break;
+    case REPEAT_PRESET_CUSTOM: {
+      // Pop this screen first, then push the weekday picker on top of
+      // whatever is underneath (edit menu / wizard) -- the same
+      // pop-then-push-the-next-window shape new_alarm_time_confirm already
+      // uses to chain from the time editor into this repeat flow.
+      void (*on_confirm)(bool, uint8_t, void *) = s_repeat_preset_on_confirm;
+      void (*on_cancel)(void *) = s_repeat_preset_on_cancel;
+      void *cctx = s_repeat_preset_ctx;
+      uint8_t days = s_repeat_preset_days;
+      window_stack_pop(true);
+      repeat_edit_window_push(days, on_confirm, on_cancel, cctx);
+      break;
+    }
+  }
+}
+// BACK follows the same on_cancel-vs-snapshot-revert convention as every
+// other editor in this file.
+static void repeat_preset_back(ClickRecognizerRef r, void *ctx) {
+  if (s_repeat_preset_on_cancel) {
+    void (*cb)(void *) = s_repeat_preset_on_cancel;
+    void *c = s_repeat_preset_ctx;
+    window_stack_pop(true);
+    cb(c);
+    return;
+  }
+  uint8_t days = s_repeat_preset_days;
+  repeat_preset_finish(days != 0, days);
+}
+static void repeat_preset_select_click(ClickRecognizerRef r, void *ctx) {
+  MenuIndex idx = menu_layer_get_selected_index(s_repeat_preset_menu);
+  repeat_preset_select(s_repeat_preset_menu, &idx, ctx);
+}
+static void repeat_preset_up_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_repeat_preset_menu, true, MenuRowAlignCenter, true);
+}
+static void repeat_preset_down_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_repeat_preset_menu, false, MenuRowAlignCenter, true);
+}
+static void repeat_preset_click_config(void *ctx) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, repeat_preset_select_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, repeat_preset_up_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, repeat_preset_down_click);
+  window_single_click_subscribe(BUTTON_ID_BACK, repeat_preset_back);
+}
+static Layer *s_repeat_preset_header;
+static void repeat_preset_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Repeat", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+static void repeat_preset_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect bounds = layer_get_bounds(root);
+  s_repeat_preset_header = layer_create(GRect(0, 0, bounds.size.w, REPEAT_HEADER_H));
+  layer_set_update_proc(s_repeat_preset_header, repeat_preset_header_update_proc);
+  layer_add_child(root, s_repeat_preset_header);
+  GRect menu_bounds = GRect(0, REPEAT_HEADER_H, bounds.size.w, bounds.size.h - REPEAT_HEADER_H);
+  s_repeat_preset_menu = menu_layer_create(menu_bounds);
+  menu_layer_set_callbacks(s_repeat_preset_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = repeat_preset_num_rows, .get_cell_height = repeat_preset_cell_height,
+    .draw_row = repeat_preset_draw_row, .select_click = repeat_preset_select });
+  menu_layer_set_normal_colors(s_repeat_preset_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_repeat_preset_menu, GColorBlack, GColorWhite);
+  layer_add_child(root, menu_layer_get_layer(s_repeat_preset_menu));
+  window_set_click_config_provider(w, repeat_preset_click_config);
+}
+static void repeat_preset_window_unload(Window *w) {
+  menu_layer_destroy(s_repeat_preset_menu); s_repeat_preset_menu = NULL;
+  layer_destroy(s_repeat_preset_header); s_repeat_preset_header = NULL;
+}
+static void repeat_preset_window_push(uint8_t repeat_days,
+    void (*on_confirm)(bool repeats, uint8_t repeat_days, void *ctx),
+    void (*on_cancel)(void *ctx), void *ctx) {
+  s_repeat_preset_days = repeat_days;
+  s_repeat_preset_on_confirm = on_confirm;
+  s_repeat_preset_on_cancel = on_cancel;
+  s_repeat_preset_ctx = ctx;
+  if (!s_repeat_preset_window) {
+    s_repeat_preset_window = window_create();
+    window_set_window_handlers(s_repeat_preset_window, (WindowHandlers){
+      .load = repeat_preset_window_load, .unload = repeat_preset_window_unload });
+  }
+  window_stack_push(s_repeat_preset_window, true);
+  // Land on the row matching the alarm's current schedule (like the
+  // time/snooze editors opening pre-filled with the current value), or
+  // "Custom" when it doesn't exactly match a preset.
+  int row = REPEAT_PRESET_CUSTOM;
+  if (repeat_days == 0) { row = REPEAT_PRESET_ONCE; }
+  else if (repeat_days == REPEAT_PRESET_EVERYDAY_MASK) { row = REPEAT_PRESET_EVERYDAY; }
+  else if (repeat_days == REPEAT_PRESET_WEEKDAYS_MASK) { row = REPEAT_PRESET_WEEKDAYS; }
+  else if (repeat_days == REPEAT_PRESET_WEEKEND_MASK) { row = REPEAT_PRESET_WEEKEND; }
+  if (s_repeat_preset_menu) {
+    menu_layer_set_selected_index(s_repeat_preset_menu, (MenuIndex){ 0, row }, MenuRowAlignTop, false);
+  }
+}
+
 #define REPEAT_ROW_SUBMIT  0
 #define REPEAT_ROW_COUNT   8   // Apply + 7 weekdays
 
@@ -1849,7 +2019,6 @@ static void repeat_click_config(void *ctx) {
 }
 // Centered title, same style as the cron editor's "Cron" header.
 static Layer *s_repeat_header;
-#define REPEAT_HEADER_H 30
 static void repeat_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
   graphics_context_set_fill_color(ctx, GColorWhite);
@@ -2330,7 +2499,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       time_edit_window_push(a->hour, a->minute, edit_on_time_confirm, NULL, edit_on_time_chord, NULL);
       break;
     case EDIT_ROW_REPEAT:
-      repeat_edit_window_push(a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
+      repeat_preset_window_push(a->repeat_days, edit_on_repeat_confirm, NULL, NULL);
       break;
     case EDIT_ROW_CRON:
       cron_edit_window_push(a->cron_min, a->cron_hour, a->cron_dom, a->cron_month, a->cron_dow, a->cron_week,
@@ -2448,7 +2617,7 @@ static void new_alarm_repeat_confirm(bool repeats, uint8_t repeat_days, void *ct
 static void new_alarm_time_confirm(uint8_t hour, uint8_t minute, void *ctx) {
   s_draft.hour = hour;
   s_draft.minute = minute;
-  repeat_edit_window_push(s_draft.repeat_days, new_alarm_repeat_confirm,
+  repeat_preset_window_push(s_draft.repeat_days, new_alarm_repeat_confirm,
                           new_alarm_wizard_cancel, NULL);
 }
 
@@ -2935,6 +3104,7 @@ static void deinit(void) {
   rearm_wakeup();
   if (s_confirm_window) { window_destroy(s_confirm_window); }
   if (s_time_window) { window_destroy(s_time_window); }
+  if (s_repeat_preset_window) { window_destroy(s_repeat_preset_window); }
   if (s_repeat_window) { window_destroy(s_repeat_window); }
   if (s_snooze_window) { window_destroy(s_snooze_window); }
   if (s_edit_window) { window_destroy(s_edit_window); }
