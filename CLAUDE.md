@@ -116,9 +116,9 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmSoundPatternKind` | 10036 | int 0/1 | 0=Default (fixed beep loop), 1=Custom. Sets `sound_pattern_kind` directly. See "Signal submenu / custom sound &amp; vibe patterns" below. |
-| `TestAlarmSoundCustomPattern` | 10037 | string | Space-separated pattern (e.g. `"1 1 1 1 1"`), parsed via `ac_pattern_parse` into `sound_pattern`/`sound_pattern_len`. Logs a warning (fields left as previously set) if unparseable. |
+| `TestAlarmSoundCustomPattern` | 10037 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into `sound_pattern`/`sound_pattern_note`/`sound_pattern_len`. Logs a warning (fields left as previously set) if unparseable. |
 | `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
-| `TestAlarmVibeCustomPattern` | 10039 | string | Same format/parsing as `TestAlarmSoundCustomPattern`, into `vibe_pattern_custom`/`vibe_pattern_len`. |
+| `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/break pattern (e.g. `"2 1- 2 1- 2"`), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -862,64 +862,121 @@ feature — see git history if curious):
   for each, and nothing is mutated until a row is actually selected, so
   BACK needs no revert logic.
 - **Custom sound/vibe patterns**: a pattern is a space-separated list of
-  1-16 (`AC_PATTERN_MAX_SEGMENTS`) on/off durations, each written as a
-  decimal in tenths of a second (`"1"` = 100ms, `"3.3"` = 330ms) and parsed
-  by `ac_pattern_parse()` (`alarm_calc.c`, host-testable, no SDK
-  dependency) into a `uint8_t` 1-100 per segment (unit = 10ms, so
-  10ms-1000ms) — the FIRST segment is always "on" (sound/vibrate active),
-  alternating off/on after that. Extra decimal precision beyond one digit
-  is truncated, not rejected (`"3.35"` parses as `"3.3"`); anything else
-  malformed (empty, out-of-range, a stray letter, more than 16 segments)
-  fails all-or-nothing, same convention as `ac_cron_parse_field`. Unlike
-  cron's raw-text-plus-mask duplication, no raw string is persisted at
-  all — `ac_pattern_format()` deterministically reconstructs the canonical
-  text (used for both display and re-editing) from the stored integers,
-  since truncation already happened at parse time and the round trip is
-  therefore exact. `Alarm.sound_pattern_kind`/`vibe_pattern_kind` (0 =
-  Default/Preset, 1 = Custom) gate which representation is live; both
-  default to 0 on a `STORE_SCHEMA` migration (12; these fields, plus
-  `sound_pattern`/`sound_pattern_len` and `vibe_pattern_custom`/
-  `vibe_pattern_len`, are appended after `cron_week_mask` per the
-  append-only rule, landing in the EXTENSION persist blob, not the frozen
-  main one — see `alarm_store.h`'s `STORE_SCHEMA` comment), which is
-  already the correct "behave exactly as before this feature existed"
-  default, the same free pass `increasing_volume` got — no `store_load()`
-  zero-fill fixup needed, unlike the cron dom/month/week masks. Selecting
-  "Custom" and submitting an unparseable pattern from the keyboard does
-  NOT touch the alarm's persisted fields at all — `pattern_custom_done()`
-  just re-opens the pattern-select picker with its Custom row reading
-  "invalid" (a transient, unpersisted UI flag) instead of a formatted
-  pattern; a valid submission commits and exits straight back to the
-  Signal menu, skipping the picker. Applied at ring time by
-  `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): a custom vibe pattern
-  builds a `uint32_t[]` of millisecond durations (stored value x10) and
-  calls the SDK's `vibes_enqueue_custom_pattern()` instead of the
-  Double/Short/Long one-shots; a custom sound pattern builds an
-  alternating beep/silence `SpeakerNote[]` (same midi note/waveform as the
-  fixed 4-note sequence, just a variable `duration_ms` per segment)
-  instead of that fixed array.
+  1-16 (`AC_PATTERN_MAX_SEGMENTS`) on-beats and (optional) breaks. Each
+  token starts with a duration DIGIT, one of `AC_NOTE_DURATION_DIGITS`
+  (`{1, 2, 4, 8}`, `alarm_calc.c`) — NOT any digit 1-9 ("3"/"5"/"6"/"7"/"9"
+  are all plain ASCII digits but invalid duration digits). Each digit IS
+  its own duration in hundreds of ms (digit × `AC_NOTE_DURATION_MS_PER_UNIT`,
+  i.e. 1=100ms, 2=200ms, 4=400ms, 8=800ms — doubling like real rhythm
+  notation) rather than an arbitrary 1-4 index into a lookup table, so the
+  digits themselves are informative to read even outside the app — no
+  separate ms table is needed, so every alarm's "1" always means the same
+  100ms. A
+  break is the digit followed by `-` (e.g. `"1-"`); an on-beat for VIBE is
+  just the bare digit (e.g. `"2"`); an on-beat for SOUND must additionally
+  carry a note letter (e.g. `"1C"`) since sound has a pitch and vibe
+  doesn't — a bare digit is valid for vibe but rejected for sound, the one
+  real difference between the two grammars. A sound note letter may
+  optionally be followed by ONE real ABC-notation octave marker — `'`
+  (apostrophe) for an octave up, `,` (comma) for an octave down (e.g.
+  `"1C'"`, `"1C,"`); no marker means the base octave. Breaks are optional
+  BETWEEN on-beats: two on-tokens with nothing between them play back to
+  back with no gap (e.g. sound `"1C 2D' 1- 1C 2D,"`, vibe
+  `"2 1- 2 1- 2"`). Parsed by `ac_vibe_pattern_parse()`/
+  `ac_sound_pattern_parse()` (`alarm_calc.c`, host-testable, no SDK
+  dependency, sharing an internal tokenizer) into a packed byte per
+  segment (`AC_PATTERN_BREAK_BIT` = bit 7 set for a break; bits 0-6 = the
+  duration digit itself, via `AC_PATTERN_DURATION_MASK`) — sound
+  additionally fills a parallel `sound_pattern_note[]` value, encoded as
+  `octave*AC_NOTE_COUNT + <index into AC_NOTE_LETTER[]/AC_NOTE_MIDI[]>`
+  (meaningless on a break segment). `AC_NOTE_LETTER`/`AC_NOTE_MIDI` are
+  the 7 base-octave diatonic notes `C D E F G A B` (MIDI 96-107, one per
+  pattern-keyboard key 0-6); `AC_NOTE_OCTAVE_DOWN/SAME/UP` (0/1/2) shift
+  that base pitch by `12 * (octave - AC_NOTE_OCTAVE_SAME)` semitones —
+  the octave lives in this separate value rather than in a second table
+  of duplicate letters (an earlier version of this feature used lowercase
+  `c`/`d` on two spare keys for exactly one octave-up duplicate; the `'`/
+  `,` markers replaced that with full up/down coverage on every note, at
+  the cost of one extra keypress for a shifted note — see the keyboard
+  design point below for why that keypress moved to the bottom-left key
+  instead of staying on each note key's own cycle). Any malformed token
+  (bad digit, missing/invalid note letter, a bare digit for sound, a
+  trailing character that isn't `'`/`,`, more than 16 segments) fails
+  all-or-nothing, same convention as `ac_cron_parse_field`. Unlike cron's
+  raw-text-plus-mask duplication, no raw string is persisted at all —
+  `ac_vibe_pattern_format()`/`ac_sound_pattern_format()` deterministically
+  reconstruct the canonical text (used for both display and re-editing)
+  from the stored bytes, an exact round trip since there's no lossy
+  truncation step in this grammar. `Alarm.sound_pattern_kind`/
+  `vibe_pattern_kind` (0 = Default/Preset, 1 = Custom) gate which
+  representation is live. `STORE_SCHEMA` 15's migration resets
+  `sound_pattern_kind`/`sound_pattern_len` (not vibe's, this time — vibe's
+  own grammar/encoding hasn't changed since schema 14) for any alarm
+  migrating from schema < 15, rather than reinterpreting old
+  `sound_pattern_note[]` bytes under the new octave-aware encoding — this
+  same dev cycle went through a raw 1-100-duration-per-segment encoding
+  (schema 12), a bit7=break/bits0-6=contiguous-1-4-index encoding (schema
+  13), the `AC_NOTE_DURATION_DIGITS` sparse-digit scheme (schema 14), and
+  now this octave-marker rework (schema 15); each changed what the same
+  stored bits mean, so every bump needed a reset rather than
+  reinterpreting. Every other alarm field is untouched by this.
+  `sound_pattern_note[]` itself is unchanged in size/position (still
+  appended at the very end of the struct, since schema 13) — only its
+  byte *meaning* moved again. Selecting "Custom" and submitting an unparseable
+  pattern from the keyboard does NOT touch the alarm's persisted fields at
+  all — `pattern_custom_done()` just re-opens the pattern-select picker
+  with its Custom row reading "invalid" (a transient, unpersisted UI flag)
+  instead of a formatted pattern; a valid submission commits and exits
+  straight back to the Signal menu, skipping the picker. Applied at ring
+  time by `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): sound builds
+  one `SpeakerNote` per segment directly (each carries its own explicit
+  duration/pitch, so consecutive on-beats need no special handling — they
+  just play as distinct back-to-back notes); vibe first run-length-encodes
+  consecutive same-kind segments into merged on/off durations (since the
+  SDK's `VibePattern` array must strictly alternate on/off starting with
+  ON, unlike this grammar's optional breaks) before calling
+  `vibes_enqueue_custom_pattern()`, padding a leading 0ms on-duration if
+  the pattern happens to start with a break.
 - **The pattern-entry keyboard is a new `multitap_keyboard` mode**
   (`multitap_keyboard_set_pattern_mode()`), a sibling of cron's existing
   numeric mode rather than a restyle of it: both lock the layout to
-  `PAGE_NUMBERS` (digits 1-9 on the character keys), but numeric mode's
-  bottom-left key cycles `*`/`-`/`/`/`,` and repurposes the space key as
-  digit `0`; pattern mode instead cycles `0`/`.` off the bottom-left key
-  (`PATTERN_SYMS`) and leaves the space key as a literal space, since
-  patterns are space-separated. Pushed via
-  `multitap_keyboard_window_push_pattern()`, capped at 64 input chars
-  (`PATTERN_KEYBOARD_MAX_LEN`, `main.c`) — worst case 16 segments of up to
-  `"3.3 "` each. Since Pebble's graphics API has no rich-text/span
-  primitive, the spec's requirement that sound-on tokens read bold in the
-  text field itself required patching the widget's own draw routine (the
-  most invasive change made to this vendored widget so far — every prior
-  extension only ever added a behavior flag, never touched drawing):
-  `prv_draw_pattern_text()` is a separate, deliberately simpler renderer
-  from the generic `prv_draw_text_fitted()` ladder — fixed smallest-tier
-  font, up to 2 wrapped lines, alternating bold/regular per
-  whitespace-delimited token, with a plain non-bold leading-truncated
-  fallback in the rare case a pattern still doesn't fit. `prv_update_proc`
-  picks this renderer instead of `prv_draw_text_fitted` whenever
-  `kb->pattern_mode` is set; every other mode's rendering is untouched.
+  `PAGE_NUMBERS`, but numeric mode's character keys are plain digits 1-9
+  and its bottom-left key cycles `*`/`-`/`/`/`,`/repurposes space as `0`;
+  pattern mode's character keys instead pull from one of two small,
+  purpose-built tables selected by a second flag,
+  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (keys 0-3 cycle a
+  duration digit then that key's note letter; keys 4-6 have only a note
+  letter, G/A/B; keys 7-8 are spare/no-op, see the note-table description
+  above for why) for sound, or `PATTERN_KEY_VIBE[9]` (keys 0-3 a bare
+  duration digit; keys 4-8 empty/no-op) for vibe, since vibe has no pitch
+  to put on the spare keys — and its bottom-left key cycles `-`/`'`/`,`
+  (`PATTERN_SYMS`, 3 elements — the break marker plus the two real
+  ABC-notation octave markers, same multi-tap mechanism `CRON_SYMS`
+  already uses for its own 4-symbol cycle) while the space key stays a
+  literal space. Pushed via `multitap_keyboard_window_push_pattern(...,
+  notes_enabled)`, capped at 64 input chars (`PATTERN_KEYBOARD_MAX_LEN`,
+  `main.c`) — worst case 16 segments of up to 3 chars each (a digit, a
+  note letter, and an optional octave marker -- or `-` for a break). The
+  text field itself renders through the same shared `prv_draw_text_fitted()`
+  ladder every other mode uses, no different treatment for pattern mode —
+  an earlier version of this feature bolded on-beat tokens vs. regular
+  breaks via a separate `prv_draw_pattern_text()` renderer, patching the
+  widget's own draw routine to work around Pebble's lack of a rich-text/
+  span primitive, but that distinction turned out not to be needed and was
+  reverted; if a future feature needs per-token styling again, this is the
+  precedent for how invasive that gets (the most invasive change made to
+  this vendored widget when it existed — every other extension only ever
+  added a behavior flag, never touched drawing). An even earlier version
+  put the octave markers on each note key's own cycle (baked-in `C`/`C^`/
+  `Cv`-style variants, needing lowercase `c`/`d` duplicates on two spare
+  keys to reach a second octave at all) rather than on the bottom-left
+  key — moving them to their own key kept each note key's cycle short and
+  freed keys 7-8 entirely, at the cost of one more keypress-and-commit
+  step to shift a note's octave; that earlier approach also needed the
+  widget's own shift-casing explicitly disabled in pattern mode (to stop
+  auto-caps from silently uppercasing the lowercase duplicates) — with no
+  lowercase glyphs left anywhere in pattern mode now, that guard was dead
+  code and has been removed from `prv_render_glyph`/`prv_key_label`.
 - **Main list display**: the bold time slot (`ml_format_cron_time`) shows
   the hour/minute formatted via `ac_format_time` — same
   `clock_is_24h_style()`-aware `"HH:MM"`/`"H:MM am"` every non-cron alarm's

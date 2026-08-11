@@ -18,6 +18,7 @@ static int         s_max_len;        // byte cap on entry (0 = unlimited)
 static bool        s_done;            // guard: deliver the result exactly once
 static bool        s_numeric_mode;    // set by multitap_keyboard_window_push_numeric
 static bool        s_pattern_mode;    // set by multitap_keyboard_window_push_pattern
+static bool        s_pattern_notes_enabled;   // set by multitap_keyboard_window_push_pattern
 
 // Tap vs. hold disambiguation, identical to the verified PebbleOS touch flow.
 static GPoint    s_touch_pt;
@@ -163,7 +164,7 @@ static void prv_load(Window *window) {
 
   s_keyboard = multitap_keyboard_create(bounds, prv_kb_done, NULL);
   if (s_numeric_mode) multitap_keyboard_set_numeric_mode(s_keyboard, true);
-  if (s_pattern_mode) multitap_keyboard_set_pattern_mode(s_keyboard, true);
+  if (s_pattern_mode) multitap_keyboard_set_pattern_mode(s_keyboard, true, s_pattern_notes_enabled);
   layer_add_child(root, multitap_keyboard_get_layer(s_keyboard));
   settings_load_and_apply(s_keyboard);
   if (s_max_len > 0) multitap_keyboard_set_max_len(s_keyboard, s_max_len);
@@ -184,12 +185,13 @@ static void prv_unload(Window *window) {
   s_window = NULL;
 }
 
-// Shared setup for every push variant below. `numeric`/`pattern` are always
-// set explicitly (never left over from a prior push) since s_window/
-// s_keyboard are single static instances reused across the app's lifetime.
+// Shared setup for every push variant below. `numeric`/`pattern`/
+// `pattern_notes` are always set explicitly (never left over from a prior
+// push) since s_window/s_keyboard are single static instances reused
+// across the app's lifetime.
 static void prv_push_internal(MultitapKeyboardResultHandler handler,
                                const char *initial_text, int max_len,
-                               void *context, bool numeric, bool pattern) {
+                               void *context, bool numeric, bool pattern, bool pattern_notes) {
   if (s_window) return;                    // single instance
 
   s_handler = handler;
@@ -198,6 +200,7 @@ static void prv_push_internal(MultitapKeyboardResultHandler handler,
   s_max_len = max_len;
   s_numeric_mode = numeric;
   s_pattern_mode = pattern;
+  s_pattern_notes_enabled = pattern_notes;
   s_has_initial = (initial_text != NULL);
   if (s_has_initial) {
     strncpy(s_initial, initial_text, sizeof(s_initial) - 1);
@@ -216,23 +219,23 @@ static void prv_push_internal(MultitapKeyboardResultHandler handler,
 
 void multitap_keyboard_window_push(MultitapKeyboardResultHandler handler,
                              const char *initial_text, void *context) {
-  prv_push_internal(handler, initial_text, 0, context, false, false);
+  prv_push_internal(handler, initial_text, 0, context, false, false, false);
 }
 
 void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context) {
-  prv_push_internal(handler, initial_text, max_len, context, false, false);
+  prv_push_internal(handler, initial_text, max_len, context, false, false, false);
 }
 
 void multitap_keyboard_window_push_numeric(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context) {
-  prv_push_internal(handler, initial_text, max_len, context, true, false);
+  prv_push_internal(handler, initial_text, max_len, context, true, false, false);
 }
 
 void multitap_keyboard_window_push_pattern(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
-                                void *context) {
-  prv_push_internal(handler, initial_text, max_len, context, false, true);
+                                void *context, bool notes_enabled) {
+  prv_push_internal(handler, initial_text, max_len, context, false, true, notes_enabled);
 }

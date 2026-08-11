@@ -36,14 +36,22 @@ static size_t alarm_size_for_schema(int schema) {
     case 11: return 248;  // the schema-10 fix: cron_week_mask/cron_week moved
                            // to their own extension key (see store_load/
                            // store_save below), so the frozen MAIN blob size
-                           // is unchanged from schema 9/10. Also the size to
-                           // migrate FROM for schema 12 (sound/vibe custom
-                           // pattern fields) -- those all landed in the
+                           // is unchanged from schema 9/10.
+    case 12: return 248;  // + sound/vibe custom pattern fields (old raw
+                           // 1-100 duration encoding) -- all landed in the
                            // EXTENSION blob, which store_load reads via
-                           // ALARM_EXT_SIZE regardless of this table, so no
-                           // new case is needed for them; this table only
-                           // ever needs an entry for the version schema is
-                           // migrating FROM, never the current STORE_SCHEMA.
+                           // ALARM_EXT_SIZE regardless of this table, so the
+                           // MAIN blob size is unchanged.
+    case 13: return 248;  // + sound_pattern_note[] (note/break pattern
+                           // grammar rework) -- also EXTENSION-blob-only,
+                           // MAIN blob size unchanged.
+    case 14: return 248;  // duration digits 1/2/4/8 rework -- no new
+                           // fields, byte VALUES just mean something
+                           // different, so MAIN blob size unchanged. Also
+                           // the size to migrate FROM for schema 15 (the
+                           // octave-marker rework) -- see its migration
+                           // fixup below for why that bump needs more than
+                           // just this size-table entry.
     default: return 0;
   }
 }
@@ -114,6 +122,28 @@ int store_load(Alarm *out) {
     } else if (out[i].is_cron) {
       out[i].cron_week_mask = AC_WEEK_ALL;
       strcpy(out[i].cron_week, "*");
+    }
+    // sound_pattern[]/vibe_pattern_custom[]'s byte meaning changed at
+    // schema 13 (raw duration -> bit7=break/bits0-6=duration-digit) and
+    // schema 14 (duration digit 1-4 index -> the sparse {1,2,4,8} set) --
+    // a stored *_kind==1 from an older schema means its pattern bytes are
+    // under one of those OLD encodings, which would otherwise be silently
+    // misread as garbage or a different duration under the current one
+    // (e.g. a schema-13 stored digit 4, meaning 800ms, would now read as
+    // digit 4 meaning 400ms). vibe's grammar/encoding hasn't changed since
+    // schema 14, so it only needs resetting for schemas older than that.
+    if (migrating && stored_schema < 14) {
+      out[i].vibe_pattern_kind = 0;
+      out[i].vibe_pattern_len = 0;
+    }
+    // sound_pattern_note[]'s encoding changed AGAIN at schema 15 (a plain
+    // 0-8 index into a 9-entry letter table incl. lowercase c/d -> an
+    // `octave*AC_NOTE_COUNT + index` value into a 7-entry table), so
+    // sound needs resetting for anything older than THAT, one schema
+    // later than vibe's own reset above.
+    if (migrating && stored_schema < 15) {
+      out[i].sound_pattern_kind = 0;
+      out[i].sound_pattern_len = 0;
     }
   }
   if (migrating) {

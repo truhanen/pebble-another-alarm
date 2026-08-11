@@ -61,14 +61,51 @@ static const char *const PAGE_IND[PAGE_COUNT] = { "ABC", "123", "#+=" };
 static const char *const CRON_SYMS[] = { "*", "-", "/", "," };
 #define CRON_SYM_COUNT 4
 
-// Fixed 2-symbol cycle for the bottom-left key in pattern_mode (see
-// multitap_keyboard_set_pattern_mode) — "0" (no dedicated 0 key, same reason
-// numeric mode needs this key at all) and "." (decimal point for values
-// like "3.3"). Unlike numeric mode, the space key stays a literal space in
-// pattern mode (patterns are space-separated), so "0" has nowhere else to
-// live.
-static const char *const PATTERN_SYMS[] = { "0", "." };
-#define PATTERN_SYM_COUNT 2
+// Bottom-left key cycle for pattern_mode (see multitap_keyboard_set_pattern_mode)
+// -- "-" marks a break/pause token ("1-"); "'"/"," are real ABC-notation
+// octave markers written right after a sound note letter ("1C'" up one
+// octave, "1C," down one octave -- see AC_NOTE_OCTAVE_*, alarm_calc.h).
+// Vibe patterns have no pitch, so it only ever uses "-" there, but the key
+// cycles all three regardless (same as any other multi-glyph key) since
+// vibe/sound share this one bottom-left key.
+static const char *const PATTERN_SYMS[] = { "-", "'", "," };
+#define PATTERN_SYM_COUNT 3
+
+// Per-character-key (0-8) glyph lists for pattern mode, selected by
+// multitap_keyboard_set_pattern_mode's `notes_enabled` instead of by page --
+// this is a THIRD glyph source alongside PAGE_KEY/CRON_SYMS, not a variant
+// of PAGE_NUMBERS's plain 1-per-key digits, since a pattern-mode key can
+// need up to two very differently-shaped glyphs (a duration digit and a
+// note letter). With notes: keys 0-3 cycle duration digit 1/2/4/8 (see
+// AC_NOTE_DURATION_DIGITS, alarm_calc.h -- each digit literally IS its
+// duration in hundreds of ms) then that same "slot"'s note letter
+// (C/D/E/F); keys 4-6 have ONLY a note letter (G, A, B); keys 7-8 are
+// spare (no glyphs) -- octave shifts are applied via the bottom-left key's
+// "'"/"," markers instead of dedicated duplicate keys, so there's nothing
+// left to put on them. Without notes (vibe has no pitch): keys 0-3 have
+// only their duration digit; keys 4-8 have no glyphs at all (a key press
+// is simply a no-op, same as the widget already does for one-glyph/empty
+// pending logic).
+static const char *const PK_SOUND_0[] = { "1", "C", NULL };
+static const char *const PK_SOUND_1[] = { "2", "D", NULL };
+static const char *const PK_SOUND_2[] = { "4", "E", NULL };
+static const char *const PK_SOUND_3[] = { "8", "F", NULL };
+static const char *const PK_SOUND_4[] = { "G", NULL };
+static const char *const PK_SOUND_5[] = { "A", NULL };
+static const char *const PK_SOUND_6[] = { "B", NULL };
+static const char *const PK_SOUND_EMPTY[] = { NULL };
+static const char *const *const PATTERN_KEY_SOUND[9] = {
+  PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_EMPTY, PK_SOUND_EMPTY,
+};
+static const char *const PK_VIBE_0[] = { "1", NULL };
+static const char *const PK_VIBE_1[] = { "2", NULL };
+static const char *const PK_VIBE_2[] = { "4", NULL };
+static const char *const PK_VIBE_3[] = { "8", NULL };
+static const char *const PK_VIBE_EMPTY[] = { NULL };
+static const char *const *const PATTERN_KEY_VIBE[9] = {
+  PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3,
+  PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY,
+};
 
 // Toggleable extended (non-ASCII) characters. Each is appended to a base key's
 // cycle when enabled, and hidden from the key labels. All enabled by default.
@@ -129,9 +166,14 @@ struct MultitapKeyboard {
   bool numeric_mode;        // fixed to PAGE_NUMBERS; bottom-left key cycles
                             // */-/,/  instead of Shift/layout-cycle. Set via
                             // multitap_keyboard_set_numeric_mode().
-  bool pattern_mode;        // fixed to PAGE_NUMBERS; bottom-left key cycles
-                            // 0/. and the space key types a literal space
+  bool pattern_mode;        // fixed to PAGE_NUMBERS; bottom-left key types
+                            // "-" and the space key types a literal space
                             // (not "0") -- see multitap_keyboard_set_pattern_mode().
+  bool pattern_notes_enabled; // pattern_mode only: character keys 0-8 pull
+                            // from PATTERN_KEY_SOUND (duration digit + note
+                            // letter) instead of PATTERN_KEY_VIBE (duration
+                            // digit only, no pitch) -- set alongside
+                            // pattern_mode, meaningless otherwise.
 
   bool pending_active;
   int  pending_key;
@@ -222,7 +264,14 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
     for (int j = 0; j < CRON_SYM_COUNT && n < cap; j++) out[n++] = CRON_SYMS[j];
     return n;
   }
-  const char *const *base = PAGE_KEY[page][key];
+  // Pattern mode's character keys (0-8) pull from their own glyph tables
+  // instead of PAGE_KEY[PAGE_NUMBERS] -- a plain digit-per-key table
+  // wouldn't fit a duration digit AND (for sound) a note letter on the
+  // same key. `key` is guaranteed 0-8 here: KEY_SHIFT already returned
+  // above, and callers never pass KEY_SPACE/KEY_DEL to this function.
+  const char *const *base = (kb->pattern_mode)
+    ? (kb->pattern_notes_enabled ? PATTERN_KEY_SOUND[key] : PATTERN_KEY_VIBE[key])
+    : PAGE_KEY[page][key];
   for (int j = 0; base[j] && n < cap; j++) out[n++] = base[j];
   if (page == PAGE_ALPHA) {
     for (int e = 0; e < EXT_COUNT && n < cap; e++) {
@@ -397,7 +446,7 @@ static void prv_press_key(MultitapKeyboard *kb, int key) {
 
   if (key == KEY_SHIFT) {
     if (kb->numeric_mode || kb->pattern_mode) {
-      prv_press_char_key(kb, KEY_SHIFT);   // cycles */-/,/ or 0/. like any other key
+      prv_press_char_key(kb, KEY_SHIFT);   // cycles */-/,/ (numeric) or types "-" (pattern) like any other key
     } else if (kb->page != PAGE_ALPHA) {
       prv_cycle_page(kb);                  // doubles as the layout-cycle button
     } else if (kb->shift == SHIFT_OFF && kb->settings.auto_caps &&
@@ -532,7 +581,8 @@ static void prv_key_label(MultitapKeyboard *kb, int i, int shift, char *out, siz
   int n = prv_eff_glyphs(kb, kb->page, i, eff, MAX_EFF);
   for (int j = 0; j < n; j++) {
     if ((unsigned char)eff[j][0] >= 0x80) continue;   // hide non-ASCII glyphs
-    char gb[8]; prv_render_glyph_cased(eff[j], shift, gb, sizeof(gb));
+    char gb[8];
+    prv_render_glyph_cased(eff[j], shift, gb, sizeof(gb));
     if (strlen(out) + strlen(gb) < cap - 1) strcat(out, gb);
   }
 }
@@ -691,209 +741,6 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
 
-#define MAX_PAT_TOK 48
-
-typedef struct { int start_off, end_off, line, x, w; GFont font; } PatTok;
-
-// Locates the pixel (line, x) for byte offset `off` within `text`, given the
-// already-laid-out `toks` -- used to place the caret and the pending-glyph
-// underline at the right spot despite the text being drawn in per-token,
-// alternating-font pieces rather than prv_draw_text_fitted's single
-// graphics_draw_text call. Walks tokens back-to-front and matches the last
-// one starting at or before `off` (both the caret and the pending-glyph
-// range always fall within or right at the end of the LAST token, since
-// they track live typing) -- falls back to (0,0) if `off` precedes every
-// token (e.g. an empty field).
-static void prv_pattern_offset_pos(const PatTok *toks, int n_tok, const char *text,
-                                    int off, int *out_line, int *out_x) {
-  for (int i = n_tok - 1; i >= 0; i--) {
-    if (off >= toks[i].start_off) {
-      int rel = off - toks[i].start_off;
-      int tok_len = toks[i].end_off - toks[i].start_off;
-      if (rel > tok_len) { rel = tok_len; }
-      char tb[16];
-      int tl = rel < (int)sizeof(tb) - 1 ? rel : (int)sizeof(tb) - 1;
-      memcpy(tb, text + toks[i].start_off, tl); tb[tl] = '\0';
-      int w = graphics_text_layout_get_content_size(
-                tb, toks[i].font, GRect(0, 0, 2000, 200), GTextOverflowModeFill, GTextAlignmentLeft).w;
-      *out_line = toks[i].line;
-      *out_x = toks[i].x + w;
-      return;
-    }
-  }
-  *out_line = 0;
-  *out_x = 0;
-}
-
-// Paired bold/regular font ladder for pattern mode, same four sizes/rises as
-// prv_draw_text_fitted's own LADDER -- so the pattern keyboard's text field
-// shrinks-to-fit the same way every other mode's does (starting from the
-// largest size and only dropping down as needed) instead of always
-// rendering at the smallest tier.
-static const struct { const char *bold_key; const char *reg_key; int16_t rise; } PATTERN_LADDER[] = {
-  { FONT_KEY_GOTHIC_28_BOLD, FONT_KEY_GOTHIC_28, 5 },
-  { FONT_KEY_GOTHIC_24_BOLD, FONT_KEY_GOTHIC_24, 4 },
-  { FONT_KEY_GOTHIC_18_BOLD, FONT_KEY_GOTHIC_18, 3 },
-  { FONT_KEY_GOTHIC_14_BOLD, FONT_KEY_GOTHIC_14, 2 },
-};
-#define PATTERN_LADDER_N (int)(sizeof(PATTERN_LADDER) / sizeof(PATTERN_LADDER[0]))
-
-// Lays out `text` as alternating bold/regular tokens at ladder tier `tier`,
-// wrapping at token boundaries within `max_w`, capped at `max_lines`.
-// Always fills in as many toks/out_* as it got to (even when it overflows
-// the line cap) so the probing loop below can tell "doesn't fit" from
-// "fits, uses N lines" without a second pass.
-static bool prv_pattern_layout(int tier, const char *text, int max_w, int max_lines,
-                                PatTok *toks, int *out_n_tok, int *out_line_h, int *out_space_w) {
-  GFont f_bold = fonts_get_system_font(PATTERN_LADDER[tier].bold_key);
-  GFont f_reg  = fonts_get_system_font(PATTERN_LADDER[tier].reg_key);
-  const GRect wide = GRect(0, 0, 2000, 200);
-  int line_h = graphics_text_layout_get_content_size("Ag", f_bold, wide, GTextOverflowModeFill, GTextAlignmentLeft).h;
-  int space_w = graphics_text_layout_get_content_size("0 0", f_bold, wide, GTextOverflowModeFill, GTextAlignmentLeft).w
-              - graphics_text_layout_get_content_size("00", f_bold, wide, GTextOverflowModeFill, GTextAlignmentLeft).w;
-  if (space_w < 2) { space_w = 2; }
-  *out_line_h = line_h;
-  *out_space_w = space_w;
-
-  int n_tok = 0, line = 0, x = 0, idx = 0;
-  bool overflow = false;
-  const char *p = text;
-  while (*p && n_tok < MAX_PAT_TOK) {
-    const char *tok = p;
-    while (*p && *p != ' ') { p++; }
-    int tlen = (int)(p - tok);
-    char tb[16];
-    int tl = tlen < (int)sizeof(tb) - 1 ? tlen : (int)sizeof(tb) - 1;
-    memcpy(tb, tok, tl); tb[tl] = '\0';
-    GFont tf = (idx % 2 == 0) ? f_bold : f_reg;
-    int tw = graphics_text_layout_get_content_size(tb, tf, wide, GTextOverflowModeFill, GTextAlignmentLeft).w;
-    int need = tw + (x > 0 ? space_w : 0);
-    if (x > 0 && x + need > max_w) { line++; x = 0; need = tw; }
-    if (line >= max_lines) { overflow = true; break; }
-    toks[n_tok].start_off = (int)(tok - text);
-    toks[n_tok].end_off = (int)(p - text);
-    toks[n_tok].line = line;
-    toks[n_tok].x = x + (need - tw);
-    toks[n_tok].w = tw;
-    toks[n_tok].font = tf;
-    n_tok++;
-    x += need;
-    idx++;
-    if (*p == ' ') { p++; }
-  }
-  *out_n_tok = n_tok;
-  return !overflow;
-}
-
-// True if `tier`'s layout at `max_lines` both avoids overflowing the token
-// wrap AND fits the lines it actually used within `max_h` -- a tier/
-// max_lines combo that never wraps onto a second line still needs checking
-// against max_h since a larger tier's single line can be taller than the
-// box (mirrors prv_draw_text_fitted's own `sz.h <= box.size.h` checks).
-static bool prv_pattern_fits(int tier, const char *text, int max_w, int max_lines, int max_h,
-                              PatTok *toks, int *out_n_tok, int *out_line_h, int *out_space_w) {
-  if (!prv_pattern_layout(tier, text, max_w, max_lines, toks, out_n_tok, out_line_h, out_space_w)) { return false; }
-  int lines_used = (*out_n_tok > 0) ? toks[*out_n_tok - 1].line + 1 : 1;
-  return (*out_line_h) * lines_used <= max_h;
-}
-
-// Renders pattern-mode text (space-delimited on/off duration tokens) with
-// alternating bold ("on"/sound-active tokens, 0-indexed even positions) and
-// regular ("off" tokens, odd positions) fonts, since Pebble's graphics API
-// has no rich-text/span primitive to bold a substring within one draw call.
-// Shrink-to-fit ladder mirrors prv_draw_text_fitted's own (same four sizes/
-// rises, loosest single line first, then loosest 2-line wrap, `wrap_floor`
-// sticky-while-typing behavior) -- built as its own function rather than
-// threaded through prv_draw_text_fitted itself, since alternating fonts per
-// token needs its own token-aware wrap/measure pass instead of one
-// graphics_draw_text call. Falls back to a plain (non-bold) leading-
-// truncated view, without caret/underline, in the rare case even the
-// smallest tier's two lines don't fit -- same spirit as that ladder's own
-// truncate-from-the-front step, just not pixel-exact with it.
-static void prv_draw_pattern_text(GContext *ctx, const char *text, GRect box, int *wrap_floor,
-                                   int ul_start, int ul_end, GColor ul_color,
-                                   int caret_at, GColor caret_color) {
-  PatTok toks[MAX_PAT_TOK];
-  int n_tok = 0, line_h = 0, space_w = 0;
-
-  int natural = 2 * PATTERN_LADDER_N;   // truncate, unless something looser fits first
-  for (int i = 0; i < PATTERN_LADDER_N; i++) {
-    if (prv_pattern_fits(i, text, box.size.w, 1, box.size.h, toks, &n_tok, &line_h, &space_w)) { natural = i; break; }
-  }
-  if (natural == 2 * PATTERN_LADDER_N) {
-    for (int i = 0; i < PATTERN_LADDER_N; i++) {
-      if (prv_pattern_fits(i, text, box.size.w, 2, box.size.h, toks, &n_tok, &line_h, &space_w)) { natural = PATTERN_LADDER_N + i; break; }
-    }
-  }
-
-  int level = natural;
-  if (wrap_floor) {
-    if (level < *wrap_floor) { level = *wrap_floor; }
-    *wrap_floor = level;
-  }
-
-  if (level >= 2 * PATTERN_LADDER_N) {
-    // Doesn't fit even at the smallest tier across 2 lines -- plain
-    // (non-bold) trailing view, same spirit as prv_draw_text_fitted's own
-    // truncate-from-the-front step.
-    int tier = PATTERN_LADDER_N - 1;
-    GFont f_reg = fonts_get_system_font(PATTERN_LADDER[tier].reg_key);
-    int16_t rise = PATTERN_LADDER[tier].rise;
-    prv_pattern_layout(tier, text, box.size.w, 2, toks, &n_tok, &line_h, &space_w);
-    char buf[BUFFER_CAP + 16];
-    const char *tail = text;
-    while (*tail) {
-      tail++;
-      snprintf(buf, sizeof(buf), "...%s", tail);
-      GSize sz = graphics_text_layout_get_content_size(
-                   buf, f_reg, GRect(0, 0, box.size.w, 400), GTextOverflowModeWordWrap, GTextAlignmentLeft);
-      if (sz.h <= line_h * 2 + 1) { break; }
-    }
-    snprintf(buf, sizeof(buf), "...%s", tail);
-    int vy = box.origin.y - rise;
-    graphics_draw_text(ctx, buf, f_reg, GRect(box.origin.x, vy, box.size.w, line_h * 2 + 4),
-                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-    return;
-  }
-
-  int tier = (level < PATTERN_LADDER_N) ? level : (level - PATTERN_LADDER_N);
-  int max_lines = (level < PATTERN_LADDER_N) ? 1 : 2;
-  prv_pattern_layout(tier, text, box.size.w, max_lines, toks, &n_tok, &line_h, &space_w);
-  int16_t rise = PATTERN_LADDER[tier].rise;
-  GFont f_reg = fonts_get_system_font(PATTERN_LADDER[tier].reg_key);
-
-  for (int i = 0; i < n_tok; i++) {
-    char tb[16];
-    int tl = (toks[i].end_off - toks[i].start_off);
-    if (tl > (int)sizeof(tb) - 1) { tl = (int)sizeof(tb) - 1; }
-    memcpy(tb, text + toks[i].start_off, tl); tb[tl] = '\0';
-    int vy = box.origin.y + toks[i].line * line_h - rise;
-    graphics_draw_text(ctx, tb, toks[i].font,
-                       GRect(box.origin.x + toks[i].x, vy, toks[i].w + 4, line_h + 4),
-                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-  }
-
-  if (ul_end > ul_start) {
-    int l0, x0, l1, x1;
-    prv_pattern_offset_pos(toks, n_tok, text, ul_start, &l0, &x0);
-    prv_pattern_offset_pos(toks, n_tok, text, ul_end, &l1, &x1);
-    if (l0 == l1 && x1 > x0) {
-      int uy = box.origin.y + l0 * line_h + line_h - 3;
-      graphics_context_set_fill_color(ctx, ul_color);
-      graphics_fill_rect(ctx, GRect(box.origin.x + x0, uy, x1 - x0, 2), 0, GCornerNone);
-    }
-  }
-
-  if (caret_at >= 0) {
-    int cl, cx;
-    prv_pattern_offset_pos(toks, n_tok, text, caret_at, &cl, &cx);
-    int vy = box.origin.y + cl * line_h - rise;
-    graphics_context_set_text_color(ctx, caret_color);
-    graphics_draw_text(ctx, "|", f_reg, GRect(box.origin.x + cx, vy, box.size.w - cx, line_h + 4),
-                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
-  }
-}
-
 // Recolor a palettized icon so its opaque pixels become `ink` while transparent
 // palette entries stay clear. Lets one arrow asset render in any theme/state
 // color. No-op if the asset didn't compile to a palettized format.
@@ -1028,15 +875,13 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   kb->last_text_len = cur_len;
 
   graphics_context_set_text_color(ctx, c_fg);
-  if (kb->pattern_mode) {
-    prv_draw_pattern_text(ctx, shown, GRect(field.origin.x + 6, field.origin.y,
-                                            field.size.w - 12, field.size.h),
-                          &kb->wrap_floor, ul_start, ul_end, c_acc, caret_at, c_acc);
-  } else {
-    prv_draw_text_fitted(ctx, shown, GRect(field.origin.x + 6, field.origin.y,
-                                           field.size.w - 12, field.size.h),
-                         &kb->wrap_floor, ul_start, ul_end, c_acc, caret_at, c_acc);
-  }
+  // Pattern mode used to render alternating bold on-beats/regular breaks
+  // here via its own prv_draw_pattern_text(), since that distinction was
+  // once required; now that it isn't, pattern mode's text field just goes
+  // through the same shared shrink-to-fit routine every other mode uses.
+  prv_draw_text_fitted(ctx, shown, GRect(field.origin.x + 6, field.origin.y,
+                                         field.size.w - 12, field.size.h),
+                       &kb->wrap_floor, ul_start, ul_end, c_acc, caret_at, c_acc);
 
   // Keys are filled, rounded, and gapped like the throw grid: letter keys rest
   // on the soft `key` fill; the bottom function row (Shift/space/DEL) is a bold
@@ -1196,9 +1041,10 @@ void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled) {
   layer_mark_dirty(kb->layer);
 }
 
-void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled) {
+void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool notes_enabled) {
   if (!kb) return;
   kb->pattern_mode = enabled;
+  kb->pattern_notes_enabled = notes_enabled;
   if (enabled) kb->page = PAGE_NUMBERS;
   layer_mark_dirty(kb->layer);
 }

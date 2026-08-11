@@ -744,13 +744,34 @@ static AppTimer *s_alarm_auto_dismiss_timer;   // auto_dismiss: dismisses the ri
 
 // A custom vibe pattern (vibe_pattern_kind==1) plays via the SDK's own
 // vibes_enqueue_custom_pattern() instead of the fixed short/long/double
-// one-shots -- durations are stored as tenths-of-a-second ints (1-100, see
-// AC_PATTERN_MAX_SEGMENTS in alarm_calc.h), so each is x10 to get ms.
+// one-shots. VibePattern's own array must strictly alternate on/off
+// starting with an ON duration, but our grammar allows consecutive
+// on-tokens with no break between them (breaks are optional) -- so
+// same-kind runs are collapsed (summed) first; if the pattern happens to
+// start with a break, a 0ms leading "on" is padded in so the array still
+// starts ON.
 static void alarm_vibrate(const Alarm *a) {
   if (a->vibe_pattern_kind == 1 && a->vibe_pattern_len > 0) {
-    uint32_t durations[AC_PATTERN_MAX_SEGMENTS];
-    for (int i = 0; i < a->vibe_pattern_len; i++) { durations[i] = (uint32_t)a->vibe_pattern_custom[i] * 10; }
-    VibePattern vp = { .durations = durations, .num_segments = a->vibe_pattern_len };
+    bool run_is_on[AC_PATTERN_MAX_SEGMENTS];
+    uint32_t run_ms[AC_PATTERN_MAX_SEGMENTS];
+    int n_runs = 0;
+    for (int i = 0; i < a->vibe_pattern_len; i++) {
+      uint8_t raw = a->vibe_pattern_custom[i];
+      bool is_on = !(raw & AC_PATTERN_BREAK_BIT);
+      uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+      if (n_runs > 0 && run_is_on[n_runs - 1] == is_on) {
+        run_ms[n_runs - 1] += ms;
+      } else {
+        run_is_on[n_runs] = is_on;
+        run_ms[n_runs] = ms;
+        n_runs++;
+      }
+    }
+    uint32_t durations[AC_PATTERN_MAX_SEGMENTS + 1];
+    uint32_t n = 0;
+    if (n_runs > 0 && !run_is_on[0]) { durations[n++] = 0; }
+    for (int i = 0; i < n_runs; i++) { durations[n++] = run_ms[i]; }
+    VibePattern vp = { .durations = durations, .num_segments = n };
     vibes_enqueue_custom_pattern(vp);
     return;
   }
@@ -768,20 +789,28 @@ static void alarm_vibrate(const Alarm *a) {
 // system-muted. Ours additionally requires the firing alarm's own
 // sound_enabled toggle (checked by the caller) — Instant Timer has no
 // per-alarm concept to gate on. A custom sound pattern (sound_pattern_kind==1)
-// instead builds an alternating beep/silence SpeakerNote per stored segment,
-// same midi_note/waveform as the fixed sequence, just a variable duration
-// (x10ms, same unit as the vibe pattern above) per segment.
+// instead builds one SpeakerNote per stored segment -- unlike vibration,
+// SpeakerNote carries its own explicit duration and needs no strict
+// alternation, so consecutive on-notes just play back to back as distinct
+// notes with no merging required. Each on-segment's pitch comes from
+// sound_pattern_note[]/AC_NOTE_MIDI; break segments are silence (midi_note 0).
 #if PBL_SPEAKER
 static void alarm_play_audio(const Alarm *a, uint8_t volume) {
   if (volume == 0 || speaker_is_muted()) { return; }
   if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
     SpeakerNote notes[AC_PATTERN_MAX_SEGMENTS];
     for (int i = 0; i < a->sound_pattern_len; i++) {
-      bool is_on = (i % 2) == 0;   // [0] is always the first "sound-on" segment
+      uint8_t raw = a->sound_pattern[i];
+      bool is_break = (raw & AC_PATTERN_BREAK_BIT) != 0;
+      uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+      uint8_t octave = a->sound_pattern_note[i] / AC_NOTE_COUNT;
+      uint8_t base = a->sound_pattern_note[i] % AC_NOTE_COUNT;
+      uint8_t midi = (!is_break && base < AC_NOTE_COUNT)
+        ? (uint8_t)(AC_NOTE_MIDI[base] + 12 * (octave - AC_NOTE_OCTAVE_SAME)) : 0;
       notes[i] = (SpeakerNote){
-        .midi_note = is_on ? 95 : 0,
-        .waveform = is_on ? SpeakerWaveformSquare : SpeakerWaveformSine,
-        .duration_ms = (uint16_t)(a->sound_pattern[i] * 10),
+        .midi_note = midi,
+        .waveform = is_break ? SpeakerWaveformSine : SpeakerWaveformSquare,
+        .duration_ms = (uint16_t)ms,
         .velocity = 0, .reserved = 0
       };
     }
@@ -2619,8 +2648,9 @@ static void open_edit_window(int idx) {
 // until a row is actually selected.
 
 // Custom pattern text, worst case AC_PATTERN_MAX_SEGMENTS segments of up to
-// "100" (3 chars) each plus a separating space -- comfortably covers every
-// valid pattern with room to spare.
+// 3 chars each (a duration digit, a note letter, and an optional "'"/","
+// octave marker -- or "-" for a break) plus a separating space --
+// comfortably covers every valid pattern with room to spare.
 #define PATTERN_KEYBOARD_MAX_LEN 64
 
 typedef enum { PATTERN_SELECT_VIBE, PATTERN_SELECT_SOUND } PatternSelectKind;
@@ -2640,8 +2670,9 @@ static Layer *s_signal_bottom_bar;
 // ---- pattern_help_window: describes the custom sound/vibe pattern syntax,
 // same shape as cron_help_window (a plain scrollable text screen, no
 // bottom bar -- neither help screen in this app has one) -- shared by both
-// Vibe pattern and Sound pattern's Custom entry since the syntax is
-// identical either way. ----
+// Vibe pattern and Sound pattern's Custom entry, even though sound's
+// grammar additionally requires a note letter on every on-token (vibe has
+// no pitch) -- the text covers both. ----
 
 static Window *s_pattern_help_window;
 static ScrollLayer *s_pattern_help_scroll;
@@ -2652,39 +2683,48 @@ static Layer *s_pattern_help_header;
 
 static const char *const PATTERN_HELP_TEXT =
   "A custom pattern is a list "
-  "of on/off durations, "
-  "separated by spaces. The "
-  "first value is always "
-  "\"on\" (sound or vibrate), "
-  "alternating with \"off\" "
-  "after that.\n"
+  "of on-beats and breaks, "
+  "separated by spaces.\n"
   "\n"
-  "Each value is a duration in "
-  "tenths of a second, e.g. "
-  "\"1\" = 100ms, \"3.3\" = "
-  "330ms. Extra decimal digits "
-  "are truncated, not "
-  "rejected. Values must be "
-  "between 0.1 and 10.0.\n"
+  "Each starts with a duration "
+  "digit: 1, 2, 4, or 8 -- the "
+  "number of 100ms units "
+  "(1=100ms, 2=200ms, 4=400ms, "
+  "8=800ms). A bare digit "
+  "means \"on\" for vibration; "
+  "for sound it must be "
+  "followed by a note letter "
+  "(C D E F G A B). A digit "
+  "followed by \"-\" is a "
+  "break/pause of that length, "
+  "for either.\n"
+  "\n"
+  "For sound, a note letter can "
+  "have an octave mark right "
+  "after it: \"'\" for an octave "
+  "up, \",\" for an octave down "
+  "(e.g. \"1C'\", \"1C,\"). No "
+  "mark means the base octave.\n"
+  "\n"
+  "Breaks are optional -- two "
+  "on-beats with nothing "
+  "between them play back to "
+  "back with no gap.\n"
   "\n"
   "Example patterns:\n"
   "\n"
-  "\"1 1 1 1 1\"\n"
-  "five short, evenly spaced\n"
+  "Sound:\n"
+  "\"1C 2D' 1- 1C 2D,\"\n"
   "\n"
-  "\"2 1 1 1 2\"\n"
-  "long, short, short, short,\n"
-  "long\n"
-  "\n"
-  "\"3.3 3.3 3.3\"\n"
-  "three medium beats";
+  "Vibration:\n"
+  "\"2 1- 2 1- 2\"";
 
 static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Pattern help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+  graphics_draw_text(ctx, "Pattern/Tone help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -2768,28 +2808,40 @@ static void signal_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
     case SIGNAL_ROW_VIBE_PATTERN:
       key = "Vibe pattern";
       if (a->vibe_pattern_kind && a->vibe_pattern_len > 0) {
-        ac_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
+        ac_vibe_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
       } else {
         snprintf(value, sizeof(value), "%s", vibe_pattern_name(a->vibe_pattern));
       }
       break;
     case SIGNAL_ROW_SOUND_PATTERN:
-      key = "Sound pattern";
+      key = "Tone";
       if (a->sound_pattern_kind && a->sound_pattern_len > 0) {
-        ac_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_len);
+        ac_sound_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
       } else {
         snprintf(value, sizeof(value), "Default");
       }
       break;
     case SIGNAL_ROW_PATTERN_HELP:
-      key = "Pattern help";   // opens pattern_help_window; no value column
+      key = "Pattern/Tone help";   // opens pattern_help_window; no value column
       break;
   }
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   GRect row = GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26);
   graphics_draw_text(ctx, key, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   if (value[0]) {
-    graphics_draw_text(ctx, value, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+    // Clamp the value to the space actually left of the key label instead
+    // of letting both independently left-/right-align into the same
+    // full-width rect -- Vibe pattern/Tone's formatted pattern text can run
+    // long enough to collide with the label otherwise, unlike every other
+    // row's short "On"/"Off" value.
+    int key_w = graphics_text_layout_get_content_size(key, f, row, GTextOverflowModeFill, GTextAlignmentLeft).w;
+    int gap = 8;
+    GRect value_row = row;
+    value_row.origin.x += key_w + gap;
+    value_row.size.w -= key_w + gap;
+    if (value_row.size.w > 0) {
+      graphics_draw_text(ctx, value, f, value_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+    }
   }
 }
 
@@ -2882,16 +2934,28 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
     if (s_pattern_select_show_invalid) {
       snprintf(value, sizeof(value), "invalid");
     } else if (s_pattern_select_kind == PATTERN_SELECT_VIBE && a->vibe_pattern_len > 0) {
-      ac_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
+      ac_vibe_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
     } else if (s_pattern_select_kind == PATTERN_SELECT_SOUND && a->sound_pattern_len > 0) {
-      ac_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_len);
+      ac_sound_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
     }
   }
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   GRect row_rect = GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26);
   graphics_draw_text(ctx, label, f, row_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   if (value[0]) {
-    graphics_draw_text(ctx, value, f, row_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+    // Clamp to the space left of the label instead of letting both
+    // independently left-/right-align into the same full-width rect --
+    // same fix as signal_draw_row's, needed here too since the "Custom"
+    // row's formatted pattern text can run long enough to collide with
+    // its own label otherwise.
+    int label_w = graphics_text_layout_get_content_size(label, f, row_rect, GTextOverflowModeFill, GTextAlignmentLeft).w;
+    int gap = 8;
+    GRect value_row = row_rect;
+    value_row.origin.x += label_w + gap;
+    value_row.size.w -= label_w + gap;
+    if (value_row.size.w > 0) {
+      graphics_draw_text(ctx, value, f, value_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+    }
   }
 }
 
@@ -2904,13 +2968,14 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
   if (is_custom) {
     char initial[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
     if (s_pattern_select_kind == PATTERN_SELECT_VIBE && a->vibe_pattern_len > 0) {
-      ac_pattern_format(initial, sizeof(initial), a->vibe_pattern_custom, a->vibe_pattern_len);
+      ac_vibe_pattern_format(initial, sizeof(initial), a->vibe_pattern_custom, a->vibe_pattern_len);
     } else if (s_pattern_select_kind == PATTERN_SELECT_SOUND && a->sound_pattern_len > 0) {
-      ac_pattern_format(initial, sizeof(initial), a->sound_pattern, a->sound_pattern_len);
+      ac_sound_pattern_format(initial, sizeof(initial), a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
     }
     window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
     multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
-                                           PATTERN_KEYBOARD_MAX_LEN, NULL);
+                                           PATTERN_KEYBOARD_MAX_LEN, NULL,
+                                           s_pattern_select_kind == PATTERN_SELECT_SOUND);
     return;
   }
   if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
@@ -2954,7 +3019,7 @@ static void pattern_select_header_update_proc(Layer *l, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, GColorBlack);
-  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibe pattern" : "Sound pattern";
+  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibe pattern" : "Tone";
   graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
@@ -3016,20 +3081,28 @@ static void pattern_custom_done(const char *text, void *ctx) {
   if (!text) { return; }
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
-  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
-  uint8_t len;
-  if (!ac_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
-    pattern_select_window_push(s_pattern_select_kind, true);
-    return;
-  }
   if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
+    uint8_t len;
+    if (!ac_vibe_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+      pattern_select_window_push(s_pattern_select_kind, true);
+      return;
+    }
     a->vibe_pattern_kind = 1;
     a->vibe_pattern_len = len;
     memcpy(a->vibe_pattern_custom, parsed, len);
   } else {
+    uint8_t flags[AC_PATTERN_MAX_SEGMENTS];
+    uint8_t notes[AC_PATTERN_MAX_SEGMENTS];
+    uint8_t len;
+    if (!ac_sound_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
+      pattern_select_window_push(s_pattern_select_kind, true);
+      return;
+    }
     a->sound_pattern_kind = 1;
     a->sound_pattern_len = len;
-    memcpy(a->sound_pattern, parsed, len);
+    memcpy(a->sound_pattern, flags, len);
+    memcpy(a->sound_pattern_note, notes, len);
   }
   persist_all();
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
@@ -3482,10 +3555,11 @@ static bool handle_test_message(DictionaryIterator *iter) {
       // unchanged on unparseable input, never partially applied).
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundPatternKind))) { a->sound_pattern_kind = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundCustomPattern))) {
-        uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
-        if (ac_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+        uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
+        if (ac_sound_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
           a->sound_pattern_len = len;
-          memcpy(a->sound_pattern, parsed, len);
+          memcpy(a->sound_pattern, flags, len);
+          memcpy(a->sound_pattern_note, notes, len);
         } else {
           APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmSoundCustomPattern %s", t->value->cstring);
         }
@@ -3494,7 +3568,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibePatternKind))) { a->vibe_pattern_kind = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibeCustomPattern))) {
         uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
-        if (ac_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+        if (ac_vibe_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
           a->vibe_pattern_len = len;
           memcpy(a->vibe_pattern_custom, parsed, len);
         } else {

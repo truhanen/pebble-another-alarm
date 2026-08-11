@@ -22,16 +22,60 @@
 // PERSIST_KEY_ALARM_BASE's own 100..115 range (MAX_ALARMS=16) with room to
 // grow.
 #define PERSIST_KEY_ALARM_EXT_BASE     200
-#define STORE_SCHEMA 12  // bumped: Alarm gained sound_pattern_kind/len/pattern[] and
+#define STORE_SCHEMA 15  // bumped: sound_pattern_note[]'s encoding changed from a plain
+                          // 0-8 AC_NOTE_LETTER/AC_NOTE_MIDI index (9-entry table incl.
+                          // lowercase c/d for an octave-up duplicate) to
+                          // `octave*AC_NOTE_COUNT + index` into a 7-entry table (C-B
+                          // only), now that octave shifts are real ABC-notation markers
+                          // ("'"/","} after the letter instead of dedicated duplicate
+                          // keys/letters. Only sound_pattern_kind/sound_pattern_len need
+                          // resetting on migration from schema < 15 -- vibe's grammar
+                          // (and its own pattern fields) is untouched by this bump, so no
+                          // vibe_pattern_kind/len reset is needed this time, unlike the
+                          // schema-13/14 bumps which touched both.
+                          //
+                          // Prior bump (14): duration digits changed from a contiguous 1-4 index
+                          // to AC_NOTE_DURATION_DIGITS' sparse {1,2,4,8} (alarm_calc.h) --
+                          // each digit is now literally its own duration in hundreds of
+                          // ms, so no separate ms lookup table is needed, but it also
+                          // means digit "3" is no longer valid at all, and digit "4" now
+                          // means 400ms instead of the OLD digit-index scheme's 800ms
+                          // (schema 13's "4" was AC_NOTE_DURATION_MS[3]). Same shape as
+                          // the schema-13 bump below: the byte VALUES mean something
+                          // different now, not just "a new trailing field", so
+                          // store_load()'s fixup resets sound_pattern_kind/
+                          // vibe_pattern_kind (and their *_len) to 0 for any alarm
+                          // migrating from schema < 14, same as it already does for < 13
+                          // -- only alarms with a custom pattern set during schema 13's
+                          // short lifetime (this same dev cycle) lose it; every other
+                          // field is untouched.
+                          //
+                          // Prior bump (13): sound_pattern[]/vibe_pattern_custom[]'s byte encoding
+                          // changed from a raw 1-100 duration to a packed bit7=break/bits0-6=
+                          // duration-digit scheme (see AC_PATTERN_BREAK_BIT, alarm_calc.h),
+                          // to support the new note/break pattern grammar ("1C 2D 1- 1C 2D"
+                          // for sound, "2 1- 2 1- 2" for vibe) -- and Alarm gained a new
+                          // sound_pattern_note[] array (the pitch for each sound on-beat,
+                          // appended at the very end). Since the OLD bytes mean something
+                          // different now, not just "a new trailing field", store_load()
+                          // can't just let them ride through migration -- see its fixup
+                          // below, which resets sound_pattern_kind/vibe_pattern_kind (and
+                          // their *_len) to 0 for any alarm migrating from schema < 13,
+                          // falling back to Default/Preset rather than reinterpreting old
+                          // duration bytes as garbage under the new encoding. Every other
+                          // field (time, label, everything not pattern-related) is
+                          // untouched by this -- only alarms that had a custom pattern set
+                          // during schema 12's short lifetime (this same dev cycle) lose it.
+                          //
+                          // Prior bump (12): Alarm gained sound_pattern_kind/len/pattern[] and
                           // vibe_pattern_kind/len/vibe_pattern_custom[] (custom sound/vibe
-                          // signal patterns, see AC_PATTERN_MAX_SEGMENTS/ac_pattern_parse in
-                          // alarm_calc.h) -- appended after cron_week/cron_week_mask, so they
+                          // signal patterns) -- appended after cron_week/cron_week_mask, so they
                           // land in the EXTENSION blob (PERSIST_KEY_ALARM_EXT_BASE), not the
-                          // frozen main one. Both new *_kind fields default to 0 on migration,
-                          // which is already the correct "behave exactly as before this
+                          // frozen main one. Both new *_kind fields defaulted to 0 on migration,
+                          // which was already the correct "behave exactly as before this
                           // feature existed" default (same free pass increasing_volume got) --
-                          // no store_load() zero-fill fixup needed, unlike the cron dom/month/
-                          // week masks.
+                          // no store_load() zero-fill fixup was needed for THAT bump, unlike
+                          // this one.
                           //
                           // Prior bump (11): Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_dismiss,

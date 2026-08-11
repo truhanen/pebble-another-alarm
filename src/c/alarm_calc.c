@@ -127,34 +127,41 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
 
 // ============================ custom sound/vibe patterns ============================
 
-// Parses one whitespace-delimited token into a stored int 1-100 (0.1-10.0
-// tenths-of-a-second, truncated to one decimal digit). Returns false on any
-// malformed token: no leading digit, more than one '.', or an out-of-range
-// value (even after truncation).
-static bool pattern_parse_token(const char *tok, int len, uint8_t *out) {
-  if (len <= 0) { return false; }
-  const char *p = tok;
-  const char *end = tok + len;
-  int whole = 0;
-  bool have_digit = false;
-  while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + (*p - '0'); p++; have_digit = true; }
-  if (!have_digit) { return false; }
-  int tenth = 0;
-  if (p < end && *p == '.') {
-    p++;
-    if (p >= end || *p < '0' || *p > '9') { return false; }   // '.' with no digit after it
-    tenth = *p - '0';
-    p++;
-    while (p < end && *p >= '0' && *p <= '9') { p++; }   // truncate: consume+ignore extra decimal digits
+// AC_NOTE_DURATION_DIGITS -- see AC_NOTE_DURATION_COUNT's doc comment
+// (alarm_calc.h): the only valid duration digits, each literally the
+// number of AC_NOTE_DURATION_MS_PER_UNIT (100ms) units it represents, so
+// "4" always means 400ms with no lookup table needed -- just digit*100.
+const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT] = { 1, 2, 4, 8 };
+
+// AC_NOTE_LETTER/AC_NOTE_MIDI -- see AC_NOTE_COUNT's doc comment
+// (alarm_calc.h): C major scale starting at MIDI 96 (C7, close to the
+// fixed B6/95 pitch every alarm used before custom sound patterns existed).
+// Octave shifts (see AC_NOTE_OCTAVE_*) are applied on top of these base
+// pitches at parse/format time, not baked into separate table entries.
+const char AC_NOTE_LETTER[AC_NOTE_COUNT] = { 'C', 'D', 'E', 'F', 'G', 'A', 'B' };
+const uint8_t AC_NOTE_MIDI[AC_NOTE_COUNT] = { 96, 98, 100, 101, 103, 105, 107 };
+
+// Parses a token's leading duration digit. Returns false unless `c` is one
+// of AC_NOTE_DURATION_DIGITS -- NOT just any digit '1'-'9': e.g. '3' and
+// '5' are plain ASCII digits but not valid duration digits.
+static bool pattern_parse_digit(char c, uint8_t *out_digit) {
+  if (c < '0' || c > '9') { return false; }
+  uint8_t d = (uint8_t)(c - '0');
+  for (int i = 0; i < AC_NOTE_DURATION_COUNT; i++) {
+    if (AC_NOTE_DURATION_DIGITS[i] == d) { *out_digit = d; return true; }
   }
-  if (p != end) { return false; }   // trailing garbage (e.g. a second '.')
-  int stored = whole * 10 + tenth;
-  if (stored < 1 || stored > 100) { return false; }
-  *out = (uint8_t)stored;
-  return true;
+  return false;
 }
 
-bool ac_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len) {
+// Looks up `c` in AC_NOTE_LETTER, returning its index, or -1 if not found.
+static int pattern_note_index(char c) {
+  for (int i = 0; i < AC_NOTE_COUNT; i++) {
+    if (AC_NOTE_LETTER[i] == c) { return i; }
+  }
+  return -1;
+}
+
+bool ac_vibe_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len) {
   if (!text) { return false; }
   uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
   uint8_t count = 0;
@@ -162,10 +169,17 @@ bool ac_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint
   while (1) {
     while (*p == ' ') { p++; }   // skip leading/repeated separators
     if (!*p) { break; }
-    const char *tok_start = p;
+    const char *tok = p;
     while (*p && *p != ' ') { p++; }
+    int tlen = (int)(p - tok);
     if (count >= max_segments) { return false; }   // too many segments
-    if (!pattern_parse_token(tok_start, (int)(p - tok_start), &parsed[count])) { return false; }
+    uint8_t digit;
+    if (tlen < 1 || !pattern_parse_digit(tok[0], &digit)) { return false; }
+    bool is_break;
+    if (tlen == 1) { is_break = false; }                          // bare digit: on
+    else if (tlen == 2 && tok[1] == '-') { is_break = true; }      // digit + '-': break
+    else { return false; }                                        // trailing garbage
+    parsed[count] = digit | (is_break ? AC_PATTERN_BREAK_BIT : 0);
     count++;
   }
   if (count == 0) { return false; }
@@ -174,18 +188,79 @@ bool ac_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint
   return true;
 }
 
-void ac_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t len) {
+void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t len) {
   if (n == 0) { return; }
   buf[0] = '\0';
   size_t used = 0;
   for (uint8_t i = 0; i < len; i++) {
-    int whole = pattern[i] / 10;
-    int tenth = pattern[i] % 10;
-    int written;
-    if (tenth == 0) {
-      written = snprintf(buf + used, n - used, "%s%d", i ? " " : "", whole);
+    uint8_t digit = pattern[i] & AC_PATTERN_DURATION_MASK;
+    bool is_break = (pattern[i] & AC_PATTERN_BREAK_BIT) != 0;
+    int written = snprintf(buf + used, n - used, "%s%d%s", i ? " " : "", digit, is_break ? "-" : "");
+    if (written < 0 || (size_t)written >= n - used) { break; }
+    used += (size_t)written;
+  }
+}
+
+bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
+                             uint8_t *out_flags, uint8_t *out_notes, uint8_t *out_len) {
+  if (!text) { return false; }
+  uint8_t flags[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t notes[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t count = 0;
+  const char *p = text;
+  while (1) {
+    while (*p == ' ') { p++; }
+    if (!*p) { break; }
+    const char *tok = p;
+    while (*p && *p != ' ') { p++; }
+    int tlen = (int)(p - tok);
+    if (count >= max_segments) { return false; }
+    uint8_t digit;
+    if (tlen < 1 || !pattern_parse_digit(tok[0], &digit)) { return false; }
+    if (tlen == 2 && tok[1] == '-') {
+      flags[count] = digit | AC_PATTERN_BREAK_BIT;
+      notes[count] = 0;
+    } else if (tlen == 2 || tlen == 3) {
+      int ni = pattern_note_index(tok[1]);
+      if (ni < 0) { return false; }   // unrecognized note letter
+      int octave = AC_NOTE_OCTAVE_SAME;
+      if (tlen == 3) {
+        // Real ABC-notation octave markers, right after the letter: "'"
+        // (apostrophe) up, "," (comma) down -- anything else is malformed.
+        if (tok[2] == '\'') { octave = AC_NOTE_OCTAVE_UP; }
+        else if (tok[2] == ',') { octave = AC_NOTE_OCTAVE_DOWN; }
+        else { return false; }
+      }
+      flags[count] = digit;
+      notes[count] = (uint8_t)(octave * AC_NOTE_COUNT + ni);
     } else {
-      written = snprintf(buf + used, n - used, "%s%d.%d", i ? " " : "", whole, tenth);
+      return false;   // a bare digit (no letter, no '-') is invalid for sound -- unlike vibe
+    }
+    count++;
+  }
+  if (count == 0) { return false; }
+  memcpy(out_flags, flags, count);
+  memcpy(out_notes, notes, count);
+  *out_len = count;
+  return true;
+}
+
+void ac_sound_pattern_format(char *buf, size_t n, const uint8_t *flags, const uint8_t *notes, uint8_t len) {
+  if (n == 0) { return; }
+  buf[0] = '\0';
+  size_t used = 0;
+  for (uint8_t i = 0; i < len; i++) {
+    uint8_t digit = flags[i] & AC_PATTERN_DURATION_MASK;
+    bool is_break = (flags[i] & AC_PATTERN_BREAK_BIT) != 0;
+    int written;
+    if (is_break) {
+      written = snprintf(buf + used, n - used, "%s%d-", i ? " " : "", digit);
+    } else {
+      int octave = notes[i] / AC_NOTE_COUNT;
+      int ni = notes[i] % AC_NOTE_COUNT;
+      char letter = (ni < AC_NOTE_COUNT) ? AC_NOTE_LETTER[ni] : '?';
+      const char *marker = (octave == AC_NOTE_OCTAVE_UP) ? "'" : (octave == AC_NOTE_OCTAVE_DOWN) ? "," : "";
+      written = snprintf(buf + used, n - used, "%s%d%c%s", i ? " " : "", digit, letter, marker);
     }
     if (written < 0 || (size_t)written >= n - used) { break; }
     used += (size_t)written;

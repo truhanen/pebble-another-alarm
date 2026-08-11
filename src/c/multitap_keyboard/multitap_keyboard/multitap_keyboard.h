@@ -100,20 +100,23 @@ void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes);
 void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled);
 
 // Like numeric mode (fixed to PAGE_NUMBERS, no ABC/symbols page reachable),
-// but for on/off duration patterns (e.g. "1 1 1 1 1", "3.3 3.3 3.3") instead
-// of cron syntax: the bottom-left key multi-tap-cycles "0"/"." (there's no
-// dedicated "0" key among the 9 character keys, which are fixed to 1-9 —
-// same reason numeric mode's bottom-left key exists at all) instead of
-// */-/,, and the space key types a literal space instead of being
-// repurposed as "0" (numeric mode's own special case, which pattern mode
-// needs to NOT inherit, since patterns are space-separated). The text field
-// also renders alternating bold ("on"/sound-active tokens, 0-indexed even
-// positions) and regular ("off" tokens, odd positions) fonts per
-// whitespace-delimited token, since there's no rich-text primitive to bold
-// a substring any other way. Call once, right after creating the keyboard
-// (or via multitap_keyboard_window_push_pattern() for the full-screen
-// wrapper).
-void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled);
+// but for note/break duration patterns (e.g. "1C 2D 1- 1C 2D" with notes,
+// "2 1- 2 1- 2" without) instead of cron syntax: the 9 character keys pull
+// from their own small glyph tables instead of PAGE_NUMBERS's plain 1-per-
+// key digits (a duration digit 1/2/4/8, plus -- when `notes_enabled` -- a note
+// letter, since a plain digit-per-key table can't fit both on one key); the
+// bottom-left key types a single, non-cycling "-" (a break/pause marker,
+// e.g. "1-") instead of multi-tap-cycling multiple symbols; and the space
+// key types a literal space instead of being repurposed as "0" (numeric
+// mode's own special case, which pattern mode needs to NOT inherit, since
+// patterns are space-separated). `notes_enabled` selects which per-key
+// table is used (sound patterns carry a pitch per on-beat; vibe patterns
+// don't) -- see PATTERN_KEY_SOUND/PATTERN_KEY_VIBE in multitap_keyboard.c.
+// The text field itself renders through the same shared prv_draw_text_fitted()
+// every other mode uses -- on-beat/break tokens don't need distinct styling.
+// Call once, right after creating the keyboard (or via
+// multitap_keyboard_window_push_pattern() for the full-screen wrapper).
+void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool notes_enabled);
 
 // Behavior settings.
 void multitap_keyboard_get_settings(MultitapKeyboard *kb, MultitapSettings *out);
