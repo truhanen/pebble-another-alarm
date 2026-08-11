@@ -307,7 +307,7 @@ in this app at all, so every message key is now just an ordinary scalar at
   creation, to seed a new alarm's `vibe_pattern` (`start_new_alarm_flow`) —
   changing the phone setting afterward has no effect on already-created
   alarms, unlike `AudioVolume`. Editable per-alarm via the Signal submenu's
-  "Vibe pattern" row (see the Signal submenu design point further below) —
+  "Vibration" row (see the Signal submenu design point further below) —
   it used to cycle Double -> Short -> Long -> Double directly on SELECT,
   the same short-press-cycles convention as the main list's enable/disable/
   skip state, before the Signal submenu/custom-pattern feature replaced
@@ -846,21 +846,105 @@ feature — see git history if curious):
   volume/Vibe pattern/Sound pattern under one edit-menu row** instead of
   five separate top-level rows — `signal_edit_window_push()` opens a second
   itemized `MenuLayer` (same bottom-bar-bearing shell as `edit_window`
-  itself) operating on the same `s_edit_idx` alarm. Row order: Vibration,
-  Sound, Increasing volume, Vibe pattern, Sound pattern. Vibration/Sound/
-  Increasing volume still toggle in place on SELECT, moved verbatim from
-  the old top-level rows; Vibe pattern and Sound pattern instead each open
-  `pattern_select_window_push()` — one shared picker window (differing only
-  in row count/labels) offering Double/Short/Long/Custom for vibe or
-  Default/Custom for sound. Selecting a non-Custom row commits immediately
-  and pops back to the Signal menu; selecting Custom pops the picker and
-  pushes the pattern-mode keyboard (see below) preloaded with the alarm's
-  current custom pattern text, if any. Neither new window needs the
-  generic on_confirm/on_cancel-plus-snapshot-revert convention every other
-  editor in this file uses (time/repeat/cron/snooze) — both operate
-  directly on `s_alarms[s_edit_idx]` since there's exactly one call site
-  for each, and nothing is mutated until a row is actually selected, so
-  BACK needs no revert logic.
+  itself, plus its own "Signal" header, `signal_header_update_proc`)
+  operating on the same `s_edit_idx` alarm. The submenu itself has only
+  **4** rows now — `SIGNAL_ROW_VIBE_PATTERN` ("Vibration"),
+  `SIGNAL_ROW_SOUND_PATTERN` ("Tone"), `SIGNAL_ROW_INCREASING_VOLUME`,
+  `SIGNAL_ROW_PATTERN_HELP` — the standalone Vibration and Sound on/off
+  toggles were **merged into** the Vibration/Tone rows respectively
+  (removed as separate rows entirely, each row taking over its toggle's old
+  slot: Vibration sits where the old Vibration toggle used to, Tone sits
+  where Sound used to) rather than living alongside them;
+  `signal_draw_row`'s Vibration/Tone value reads "Off" outright whenever
+  `vibration_enabled`/`sound_enabled` is false, without even looking at the
+  underlying pattern/tone fields. `Increasing volume` still toggles in
+  place on SELECT, moved verbatim from the old top-level row. (The row's
+  internal constant/enum names still say `VIBE_PATTERN`/`PATTERN_SELECT_
+  VIBE` throughout `main.c` — only the user-facing label changed to
+  "Vibration", the same way `SIGNAL_ROW_SOUND_PATTERN` has always displayed
+  as "Tone".)
+  - **`pattern_select_window_push()`** is the one shared picker window
+    (differing only in row count/labels) both Vibration and Tone open.
+    Row 0 of either is **"Off"** — the merged on/off toggle, the ONLY
+    instant-apply row in either picker: selecting it just flips
+    `vibration_enabled`/`sound_enabled` to false and pops straight back to
+    the Signal menu, deliberately leaving every other field
+    (`vibe_pattern_kind`/`vibe_pattern`/`vibe_pattern_custom`/
+    `sound_pattern_kind`/`sound_pattern`/`sound_pattern_note`) untouched —
+    so turning it back on later still remembers whichever pattern/tone was
+    set before. `PATTERN_SELECT_VIBE_ROW_COUNT`/`PATTERN_SELECT_SOUND_ROW_COUNT`
+    and the `_CUSTOM_ROW` constants all account for this extra leading row
+    (every preset/Custom row index is its old index + 1).
+  - **Every row past "Off" — every preset and Custom alike — opens the
+    pattern-mode keyboard pre-filled with that row's text**, rather than
+    any row committing instantly: for vibe, rows 1..`VIBE_PRESET_COUNT` are
+    the `VIBE_PRESETS[]` table, for sound, rows 1..`SOUND_PRESET_COUNT` are
+    the `SOUND_PRESETS[]` table (both below), and the last row of either is
+    Custom. Only pressing Select *inside* the keyboard (`pattern_custom_
+    done`) actually commits — selecting a preset is "start from this
+    template", not "apply immediately" (an earlier version instant-applied
+    the first preset as a special `_kind=0` row 0; that special case is
+    gone for both vibe and sound — selecting it now commits like any other
+    preset, as `_kind=1` with that preset's exact bytes, which `sound_
+    preset_match()`/`vibe_preset_match()` still recognize and display by
+    name). Committing a preset/Custom pattern (`pattern_custom_done`) also
+    sets `vibration_enabled`/`sound_enabled` back to `true` — picking a
+    real pattern implies turning that channel back on, symmetric with
+    "Off" leaving it alone rather than the other way around. `pattern_
+    select_window_push()`'s preselect logic checks `vibration_enabled`/
+    `sound_enabled` FIRST (landing on row 0 if either is false) before
+    falling through to the existing preset-match logic.
+  - **Navigating to any row (either picker) plays that pattern once as a
+    preview** — `pattern_select_preview_current_row()` reads whichever row
+    is currently highlighted and, if it's not "Off", builds its text
+    (`pattern_select_vibe_row_text()`/`pattern_select_sound_row_text()` —
+    a preset's fixed text, or the alarm's own current custom text for the
+    Custom row) and plays it via `alarm_preview_vibe_pattern()`/
+    `alarm_preview_sound_pattern()` (parses on the fly, calls the same
+    `alarm_play_vibe_pattern()`/`alarm_play_sound_pattern()` ring-time
+    uses). Called from `pattern_select_up_click`/`pattern_select_down_click`
+    (after moving the selection) and once right after the picker first
+    opens on its preselected row, so browsing either picker previews every
+    tone/vibe as you land on it — not on Select, which just proceeds
+    straight to the keyboard without playing anything itself (an earlier
+    version previewed sound-only, and only on Select; both were moved/
+    extended on request, since scrolling through a list to audition
+    entries is the more natural place for this, and there's no reason
+    vibration shouldn't get the same treatment sound does).
+  - **`SOUND_PRESETS[]`/`VIBE_PRESETS[]`** (`main.c`, both declared well
+    above the Signal-menu UI section so `alarm_play_audio()`/`alarm_
+    vibrate()` can see them) are the Tone/Vibration preset libraries —
+    `{ label, pattern }` pairs. Sound, currently: Triple (default)/Double/
+    Triple fast/Analog bell/Mary's Lamb/Happy Birthday/Imperial March (the
+    last one has no break tokens at all — every segment is an on-beat —
+    unlike every other preset here; its notes are also a diatonic
+    approximation of the real Eb/Bb since this grammar has no sharp/flat
+    support, rounded down to D/A). Vibe, currently: Double/Short/Long.
+    `sound_preset_match()`/`vibe_preset_match()` re-parse each entry and
+    `memcmp` it against an alarm's stored pattern bytes to find which
+    preset (if any) the alarm's current Custom pattern is byte-identical
+    to — used both to preselect the right picker row on reopen and to show
+    the preset's NAME (not raw pattern) in the Signal menu's Vibration/Tone
+    value and picker Custom-row fallback. `pattern_preset_preview()`
+    renders at most the first 2 space-separated tokens of a preset's
+    pattern (plus "...") for either picker's per-row value column, since
+    full pattern text got cluttered once sound presets started running
+    past a handful of tokens.
+  - `alarm_vibrate()`'s `vibe_pattern_kind==0` fallback (a brand new,
+    never-touched alarm, or one that committed a preset via the old
+    instant-apply path before this rework) parses `VIBE_PRESETS[a->
+    vibe_pattern]` fresh each time and plays it via `alarm_play_vibe_
+    pattern()`, mirroring `alarm_play_audio()`'s Default-fallback
+    unification (see the "Alarm sound" design point above) — so "what
+    Double/Short/Long feels like" can never drift from what the Vibration
+    picker itself offers/previews.
+  - Neither the Signal submenu, the pattern-select picker, nor the pattern
+    keyboard needs the generic on_confirm/on_cancel-plus-snapshot-revert
+    convention every other editor in this file uses (time/repeat/cron/
+    snooze) — all operate directly on `s_alarms[s_edit_idx]` since there's
+    exactly one call site for each, and nothing is mutated by BACK/cancel
+    alone (except the instant-apply "Off" row, which needs no revert since
+    it doesn't touch anything BACK would need to restore).
 - **Custom sound/vibe patterns**: a pattern is a space-separated list of
   1-16 (`AC_PATTERN_MAX_SEGMENTS`) on-beats and (optional) breaks. Each
   token starts with a duration DIGIT, one of `AC_NOTE_DURATION_DIGITS`
@@ -935,8 +1019,31 @@ feature — see git history if curious):
   consecutive same-kind segments into merged on/off durations (since the
   SDK's `VibePattern` array must strictly alternate on/off starting with
   ON, unlike this grammar's optional breaks) before calling
-  `vibes_enqueue_custom_pattern()`, padding a leading 0ms on-duration if
-  the pattern happens to start with a break.
+  `vibes_enqueue_custom_pattern()`.
+  - **Both sound and vibe playback always prepend ~100ms of silence before
+    the real pattern**, a deliberate workaround for an observed glitch
+    where the very first note/pulse of a sequence sometimes didn't play —
+    added at the actual-hardware-playback layer only, never at
+    parse/format/storage, so neither the persisted bytes nor the text shown
+    in the picker/keyboard/Signal menu ever reflects this extra break.
+    `alarm_play_sound_pattern()` (`main.c`) is the single shared function
+    behind this for sound — it prepends one silent (`SpeakerWaveformSine`,
+    midi 0, 100ms) `SpeakerNote` ahead of `alarm_build_sound_notes()`'s
+    real segments — called from both `alarm_play_audio()` (ring time, for
+    either Default or a stored Custom pattern — the two converged onto this
+    one function, so "what Default sounds like" and "what a byte-identical
+    Custom pattern sounds like" can never drift apart even with this
+    workaround layered on top) and `alarm_preview_sound_pattern()`
+    (Tone-picker preview-on-select, above). `alarm_play_vibe_pattern()`
+    is vibe's equivalent, called from `alarm_vibrate()`'s custom-pattern
+    branch only (not the plain preset one-shots
+    `vibes_short_pulse()`/`_long_pulse()`/`_double_pulse()`, which are
+    single pulses with no "first note of a sequence" concern to begin
+    with) — it always pads a 0ms dummy ON (VibePattern's array must start
+    ON) followed by a 100ms OFF gap, MERGED into the real pattern's own
+    leading break (summed durations) if it has one, rather than inserted as
+    a redundant separate OFF entry that would violate the array's required
+    strict on/off alternation.
 - **The pattern-entry keyboard is a new `multitap_keyboard` mode**
   (`multitap_keyboard_set_pattern_mode()`), a sibling of cron's existing
   numeric mode rather than a restyle of it: both lock the layout to

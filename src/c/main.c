@@ -742,89 +742,261 @@ static int64_t s_alarm_buzz_start_s;
 static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
 static AppTimer *s_alarm_auto_dismiss_timer;   // auto_dismiss: dismisses the ring screen on its own
 
+// Ready-made Tone presets -- each is just a Custom pattern the user would
+// otherwise have to type by hand, offered as a one-tap shortcut. Selecting
+// ANY row, including "Classic (default)", opens the pattern keyboard
+// pre-filled with its text instead of committing immediately (see
+// pattern_select_select) -- selecting one is a starting point to review or
+// tweak, not an instant-apply action; only Select in the keyboard actually
+// commits it, always as sound_pattern_kind=1 (Custom) with that preset's
+// exact bytes -- so "Classic (default)" isn't really a distinct storage
+// mode any more, just the first preset in the list, matched back by
+// sound_preset_match() the same as any other. alarm_play_audio()'s
+// sound_pattern_kind==0 fallback (a brand new, never-touched alarm) still
+// reuses SOUND_PRESETS[0].pattern directly, so the two literal sources of
+// "what Classic sounds like" can never drift apart either way. Declared up
+// here (rather than down in the Signal-menu UI section) so
+// alarm_play_audio() can see it.
+typedef struct { const char *label; const char *pattern; } SoundPreset;
+static const SoundPreset SOUND_PRESETS[] = {
+  // Steady repeating beep -- the generic "digital alarm clock" sound. No
+  // trailing break: the natural gap before the next ALARM_BUZZ_INTERVAL_MS
+  // buzz cycle already covers it, so a stored trailing break would just be
+  // dead air twice over.
+  { "Triple (default)", "2C 2- 2C 2- 2C" },
+  { "Double", "2C 2- 2C" },
+  { "Triple fast", "1C 1- 1C 1- 1C" },
+  { "Analog bell", "1C 1G 1C 1G 1C 1G 1C 1G" },
+  { "Mary's Lamb", "2E 2D 2C 2D 2E 2E 4E" },
+  { "Happy Birthday", "1C 1- 1C 1- 2D 1- 2C 1- 2F 1- 4E" },
+  // The opening motif, transposed onto this grammar's natural-notes-only
+  // (no sharp/flat) scale -- Eb/Bb round down to D/A. Includes the real
+  // tune's own quarter-rests (after the opening G-G-G and after each G that
+  // follows a D-A pair) and D held longer than the quick A -- an earlier,
+  // uniform-duration/no-rest version didn't actually read as the tune. The
+  // opening G-G-G is itself staccato (a short break between each punch,
+  // not one blurred tone) -- also on request, after the first no-rest-
+  // anywhere pass still didn't read as the tune's martial rhythm there
+  // either. Durations are double the "natural" transcription (1/2/4 ->
+  // 2/4/8) and every note is shifted an octave down (","), on request; the
+  // final sustained G is already at the grammar's max duration digit (8)
+  // so it isn't doubled again on top of that.
+  { "Imperial March", "4G, 1- 4G, 1- 4G, 4- 8D, 2A, 4G, 4- 8D, 2A, 8G," },
+};
+#define SOUND_PRESET_COUNT (int)(sizeof(SOUND_PRESETS) / sizeof(SOUND_PRESETS[0]))
+
+// Ready-made Vibration presets -- same shape and treatment as SOUND_PRESETS
+// above (selecting any row, including "Double", opens the pattern keyboard
+// pre-filled with its text rather than committing immediately; see
+// pattern_select_select). alarm_vibrate()'s vibe_pattern_kind==0 fallback
+// (a brand new, never-touched alarm) reuses these same literal patterns via
+// a->vibe_pattern as an index, so "what Double/Short/Long feels like" can
+// never drift apart from what this table shows/offers as a starting point.
+typedef struct { const char *label; const char *pattern; } VibePreset;
+static const VibePreset VIBE_PRESETS[] = {
+  { "Double", "2 1- 2" },
+  { "Short", "2" },
+  { "Long", "8" },
+};
+#define VIBE_PRESET_COUNT (int)(sizeof(VIBE_PRESETS) / sizeof(VIBE_PRESETS[0]))
+
+// Finds which SOUND_PRESETS entry (if any) `a`'s currently-stored custom
+// sound pattern is byte-identical to, by re-parsing each preset's literal
+// text and comparing -- used both to pre-select the right row when
+// reopening the Tone picker (pattern_select_window_push) and to show the
+// preset's NAME rather than its raw notes in the Signal menu
+// (signal_draw_row). Returns -1 if sound_pattern_kind isn't Custom, or the
+// stored pattern doesn't match any preset (a genuinely hand-typed pattern).
+static int sound_preset_match(const Alarm *a) {
+  if (a->sound_pattern_kind != 1 || a->sound_pattern_len == 0) { return -1; }
+  for (int i = 0; i < SOUND_PRESET_COUNT; i++) {
+    uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
+    if (!ac_sound_pattern_parse(SOUND_PRESETS[i].pattern, AC_PATTERN_MAX_SEGMENTS, flags, notes, &len)) { continue; }
+    if (len != a->sound_pattern_len) { continue; }
+    if (memcmp(flags, a->sound_pattern, len) == 0 && memcmp(notes, a->sound_pattern_note, len) == 0) { return i; }
+  }
+  return -1;
+}
+
+// vibe_preset_match's own equivalent of sound_preset_match -- see there for
+// the general rationale (preselecting the right picker row on reopen).
+static int vibe_preset_match(const Alarm *a) {
+  if (a->vibe_pattern_kind != 1 || a->vibe_pattern_len == 0) { return -1; }
+  for (int i = 0; i < VIBE_PRESET_COUNT; i++) {
+    uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
+    if (!ac_vibe_pattern_parse(VIBE_PRESETS[i].pattern, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) { continue; }
+    if (len != a->vibe_pattern_len) { continue; }
+    if (memcmp(parsed, a->vibe_pattern_custom, len) == 0) { return i; }
+  }
+  return -1;
+}
+
+// Writes at most the first 2 space-separated tokens of `pattern` into
+// `out`, appending "..." if there were more -- the Tone picker shows this
+// instead of a preset's full pattern text, which got cluttered once
+// presets started running to a dozen-plus segments (e.g. SOS).
+static void pattern_preset_preview(const char *pattern, char *out, size_t out_size) {
+  const char *p = pattern;
+  const char *end_of_second = pattern;
+  int tokens = 0;
+  for (int i = 0; i < 2 && *p; i++) {
+    while (*p == ' ') { p++; }
+    if (!*p) { break; }
+    while (*p && *p != ' ') { p++; }
+    end_of_second = p;
+    tokens++;
+  }
+  const char *rest = end_of_second;
+  while (*rest == ' ') { rest++; }
+  bool more = (*rest != '\0');
+  size_t len = (size_t)(end_of_second - pattern);
+  if (len > out_size - 1) { len = out_size - 1; }
+  memcpy(out, pattern, len);
+  out[len] = '\0';
+  if (more && len + 4 <= out_size) { strcat(out, "..."); }
+}
+
 // A custom vibe pattern (vibe_pattern_kind==1) plays via the SDK's own
 // vibes_enqueue_custom_pattern() instead of the fixed short/long/double
 // one-shots. VibePattern's own array must strictly alternate on/off
 // starting with an ON duration, but our grammar allows consecutive
 // on-tokens with no break between them (breaks are optional) -- so
-// same-kind runs are collapsed (summed) first; if the pattern happens to
-// start with a break, a 0ms leading "on" is padded in so the array still
-// starts ON.
+// same-kind runs are collapsed (summed) first. A 0ms leading "on" is always
+// padded in, followed by a ~100ms leading "off" (merged into the pattern's
+// own leading break if it has one) before the real runs -- a deliberate
+// glitch workaround (see alarm_play_sound_pattern below for the sound-side
+// equivalent), not something the stored/displayed pattern text ever shows.
+static void alarm_play_vibe_pattern(const uint8_t *pattern, uint8_t len) {
+  if (len == 0) { return; }
+  bool run_is_on[AC_PATTERN_MAX_SEGMENTS];
+  uint32_t run_ms[AC_PATTERN_MAX_SEGMENTS];
+  int n_runs = 0;
+  for (int i = 0; i < len; i++) {
+    uint8_t raw = pattern[i];
+    bool is_on = !(raw & AC_PATTERN_BREAK_BIT);
+    uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+    if (n_runs > 0 && run_is_on[n_runs - 1] == is_on) {
+      run_ms[n_runs - 1] += ms;
+    } else {
+      run_is_on[n_runs] = is_on;
+      run_ms[n_runs] = ms;
+      n_runs++;
+    }
+  }
+  uint32_t durations[AC_PATTERN_MAX_SEGMENTS + 2];
+  uint32_t n = 0;
+  durations[n++] = 0;   // dummy ON: VibePattern must start with an ON duration
+  uint32_t lead_off = 100;
+  int start = 0;
+  if (n_runs > 0 && !run_is_on[0]) { lead_off += run_ms[0]; start = 1; }
+  durations[n++] = lead_off;
+  for (int i = start; i < n_runs; i++) { durations[n++] = run_ms[i]; }
+  VibePattern vp = { .durations = durations, .num_segments = n };
+  vibes_enqueue_custom_pattern(vp);
+}
+
+// Plays a raw vibe pattern string once, for the Vibration picker's
+// preview-on-navigate (pattern_select_preview_current_row) -- parses on the
+// fly rather than needing a stored Alarm's fields, since a preview can be
+// of a preset that isn't applied yet. Sound's equivalent
+// (alarm_preview_sound_pattern) is declared further down, inside the
+// PBL_SPEAKER guard -- vibration has no such gate.
+static void alarm_preview_vibe_pattern(const char *text) {
+  if (!text || !text[0]) { return; }
+  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_vibe_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) { return; }
+  alarm_play_vibe_pattern(parsed, len);
+}
+
+// A stored vibe_pattern_kind==0 alarm plays whichever VIBE_PRESETS entry
+// a->vibe_pattern indexes, parsed fresh each time rather than via the SDK's
+// fixed vibes_short_pulse()/_long_pulse()/_double_pulse() one-shots -- same
+// unification as alarm_play_audio()'s Default fallback, so "what Double/
+// Short/Long feels like" can never drift from what the Vibration picker
+// itself offers/previews.
 static void alarm_vibrate(const Alarm *a) {
   if (a->vibe_pattern_kind == 1 && a->vibe_pattern_len > 0) {
-    bool run_is_on[AC_PATTERN_MAX_SEGMENTS];
-    uint32_t run_ms[AC_PATTERN_MAX_SEGMENTS];
-    int n_runs = 0;
-    for (int i = 0; i < a->vibe_pattern_len; i++) {
-      uint8_t raw = a->vibe_pattern_custom[i];
-      bool is_on = !(raw & AC_PATTERN_BREAK_BIT);
-      uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
-      if (n_runs > 0 && run_is_on[n_runs - 1] == is_on) {
-        run_ms[n_runs - 1] += ms;
-      } else {
-        run_is_on[n_runs] = is_on;
-        run_ms[n_runs] = ms;
-        n_runs++;
-      }
-    }
-    uint32_t durations[AC_PATTERN_MAX_SEGMENTS + 1];
-    uint32_t n = 0;
-    if (n_runs > 0 && !run_is_on[0]) { durations[n++] = 0; }
-    for (int i = 0; i < n_runs; i++) { durations[n++] = run_ms[i]; }
-    VibePattern vp = { .durations = durations, .num_segments = n };
-    vibes_enqueue_custom_pattern(vp);
+    alarm_play_vibe_pattern(a->vibe_pattern_custom, a->vibe_pattern_len);
     return;
   }
-  switch (a->vibe_pattern) {
-    case 1: vibes_short_pulse(); break;
-    case 2: vibes_long_pulse(); break;
-    default: vibes_double_pulse(); break;
+  uint8_t idx = (a->vibe_pattern < VIBE_PRESET_COUNT) ? a->vibe_pattern : 0;
+  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_vibe_pattern_parse(VIBE_PRESETS[idx].pattern, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+    return;   // unreachable: every VIBE_PRESETS entry is a fixed, valid literal
+  }
+  alarm_play_vibe_pattern(parsed, len);
+}
+
+// Builds one SpeakerNote per pattern segment: a break plays as silence
+// (midi_note 0, Sine -- the waveform doesn't matter for a silent note, kept
+// distinct from an on-beat's Square purely for clarity), an on-beat plays
+// its note's pitch (decoded from the octave*AC_NOTE_COUNT+base encoding --
+// see AC_NOTE_OCTAVE_*, alarm_calc.h) as a Square wave. Shared by both
+// branches of alarm_play_audio() below, so Default and a stored Custom
+// pattern render identically -- the only difference between them is which
+// (flags, notes, len) triple gets passed in.
+#if PBL_SPEAKER
+static void alarm_build_sound_notes(const uint8_t *flags, const uint8_t *notes_arr, uint8_t len,
+                                     SpeakerNote *out) {
+  for (int i = 0; i < len; i++) {
+    uint8_t raw = flags[i];
+    bool is_break = (raw & AC_PATTERN_BREAK_BIT) != 0;
+    uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+    uint8_t octave = notes_arr[i] / AC_NOTE_COUNT;
+    uint8_t base = notes_arr[i] % AC_NOTE_COUNT;
+    uint8_t midi = (!is_break && base < AC_NOTE_COUNT)
+      ? (uint8_t)(AC_NOTE_MIDI[base] + 12 * (octave - AC_NOTE_OCTAVE_SAME)) : 0;
+    out[i] = (SpeakerNote){
+      .midi_note = midi,
+      .waveform = is_break ? SpeakerWaveformSine : SpeakerWaveformSquare,
+      .duration_ms = (uint16_t)ms,
+      .velocity = 0, .reserved = 0
+    };
   }
 }
 
-// Same note sequence, PBL_SPEAKER guard, and mute check as
-// pebble-instant-timer's alarm_play_audio() (src/c/instant_timer.c, "Add
-// alarm audio" commit): a beep-silence-beep-silence pattern, gated on the
-// (global, phone-configured) volume being nonzero and the speaker not being
-// system-muted. Ours additionally requires the firing alarm's own
-// sound_enabled toggle (checked by the caller) — Instant Timer has no
-// per-alarm concept to gate on. A custom sound pattern (sound_pattern_kind==1)
-// instead builds one SpeakerNote per stored segment -- unlike vibration,
-// SpeakerNote carries its own explicit duration and needs no strict
-// alternation, so consecutive on-notes just play back to back as distinct
-// notes with no merging required. Each on-segment's pitch comes from
-// sound_pattern_note[]/AC_NOTE_MIDI; break segments are silence (midi_note 0).
-#if PBL_SPEAKER
+// Gated on volume being nonzero and the speaker not being system-muted.
+// Unlike vibration's VibePattern, SpeakerNote carries its own explicit
+// duration and needs no strict on/off alternation, so consecutive on-notes
+// just play back to back with no merging required -- but a ~100ms silent
+// note is still always prepended before the real (flags, notes_arr, len)
+// segments, a deliberate glitch workaround for an observed issue where the
+// very first note of a sequence sometimes doesn't play correctly. Shared by
+// both alarm_play_audio() (ring time) and the Tone picker's preview-on-select
+// (pattern_select_select), so the fix and the note-building both stay in one
+// place rather than duplicated per call site.
+static void alarm_play_sound_pattern(const uint8_t *flags, const uint8_t *notes_arr, uint8_t len, uint8_t volume) {
+  if (volume == 0 || len == 0 || speaker_is_muted()) { return; }
+  SpeakerNote notes[AC_PATTERN_MAX_SEGMENTS + 1];
+  notes[0] = (SpeakerNote){ .midi_note = 0, .waveform = SpeakerWaveformSine, .duration_ms = 100, .velocity = 0, .reserved = 0 };
+  alarm_build_sound_notes(flags, notes_arr, len, &notes[1]);
+  speaker_play_notes(notes, (uint32_t)len + 1, volume);
+}
+
+// A custom sound pattern (sound_pattern_kind==1) plays the alarm's own
+// stored pattern; Default (sound_pattern_kind==0) plays SOUND_PRESETS[0]
+// ("Classic") instead of a separately-maintained fixed note array, so the
+// two literal sources of "what Default sounds like" can never drift apart.
 static void alarm_play_audio(const Alarm *a, uint8_t volume) {
-  if (volume == 0 || speaker_is_muted()) { return; }
   if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
-    SpeakerNote notes[AC_PATTERN_MAX_SEGMENTS];
-    for (int i = 0; i < a->sound_pattern_len; i++) {
-      uint8_t raw = a->sound_pattern[i];
-      bool is_break = (raw & AC_PATTERN_BREAK_BIT) != 0;
-      uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
-      uint8_t octave = a->sound_pattern_note[i] / AC_NOTE_COUNT;
-      uint8_t base = a->sound_pattern_note[i] % AC_NOTE_COUNT;
-      uint8_t midi = (!is_break && base < AC_NOTE_COUNT)
-        ? (uint8_t)(AC_NOTE_MIDI[base] + 12 * (octave - AC_NOTE_OCTAVE_SAME)) : 0;
-      notes[i] = (SpeakerNote){
-        .midi_note = midi,
-        .waveform = is_break ? SpeakerWaveformSine : SpeakerWaveformSquare,
-        .duration_ms = (uint16_t)ms,
-        .velocity = 0, .reserved = 0
-      };
-    }
-    speaker_play_notes(notes, a->sound_pattern_len, volume);
+    alarm_play_sound_pattern(a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len, volume);
     return;
   }
-  static const SpeakerNote beep = {
-    .midi_note = 95, .waveform = SpeakerWaveformSquare, .duration_ms = 150, .velocity = 0, .reserved = 0
-  };
-  static const SpeakerNote silence = {
-    .midi_note = 0, .waveform = SpeakerWaveformSine, .duration_ms = 100, .velocity = 0, .reserved = 0
-  };
-  static const SpeakerNote notes4[4] = { beep, silence, beep, silence };
-  speaker_play_notes(notes4, ARRAY_LENGTH(notes4), volume);
+  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], note_idx[AC_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_sound_pattern_parse(SOUND_PRESETS[0].pattern, AC_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) {
+    return;   // unreachable: SOUND_PRESETS[0].pattern is a fixed, valid literal
+  }
+  alarm_play_sound_pattern(flags, note_idx, len, volume);
+}
+
+// Plays a raw pattern string once, for the Tone picker's preview-on-select
+// (pattern_select_select) -- parses on the fly rather than needing a stored
+// Alarm's fields, since a preview can be of a preset that isn't applied yet.
+static void alarm_preview_sound_pattern(const char *text) {
+  if (!text || !text[0]) { return; }
+  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_sound_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, flags, notes, &len)) { return; }
+  alarm_play_sound_pattern(flags, notes, len, (uint8_t)s_audio_volume);
 }
 
 // increasing_volume: driven by s_alarm_buzz_count (how many buzz cycles have
@@ -2299,14 +2471,6 @@ static MenuLayer *s_edit_menu;
 static Layer *s_edit_bottom_bar;
 static int s_edit_idx = -1;
 
-static const char *vibe_pattern_name(uint8_t pattern) {
-  switch (pattern) {
-    case 1: return "Short";
-    case 2: return "Long";
-    default: return "Double";
-  }
-}
-
 #define EDIT_ROW_LABEL    0
 #define EDIT_ROW_ENABLE   1
 #define EDIT_ROW_TIME     2
@@ -2633,11 +2797,17 @@ static void open_edit_window(int idx) {
 //
 // The old edit menu's four separate Vibration/Vibe pattern/Sound/Increasing
 // volume rows are grouped under one "Signal" row (EDIT_ROW_SIGNAL above),
-// which opens this submenu. Vibe pattern and Sound pattern each open a
-// further picker (pattern_select_window, shared by both) offering the
-// existing presets (Double/Short/Long for vibe; just "Default" for sound)
-// plus "Custom", which opens the pattern-mode keyboard (multitap_keyboard's
-// numeric/space/period entry, see multitap_keyboard_set_pattern_mode).
+// which opens this submenu. Vibration and Sound's own on/off toggles are no
+// longer separate rows at all -- each is merged into its richer sibling's
+// picker as a leading "Off" row (Vibration / Tone), so the Signal menu
+// itself only has two pattern rows plus Increasing volume and the help row.
+// Vibration and Tone each open a further picker (pattern_select_window,
+// shared by both) offering "Off" first, then that kind's preset table
+// (VIBE_PRESETS/SOUND_PRESETS), then "Custom" -- every preset row (not
+// just Custom) opens the pattern-mode keyboard (multitap_keyboard's
+// numeric/space/period entry, see multitap_keyboard_set_pattern_mode)
+// pre-filled with its text, so picking a preset is a starting point to
+// review/tweak rather than an instant-apply action.
 //
 // Both new windows operate directly on s_alarms[s_edit_idx] -- the same
 // alarm the edit window underneath is already showing -- rather than
@@ -2645,7 +2815,7 @@ static void open_edit_window(int idx) {
 // repeat/cron/snooze editors: there's exactly one call site for each (the
 // Signal submenu itself), so there's nothing generic to gain, and BACK out
 // of either window needs no snapshot-revert dance since nothing is mutated
-// until a row is actually selected.
+// until a row is actually selected (except the instant-apply "Off" row).
 
 // Custom pattern text, worst case AC_PATTERN_MAX_SEGMENTS segments of up to
 // 3 chars each (a duration digit, a note letter, and an optional "'"/","
@@ -2658,14 +2828,19 @@ typedef enum { PATTERN_SELECT_VIBE, PATTERN_SELECT_SOUND } PatternSelectKind;
 static Window *s_signal_window;
 static MenuLayer *s_signal_menu;
 static Layer *s_signal_bottom_bar;
+static Layer *s_signal_header;
+#define SIGNAL_HEADER_H 30
 
-#define SIGNAL_ROW_VIBRATION 0
-#define SIGNAL_ROW_SOUND     1
+// Vibration and Sound's own on/off toggles are merged into the Vibration/
+// Tone rows below (an "Off" row inside each picker) rather than standing
+// as separate rows -- see pattern_select_select/draw_row/window_push.
+// These two rows sit in their old on/off toggle's slot, so the Signal menu
+// is now just these four rows.
+#define SIGNAL_ROW_VIBE_PATTERN 0
+#define SIGNAL_ROW_SOUND_PATTERN 1
 #define SIGNAL_ROW_INCREASING_VOLUME 2
-#define SIGNAL_ROW_VIBE_PATTERN 3
-#define SIGNAL_ROW_SOUND_PATTERN 4
-#define SIGNAL_ROW_PATTERN_HELP 5
-#define SIGNAL_ROW_COUNT 6
+#define SIGNAL_ROW_PATTERN_HELP 3
+#define SIGNAL_ROW_COUNT 4
 
 // ---- pattern_help_window: describes the custom sound/vibe pattern syntax,
 // same shape as cron_help_window (a plain scrollable text screen, no
@@ -2776,10 +2951,13 @@ static MenuLayer *s_pattern_select_menu;
 static PatternSelectKind s_pattern_select_kind;
 static bool s_pattern_select_show_invalid;   // transient: last Custom attempt from here failed to parse
 
-#define PATTERN_SELECT_VIBE_ROW_COUNT  4   // Double, Short, Long, Custom
-#define PATTERN_SELECT_SOUND_ROW_COUNT 2   // Default, Custom
-#define PATTERN_SELECT_VIBE_CUSTOM_ROW  3
-#define PATTERN_SELECT_SOUND_CUSTOM_ROW 1
+// Row 0 of each picker is "Off" -- the merged former Vibration/Sound
+// on/off toggle (see the SIGNAL_ROW_* comment above) -- so every preset
+// row and the Custom row are shifted one down from their original index.
+#define PATTERN_SELECT_VIBE_ROW_COUNT  (VIBE_PRESET_COUNT + 2)   // Off, presets..., Custom
+#define PATTERN_SELECT_SOUND_ROW_COUNT (SOUND_PRESET_COUNT + 2)   // Off, presets... (row 1 = Triple/default), Custom
+#define PATTERN_SELECT_VIBE_CUSTOM_ROW  (VIBE_PRESET_COUNT + 1)
+#define PATTERN_SELECT_SOUND_CUSTOM_ROW (SOUND_PRESET_COUNT + 1)
 
 static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid);
 
@@ -2793,33 +2971,45 @@ static void signal_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
   const char *key = "";
   char value[64] = "";
   switch (cell_index->row) {
-    case SIGNAL_ROW_VIBRATION:
+    case SIGNAL_ROW_VIBE_PATTERN:
       key = "Vibration";
-      snprintf(value, sizeof(value), "%s", a->vibration_enabled ? "On" : "Off");
+      // Show the preset's NAME here, not its raw pattern -- same "keep this
+      // row short" spirit as the Tone row right below.
+      if (!a->vibration_enabled) {
+        snprintf(value, sizeof(value), "Off");
+      } else {
+        int match = vibe_preset_match(a);
+        if (a->vibe_pattern_kind == 0) {
+          snprintf(value, sizeof(value), "%s", VIBE_PRESETS[a->vibe_pattern < VIBE_PRESET_COUNT ? a->vibe_pattern : 0].label);
+        } else if (match >= 0) {
+          snprintf(value, sizeof(value), "%s", VIBE_PRESETS[match].label);
+        } else {
+          snprintf(value, sizeof(value), "Custom");
+        }
+      }
       break;
-    case SIGNAL_ROW_SOUND:
-      key = "Sound";
-      snprintf(value, sizeof(value), "%s", a->sound_enabled ? "On" : "Off");
+    case SIGNAL_ROW_SOUND_PATTERN: {
+      key = "Tone";
+      // Show the preset's NAME here, not its raw notes -- matches
+      // signal_draw_row's general "keep this row short" spirit (same
+      // reasoning as the Tone picker's own 2-note preview cap).
+      if (!a->sound_enabled) {
+        snprintf(value, sizeof(value), "Off");
+      } else {
+        int match = sound_preset_match(a);
+        if (a->sound_pattern_kind == 0) {
+          snprintf(value, sizeof(value), "%s", SOUND_PRESETS[0].label);   // "Triple (default)"
+        } else if (match >= 0) {
+          snprintf(value, sizeof(value), "%s", SOUND_PRESETS[match].label);
+        } else {
+          snprintf(value, sizeof(value), "Custom");
+        }
+      }
       break;
+    }
     case SIGNAL_ROW_INCREASING_VOLUME:
       key = "Increasing volume";
       snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
-      break;
-    case SIGNAL_ROW_VIBE_PATTERN:
-      key = "Vibe pattern";
-      if (a->vibe_pattern_kind && a->vibe_pattern_len > 0) {
-        ac_vibe_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
-      } else {
-        snprintf(value, sizeof(value), "%s", vibe_pattern_name(a->vibe_pattern));
-      }
-      break;
-    case SIGNAL_ROW_SOUND_PATTERN:
-      key = "Tone";
-      if (a->sound_pattern_kind && a->sound_pattern_len > 0) {
-        ac_sound_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
-      } else {
-        snprintf(value, sizeof(value), "Default");
-      }
       break;
     case SIGNAL_ROW_PATTERN_HELP:
       key = "Pattern/Tone help";   // opens pattern_help_window; no value column
@@ -2849,26 +3039,16 @@ static void signal_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
   switch (cell_index->row) {
-    case SIGNAL_ROW_VIBRATION:
-      a->vibration_enabled = !a->vibration_enabled;
-      persist_all();
-      menu_layer_reload_data(s_signal_menu);
-      break;
-    case SIGNAL_ROW_SOUND:
-      a->sound_enabled = !a->sound_enabled;
-      persist_all();
-      menu_layer_reload_data(s_signal_menu);
-      break;
-    case SIGNAL_ROW_INCREASING_VOLUME:
-      a->increasing_volume = !a->increasing_volume;
-      persist_all();
-      menu_layer_reload_data(s_signal_menu);
-      break;
     case SIGNAL_ROW_VIBE_PATTERN:
       pattern_select_window_push(PATTERN_SELECT_VIBE, false);
       break;
     case SIGNAL_ROW_SOUND_PATTERN:
       pattern_select_window_push(PATTERN_SELECT_SOUND, false);
+      break;
+    case SIGNAL_ROW_INCREASING_VOLUME:
+      a->increasing_volume = !a->increasing_volume;
+      persist_all();
+      menu_layer_reload_data(s_signal_menu);
       break;
     case SIGNAL_ROW_PATTERN_HELP:
       pattern_help_window_push();
@@ -2876,11 +3056,23 @@ static void signal_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   }
 }
 
+static void signal_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Signal", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
 static void signal_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  GRect menu_bounds = bounds;
-  menu_bounds.size.h = bottom_bar_top_for_bounds(bounds);
+  s_signal_header = layer_create(GRect(0, 0, bounds.size.w, SIGNAL_HEADER_H));
+  layer_set_update_proc(s_signal_header, signal_header_update_proc);
+  layer_add_child(root, s_signal_header);
+  GRect menu_bounds = GRect(0, SIGNAL_HEADER_H, bounds.size.w,
+                            bottom_bar_top_for_bounds(bounds) - SIGNAL_HEADER_H);
   s_signal_menu = menu_layer_create(menu_bounds);
   menu_layer_set_callbacks(s_signal_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = signal_num_rows, .get_cell_height = signal_cell_height,
@@ -2893,6 +3085,7 @@ static void signal_window_load(Window *w) {
 }
 static void signal_window_unload(Window *w) {
   menu_layer_destroy(s_signal_menu); s_signal_menu = NULL;
+  layer_destroy(s_signal_header); s_signal_header = NULL;
   layer_destroy(s_signal_bottom_bar); s_signal_bottom_bar = NULL;
 }
 
@@ -2905,9 +3098,9 @@ static void signal_edit_window_push(void) {
   window_stack_push(s_signal_window, true);
 }
 
-// ---- pattern_select_window: Double/Short/Long/Custom (vibe) or
-// Default/Custom (sound) -- shared by both since the shapes only differ in
-// row count and labels ----
+// ---- pattern_select_window: Off/<Vibration presets>/Custom (vibe) or
+// Off/<Tone presets>/Custom (sound) -- shared by both since the shapes only
+// differ in row count and labels ----
 
 static void pattern_custom_done(const char *text, void *ctx);
 
@@ -2921,14 +3114,25 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
   const Alarm *a = &s_alarms[s_edit_idx];
   GRect b = layer_get_bounds(cell_layer);
   int row = cell_index->row;
+  bool is_off = (row == 0);
   bool is_custom = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? (row == PATTERN_SELECT_VIBE_CUSTOM_ROW)
                                                                    : (row == PATTERN_SELECT_SOUND_CUSTOM_ROW);
+  // Row 0 is always "Off" (the merged Vibration/Sound toggle); every
+  // preset/Custom row is shifted one down from its raw preset index to
+  // make room for it.
+  int preset_idx = (!is_off && !is_custom) ? row - 1 : -1;
   const char *label;
   char value[64] = "";
-  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
-    label = is_custom ? "Custom" : vibe_pattern_name((uint8_t)row);
+  if (is_off) {
+    label = "Off";
+  } else if (preset_idx >= 0 && s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    label = VIBE_PRESETS[preset_idx].label;
+    pattern_preset_preview(VIBE_PRESETS[preset_idx].pattern, value, sizeof(value));
+  } else if (preset_idx >= 0) {
+    label = SOUND_PRESETS[preset_idx].label;
+    pattern_preset_preview(SOUND_PRESETS[preset_idx].pattern, value, sizeof(value));
   } else {
-    label = is_custom ? "Custom" : "Default";
+    label = "Custom";
   }
   if (is_custom) {
     if (s_pattern_select_show_invalid) {
@@ -2959,34 +3163,93 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
   }
 }
 
+// Builds the pattern text a given (non-"Off") PATTERN_SELECT_SOUND row
+// represents -- a preset's fixed text, or the alarm's own currently-stored
+// custom text for the Custom row -- shared by pattern_select_select (to
+// pre-fill the keyboard) and the preview-on-navigate helper below.
+static void pattern_select_sound_row_text(const Alarm *a, int row, char *out, size_t out_size) {
+  out[0] = '\0';
+  if (row == PATTERN_SELECT_SOUND_CUSTOM_ROW) {
+    if (a->sound_pattern_len > 0) {
+      ac_sound_pattern_format(out, out_size, a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
+    }
+  } else {
+    strncpy(out, SOUND_PRESETS[row - 1].pattern, out_size - 1);
+  }
+}
+
+// pattern_select_sound_row_text's vibe equivalent.
+static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, size_t out_size) {
+  out[0] = '\0';
+  if (row == PATTERN_SELECT_VIBE_CUSTOM_ROW) {
+    if (a->vibe_pattern_len > 0) {
+      ac_vibe_pattern_format(out, out_size, a->vibe_pattern_custom, a->vibe_pattern_len);
+    }
+  } else {
+    strncpy(out, VIBE_PRESETS[row - 1].pattern, out_size - 1);
+  }
+}
+
+// Plays a one-off preview of whichever row is currently highlighted --
+// called as the selection moves (pattern_select_up_click/down_click) and
+// once right after the picker opens, so browsing either picker previews
+// each tone/vibe as you land on it rather than only on Select. Row 0
+// ("Off") is silence and is skipped.
+static void pattern_select_preview_current_row(void) {
+  if (!s_pattern_select_menu) { return; }
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
+  if (idx.row == 0) { return; }
+  char text[PATTERN_KEYBOARD_MAX_LEN + 1];
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    pattern_select_vibe_row_text(&s_alarms[s_edit_idx], idx.row, text, sizeof(text));
+    alarm_preview_vibe_pattern(text);
+    return;
+  }
+#if PBL_SPEAKER
+  pattern_select_sound_row_text(&s_alarms[s_edit_idx], idx.row, text, sizeof(text));
+  alarm_preview_sound_pattern(text);
+#endif
+}
+
 static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
   int row = cell_index->row;
-  bool is_custom = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? (row == PATTERN_SELECT_VIBE_CUSTOM_ROW)
-                                                                   : (row == PATTERN_SELECT_SOUND_CUSTOM_ROW);
-  if (is_custom) {
-    char initial[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
-    if (s_pattern_select_kind == PATTERN_SELECT_VIBE && a->vibe_pattern_len > 0) {
-      ac_vibe_pattern_format(initial, sizeof(initial), a->vibe_pattern_custom, a->vibe_pattern_len);
-    } else if (s_pattern_select_kind == PATTERN_SELECT_SOUND && a->sound_pattern_len > 0) {
-      ac_sound_pattern_format(initial, sizeof(initial), a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
+
+  // Row 0 ("Off") is the merged Vibration/Sound on/off toggle -- the only
+  // instant-apply row in either picker. It deliberately leaves the
+  // underlying vibe_pattern_kind/vibe_pattern(_custom)/sound_pattern_kind/
+  // sound_pattern(_note) fields untouched, so turning it back on later
+  // still remembers whichever pattern/tone was set before.
+  if (row == 0) {
+    if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+      a->vibration_enabled = false;
+    } else {
+      a->sound_enabled = false;
     }
-    window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
-    multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
-                                           PATTERN_KEYBOARD_MAX_LEN, NULL,
-                                           s_pattern_select_kind == PATTERN_SELECT_SOUND);
+    persist_all();
+    window_stack_pop(true);
+    if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
     return;
   }
-  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
-    a->vibe_pattern_kind = 0;
-    a->vibe_pattern = (uint8_t)row;
+
+  // Every remaining row (a preset, or Custom) pops straight into the
+  // pattern keyboard pre-filled with its associated text, so selecting one
+  // is "start from this template" rather than "apply immediately" -- only
+  // pressing Select in the keyboard (-> pattern_custom_done) actually
+  // commits it. (The audible preview already happened as this row was
+  // navigated to -- see pattern_select_preview_current_row.)
+  char initial[PATTERN_KEYBOARD_MAX_LEN + 1];
+  bool is_vibe = (s_pattern_select_kind == PATTERN_SELECT_VIBE);
+  if (is_vibe) {
+    pattern_select_vibe_row_text(a, row, initial, sizeof(initial));
   } else {
-    a->sound_pattern_kind = 0;
+    pattern_select_sound_row_text(a, row, initial, sizeof(initial));
   }
-  persist_all();
-  window_stack_pop(true);
-  if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
+  window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
+  multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
+                                         PATTERN_KEYBOARD_MAX_LEN, NULL, !is_vibe);
 }
 
 static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
@@ -2995,9 +3258,11 @@ static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
 }
 static void pattern_select_up_click(ClickRecognizerRef r, void *ctx) {
   menu_layer_set_selected_next(s_pattern_select_menu, true, MenuRowAlignCenter, true);
+  pattern_select_preview_current_row();
 }
 static void pattern_select_down_click(ClickRecognizerRef r, void *ctx) {
   menu_layer_set_selected_next(s_pattern_select_menu, false, MenuRowAlignCenter, true);
+  pattern_select_preview_current_row();
 }
 // BACK simply pops -- nothing is mutated until a row is actually selected,
 // so there's no snapshot to revert (unlike repeat/cron/snooze's on_cancel
@@ -3019,7 +3284,7 @@ static void pattern_select_header_update_proc(Layer *l, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, GColorBlack);
-  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibe pattern" : "Tone";
+  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibration" : "Tone";
   graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
@@ -3060,14 +3325,27 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
   if (s_edit_idx >= 0 && s_edit_idx < s_count) {
     const Alarm *a = &s_alarms[s_edit_idx];
     if (kind == PATTERN_SELECT_VIBE) {
-      row = a->vibe_pattern_kind ? PATTERN_SELECT_VIBE_CUSTOM_ROW : (a->vibe_pattern < 3 ? a->vibe_pattern : 0);
+      if (!a->vibration_enabled) {
+        row = 0;   // "Off"
+      } else if (a->vibe_pattern_kind == 0) {
+        row = (a->vibe_pattern < VIBE_PRESET_COUNT ? a->vibe_pattern : 0) + 1;
+      } else {
+        int match = vibe_preset_match(a);
+        row = (match >= 0) ? match + 1 : PATTERN_SELECT_VIBE_CUSTOM_ROW;
+      }
+    } else if (!a->sound_enabled) {
+      row = 0;   // "Off"
+    } else if (a->sound_pattern_kind == 0) {
+      row = 1;   // "Triple (default)"
     } else {
-      row = a->sound_pattern_kind ? PATTERN_SELECT_SOUND_CUSTOM_ROW : 0;
+      int match = sound_preset_match(a);
+      row = (match >= 0) ? match + 1 : PATTERN_SELECT_SOUND_CUSTOM_ROW;
     }
   }
   if (s_pattern_select_menu) {
     menu_layer_set_selected_index(s_pattern_select_menu, (MenuIndex){ 0, row }, MenuRowAlignTop, false);
   }
+  pattern_select_preview_current_row();
 }
 
 // Result handler for the pattern-mode keyboard, shared by both Vibe pattern
@@ -3091,6 +3369,7 @@ static void pattern_custom_done(const char *text, void *ctx) {
     a->vibe_pattern_kind = 1;
     a->vibe_pattern_len = len;
     memcpy(a->vibe_pattern_custom, parsed, len);
+    a->vibration_enabled = true;
   } else {
     uint8_t flags[AC_PATTERN_MAX_SEGMENTS];
     uint8_t notes[AC_PATTERN_MAX_SEGMENTS];
@@ -3103,6 +3382,7 @@ static void pattern_custom_done(const char *text, void *ctx) {
     a->sound_pattern_len = len;
     memcpy(a->sound_pattern, flags, len);
     memcpy(a->sound_pattern_note, notes, len);
+    a->sound_enabled = true;
   }
   persist_all();
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
