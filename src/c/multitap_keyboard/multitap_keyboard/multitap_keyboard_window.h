@@ -50,3 +50,12 @@ void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
 void multitap_keyboard_window_push_numeric(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context);
+
+// As push_ex, but restricted to the fixed digits layout with the
+// bottom-left key repurposed to cycle "0"/"." and the space key typing a
+// literal space (not "0") — for on/off duration patterns (e.g.
+// "1 1 1 1 1") rather than free text or cron syntax. See
+// multitap_keyboard_set_pattern_mode() for the underlying behavior.
+void multitap_keyboard_window_push_pattern(MultitapKeyboardResultHandler handler,
+                                const char *initial_text, int max_len,
+                                void *context);

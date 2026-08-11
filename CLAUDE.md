@@ -88,13 +88,13 @@ than trusting a mental model of the numbering.
 
 | Key | ID | Type | Meaning |
 |---|---|---|---|
-| `TestClearAlarms` | 10007 | int, nonzero | Wipes all alarms (`s_count = 0`) before anything else in the same message. |
-| `TestAlarmIndex` | 10008 | int | **Required** to touch alarm fields. `== s_count` appends a new alarm (seeded with the same defaults as the "+ New alarm" wizard — enabled, vibration+sound on, Double vibe pattern, default snooze, one-time — except the time, which is a fixed 7:00 here rather than "next minute", for a deterministic default unless overridden); `< s_count` edits that existing alarm in place; anything else is ignored (logged as a warning). |
-| `TestAlarmHour` | 10009 | int 0-23 | |
-| `TestAlarmMinute` | 10010 | int 0-59 | |
-| `TestAlarmRepeats` | 10011 | int 0/1 | |
-| `TestAlarmRepeatDays` | 10012 | int 0-127 | `AC_DAY_*` bitmask. |
-| `TestAlarmEnabled` | 10013 | int 0/1 | |
+| `TestClearAlarms` | 10008 | int, nonzero | Wipes all alarms (`s_count = 0`) before anything else in the same message. |
+| `TestAlarmIndex` | 10009 | int | **Required** to touch alarm fields. `== s_count` appends a new alarm (seeded with the same defaults as the "+ New alarm" wizard — enabled, vibration+sound on, Double vibe pattern, default snooze, one-time — except the time, which is a fixed 7:00 here rather than "next minute", for a deterministic default unless overridden); `< s_count` edits that existing alarm in place; anything else is ignored (logged as a warning). |
+| `TestAlarmHour` | 10010 | int 0-23 | |
+| `TestAlarmMinute` | 10011 | int 0-59 | |
+| `TestAlarmRepeats` | 10012 | int 0/1 | |
+| `TestAlarmRepeatDays` | 10013 | int 0-127 | `AC_DAY_*` bitmask. |
+| `TestAlarmEnabled` | 10014 | int 0/1 | |
 | `TestAlarmSkipNext` | 10015 | int 0/1 | Sets `skip_next` directly. Reused for cron alarms too (see "Cron-syntax alarms" below) — no separate cron-specific key. |
 | `TestAlarmSnoozeMinutes` | 10016 | int | |
 | `TestAlarmSnoozeMax` | 10017 | int | 0 = unlimited. |
@@ -115,6 +115,10 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
+| `TestAlarmSoundPatternKind` | 10036 | int 0/1 | 0=Default (fixed beep loop), 1=Custom. Sets `sound_pattern_kind` directly. See "Signal submenu / custom sound &amp; vibe patterns" below. |
+| `TestAlarmSoundCustomPattern` | 10037 | string | Space-separated pattern (e.g. `"1 1 1 1 1"`), parsed via `ac_pattern_parse` into `sound_pattern`/`sound_pattern_len`. Logs a warning (fields left as previously set) if unparseable. |
+| `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
+| `TestAlarmVibeCustomPattern` | 10039 | string | Same format/parsing as `TestAlarmSoundCustomPattern`, into `vibe_pattern_custom`/`vibe_pattern_len`. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -302,12 +306,13 @@ in this app at all, so every message key is now just an ordinary scalar at
   still-named-`AlarmVibePattern` message key) is only read once, at
   creation, to seed a new alarm's `vibe_pattern` (`start_new_alarm_flow`) —
   changing the phone setting afterward has no effect on already-created
-  alarms, unlike `AudioVolume`. Editable per-alarm via the edit menu's
-  "Vibe pattern" row, which cycles Double -> Short -> Long -> Double on
-  SELECT (`EDIT_ROW_VIBE_PATTERN`), the same short-press-cycles convention
-  as the main list's enable/disable/skip state — there's no 3-way picker
-  widget in this app, so cycling was the natural fit rather than building
-  one. Adding this field bumped `STORE_SCHEMA` (`alarm_store.h`) to 7 — the
+  alarms, unlike `AudioVolume`. Editable per-alarm via the Signal submenu's
+  "Vibe pattern" row (see the Signal submenu design point further below) —
+  it used to cycle Double -> Short -> Long -> Double directly on SELECT,
+  the same short-press-cycles convention as the main list's enable/disable/
+  skip state, before the Signal submenu/custom-pattern feature replaced
+  that cycle with a picker (Double/Short/Long/Custom) to make room for a
+  fourth, non-cyclable option. Adding this field bumped `STORE_SCHEMA` (`alarm_store.h`) to 7 — the
   baseline version the forward-compatible migration below ships in, so this
   particular bump was the last one to unconditionally wipe existing alarms;
   see the `store_load()` design point below for what happens on the *next*
@@ -832,11 +837,89 @@ feature — see git history if curious):
   one source of truth for "which row is at this menu position" without
   scattering `is_cron` checks through each of them individually. Row order:
   Delete, Time (or Cron), Label, State, Repeat (only when `!is_cron`),
-  Snooze, Vibration, Vibe pattern, Sound, Increasing volume, Auto-dismiss —
-  Delete leads (so it's the row selected by default when the menu opens;
-  still gated behind its own confirm prompt, so landing on it isn't
-  destructive by itself), and Time/Cron comes next ahead of Label/State,
-  unlike every other row grouping in this app which puts Label first.
+  Snooze, Signal, Auto-dismiss — Delete leads (so it's the row selected by
+  default when the menu opens; still gated behind its own confirm prompt,
+  so landing on it isn't destructive by itself), and Time/Cron comes next
+  ahead of Label/State, unlike every other row grouping in this app which
+  puts Label first.
+- **Signal submenu (`EDIT_ROW_SIGNAL`) groups Vibration/Sound/Increasing
+  volume/Vibe pattern/Sound pattern under one edit-menu row** instead of
+  five separate top-level rows — `signal_edit_window_push()` opens a second
+  itemized `MenuLayer` (same bottom-bar-bearing shell as `edit_window`
+  itself) operating on the same `s_edit_idx` alarm. Row order: Vibration,
+  Sound, Increasing volume, Vibe pattern, Sound pattern. Vibration/Sound/
+  Increasing volume still toggle in place on SELECT, moved verbatim from
+  the old top-level rows; Vibe pattern and Sound pattern instead each open
+  `pattern_select_window_push()` — one shared picker window (differing only
+  in row count/labels) offering Double/Short/Long/Custom for vibe or
+  Default/Custom for sound. Selecting a non-Custom row commits immediately
+  and pops back to the Signal menu; selecting Custom pops the picker and
+  pushes the pattern-mode keyboard (see below) preloaded with the alarm's
+  current custom pattern text, if any. Neither new window needs the
+  generic on_confirm/on_cancel-plus-snapshot-revert convention every other
+  editor in this file uses (time/repeat/cron/snooze) — both operate
+  directly on `s_alarms[s_edit_idx]` since there's exactly one call site
+  for each, and nothing is mutated until a row is actually selected, so
+  BACK needs no revert logic.
+- **Custom sound/vibe patterns**: a pattern is a space-separated list of
+  1-16 (`AC_PATTERN_MAX_SEGMENTS`) on/off durations, each written as a
+  decimal in tenths of a second (`"1"` = 100ms, `"3.3"` = 330ms) and parsed
+  by `ac_pattern_parse()` (`alarm_calc.c`, host-testable, no SDK
+  dependency) into a `uint8_t` 1-100 per segment (unit = 10ms, so
+  10ms-1000ms) — the FIRST segment is always "on" (sound/vibrate active),
+  alternating off/on after that. Extra decimal precision beyond one digit
+  is truncated, not rejected (`"3.35"` parses as `"3.3"`); anything else
+  malformed (empty, out-of-range, a stray letter, more than 16 segments)
+  fails all-or-nothing, same convention as `ac_cron_parse_field`. Unlike
+  cron's raw-text-plus-mask duplication, no raw string is persisted at
+  all — `ac_pattern_format()` deterministically reconstructs the canonical
+  text (used for both display and re-editing) from the stored integers,
+  since truncation already happened at parse time and the round trip is
+  therefore exact. `Alarm.sound_pattern_kind`/`vibe_pattern_kind` (0 =
+  Default/Preset, 1 = Custom) gate which representation is live; both
+  default to 0 on a `STORE_SCHEMA` migration (12; these fields, plus
+  `sound_pattern`/`sound_pattern_len` and `vibe_pattern_custom`/
+  `vibe_pattern_len`, are appended after `cron_week_mask` per the
+  append-only rule, landing in the EXTENSION persist blob, not the frozen
+  main one — see `alarm_store.h`'s `STORE_SCHEMA` comment), which is
+  already the correct "behave exactly as before this feature existed"
+  default, the same free pass `increasing_volume` got — no `store_load()`
+  zero-fill fixup needed, unlike the cron dom/month/week masks. Selecting
+  "Custom" and submitting an unparseable pattern from the keyboard does
+  NOT touch the alarm's persisted fields at all — `pattern_custom_done()`
+  just re-opens the pattern-select picker with its Custom row reading
+  "invalid" (a transient, unpersisted UI flag) instead of a formatted
+  pattern; a valid submission commits and exits straight back to the
+  Signal menu, skipping the picker. Applied at ring time by
+  `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): a custom vibe pattern
+  builds a `uint32_t[]` of millisecond durations (stored value x10) and
+  calls the SDK's `vibes_enqueue_custom_pattern()` instead of the
+  Double/Short/Long one-shots; a custom sound pattern builds an
+  alternating beep/silence `SpeakerNote[]` (same midi note/waveform as the
+  fixed 4-note sequence, just a variable `duration_ms` per segment)
+  instead of that fixed array.
+- **The pattern-entry keyboard is a new `multitap_keyboard` mode**
+  (`multitap_keyboard_set_pattern_mode()`), a sibling of cron's existing
+  numeric mode rather than a restyle of it: both lock the layout to
+  `PAGE_NUMBERS` (digits 1-9 on the character keys), but numeric mode's
+  bottom-left key cycles `*`/`-`/`/`/`,` and repurposes the space key as
+  digit `0`; pattern mode instead cycles `0`/`.` off the bottom-left key
+  (`PATTERN_SYMS`) and leaves the space key as a literal space, since
+  patterns are space-separated. Pushed via
+  `multitap_keyboard_window_push_pattern()`, capped at 64 input chars
+  (`PATTERN_KEYBOARD_MAX_LEN`, `main.c`) — worst case 16 segments of up to
+  `"3.3 "` each. Since Pebble's graphics API has no rich-text/span
+  primitive, the spec's requirement that sound-on tokens read bold in the
+  text field itself required patching the widget's own draw routine (the
+  most invasive change made to this vendored widget so far — every prior
+  extension only ever added a behavior flag, never touched drawing):
+  `prv_draw_pattern_text()` is a separate, deliberately simpler renderer
+  from the generic `prv_draw_text_fitted()` ladder — fixed smallest-tier
+  font, up to 2 wrapped lines, alternating bold/regular per
+  whitespace-delimited token, with a plain non-bold leading-truncated
+  fallback in the rare case a pattern still doesn't fit. `prv_update_proc`
+  picks this renderer instead of `prv_draw_text_fitted` whenever
+  `kb->pattern_mode` is set; every other mode's rendering is untouched.
 - **Main list display**: the bold time slot (`ml_format_cron_time`) shows
   the hour/minute formatted via `ac_format_time` — same
   `clock_is_24h_style()`-aware `"HH:MM"`/`"H:MM am"` every non-cron alarm's

@@ -203,6 +203,7 @@ static void rearm_wakeup(void);
 static bool sweep_due_alarms(void);
 static void trigger_alarm(int idx, int count);
 static void open_edit_window(int idx);
+static void signal_edit_window_push(void);
 static void start_new_alarm_flow(void);
 static void resync_last_fired_for_schedule_change(Alarm *a);
 static void confirm_window_push(const char *label0, const char *label1, void (*cb)(int, void *), void *ctx);
@@ -741,8 +742,19 @@ static int64_t s_alarm_buzz_start_s;
 static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
 static AppTimer *s_alarm_auto_dismiss_timer;   // auto_dismiss: dismisses the ring screen on its own
 
-static void alarm_vibrate(uint8_t pattern) {
-  switch (pattern) {
+// A custom vibe pattern (vibe_pattern_kind==1) plays via the SDK's own
+// vibes_enqueue_custom_pattern() instead of the fixed short/long/double
+// one-shots -- durations are stored as tenths-of-a-second ints (1-100, see
+// AC_PATTERN_MAX_SEGMENTS in alarm_calc.h), so each is x10 to get ms.
+static void alarm_vibrate(const Alarm *a) {
+  if (a->vibe_pattern_kind == 1 && a->vibe_pattern_len > 0) {
+    uint32_t durations[AC_PATTERN_MAX_SEGMENTS];
+    for (int i = 0; i < a->vibe_pattern_len; i++) { durations[i] = (uint32_t)a->vibe_pattern_custom[i] * 10; }
+    VibePattern vp = { .durations = durations, .num_segments = a->vibe_pattern_len };
+    vibes_enqueue_custom_pattern(vp);
+    return;
+  }
+  switch (a->vibe_pattern) {
     case 1: vibes_short_pulse(); break;
     case 2: vibes_long_pulse(); break;
     default: vibes_double_pulse(); break;
@@ -755,19 +767,35 @@ static void alarm_vibrate(uint8_t pattern) {
 // (global, phone-configured) volume being nonzero and the speaker not being
 // system-muted. Ours additionally requires the firing alarm's own
 // sound_enabled toggle (checked by the caller) — Instant Timer has no
-// per-alarm concept to gate on.
+// per-alarm concept to gate on. A custom sound pattern (sound_pattern_kind==1)
+// instead builds an alternating beep/silence SpeakerNote per stored segment,
+// same midi_note/waveform as the fixed sequence, just a variable duration
+// (x10ms, same unit as the vibe pattern above) per segment.
 #if PBL_SPEAKER
-static void alarm_play_audio(uint8_t volume) {
+static void alarm_play_audio(const Alarm *a, uint8_t volume) {
+  if (volume == 0 || speaker_is_muted()) { return; }
+  if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
+    SpeakerNote notes[AC_PATTERN_MAX_SEGMENTS];
+    for (int i = 0; i < a->sound_pattern_len; i++) {
+      bool is_on = (i % 2) == 0;   // [0] is always the first "sound-on" segment
+      notes[i] = (SpeakerNote){
+        .midi_note = is_on ? 95 : 0,
+        .waveform = is_on ? SpeakerWaveformSquare : SpeakerWaveformSine,
+        .duration_ms = (uint16_t)(a->sound_pattern[i] * 10),
+        .velocity = 0, .reserved = 0
+      };
+    }
+    speaker_play_notes(notes, a->sound_pattern_len, volume);
+    return;
+  }
   static const SpeakerNote beep = {
     .midi_note = 95, .waveform = SpeakerWaveformSquare, .duration_ms = 150, .velocity = 0, .reserved = 0
   };
   static const SpeakerNote silence = {
     .midi_note = 0, .waveform = SpeakerWaveformSine, .duration_ms = 100, .velocity = 0, .reserved = 0
   };
-  static const SpeakerNote notes[4] = { beep, silence, beep, silence };
-  if (volume > 0 && !speaker_is_muted()) {
-    speaker_play_notes(notes, ARRAY_LENGTH(notes), volume);
-  }
+  static const SpeakerNote notes4[4] = { beep, silence, beep, silence };
+  speaker_play_notes(notes4, ARRAY_LENGTH(notes4), volume);
 }
 
 // increasing_volume: driven by s_alarm_buzz_count (how many buzz cycles have
@@ -802,10 +830,10 @@ static void alarm_buzz_cb(void *ctx) {
   s_alarm_buzz_timer = NULL;
   if (now_s() - s_alarm_buzz_start_s >= ALARM_BUZZ_MAX_S) { return; }
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
-    if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(s_alarms[s_alarm_idx].vibe_pattern); }
+    if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(&s_alarms[s_alarm_idx]); }
 #if PBL_SPEAKER
     if (s_alarms[s_alarm_idx].sound_enabled) {
-      alarm_play_audio(alarm_current_volume(&s_alarms[s_alarm_idx]));
+      alarm_play_audio(&s_alarms[s_alarm_idx], alarm_current_volume(&s_alarms[s_alarm_idx]));
     }
 #endif // PBL_SPEAKER
     // Advances the increasing_volume ramp one step regardless of whether
@@ -1039,12 +1067,12 @@ static void trigger_alarm(int idx, int count) {
   s_alarm_buzz_start_s = now_s();
   s_alarm_buzz_count = 0;
   if (a->auto_dismiss) {
-    if (a->vibration_enabled) { alarm_vibrate(a->vibe_pattern); }
+    if (a->vibration_enabled) { alarm_vibrate(a); }
 #if PBL_SPEAKER
     // Note: auto_dismiss only ever buzzes once, at buzz_count=0, so an
     // increasing_volume alarm combined with auto_dismiss never reaches a
     // meaningfully ramped-up volume -- see alarm_current_volume().
-    if (a->sound_enabled) { alarm_play_audio(alarm_current_volume(a)); }
+    if (a->sound_enabled) { alarm_play_audio(a, alarm_current_volume(a)); }
 #endif // PBL_SPEAKER
     s_alarm_auto_dismiss_timer = app_timer_register(ALARM_AUTO_DISMISS_MS, alarm_auto_dismiss_cb, NULL);
   } else {
@@ -2256,13 +2284,12 @@ static const char *vibe_pattern_name(uint8_t pattern) {
 #define EDIT_ROW_REPEAT   3
 #define EDIT_ROW_CRON     4
 #define EDIT_ROW_SNOOZE   5
-#define EDIT_ROW_VIBE     6
-#define EDIT_ROW_VIBE_PATTERN 7
-#define EDIT_ROW_SOUND    8
-#define EDIT_ROW_INCREASING_VOLUME 9
-#define EDIT_ROW_AUTO_DISMISS 10
-#define EDIT_ROW_DELETE   11
-#define EDIT_ROW_MAX_COUNT 11   // LABEL/ENABLE/TIME/REPEAT/SNOOZE/VIBE/VIBE_PATTERN/SOUND/INCREASING_VOLUME/AUTO_DISMISS/DELETE
+#define EDIT_ROW_SIGNAL   6   // opens the Signal submenu -- Vibration/Sound/
+                              // Increasing volume/Vibe pattern/Sound pattern,
+                              // see signal_edit_window below
+#define EDIT_ROW_AUTO_DISMISS 7
+#define EDIT_ROW_DELETE   8
+#define EDIT_ROW_MAX_COUNT 8   // LABEL/ENABLE/TIME/REPEAT/SNOOZE/SIGNAL/AUTO_DISMISS/DELETE
 
 // Builds the ordered list of row "kinds" for the current alarm's mode into
 // out_kinds (capacity EDIT_ROW_MAX_COUNT) and returns how many are used.
@@ -2283,10 +2310,7 @@ static int edit_build_rows(int *out_kinds, bool is_cron) {
     out_kinds[n++] = EDIT_ROW_REPEAT;
   }
   out_kinds[n++] = EDIT_ROW_SNOOZE;
-  out_kinds[n++] = EDIT_ROW_VIBE;
-  out_kinds[n++] = EDIT_ROW_VIBE_PATTERN;
-  out_kinds[n++] = EDIT_ROW_SOUND;
-  out_kinds[n++] = EDIT_ROW_INCREASING_VOLUME;
+  out_kinds[n++] = EDIT_ROW_SIGNAL;
   out_kinds[n++] = EDIT_ROW_AUTO_DISMISS;
   return n;
 }
@@ -2349,21 +2373,12 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       else if (a->snooze_max == 0) { snprintf(value, sizeof(value), "%d min, unlimited", a->snooze_minutes); }
       else { snprintf(value, sizeof(value), "%d min, %d rep", a->snooze_minutes, a->snooze_max); }
       break;
-    case EDIT_ROW_VIBE:
-      key = "Vibration";
-      snprintf(value, sizeof(value), "%s", a->vibration_enabled ? "On" : "Off");
-      break;
-    case EDIT_ROW_VIBE_PATTERN:
-      key = "Vibe pattern";
-      snprintf(value, sizeof(value), "%s", vibe_pattern_name(a->vibe_pattern));
-      break;
-    case EDIT_ROW_SOUND:
-      key = "Sound";
-      snprintf(value, sizeof(value), "%s", a->sound_enabled ? "On" : "Off");
-      break;
-    case EDIT_ROW_INCREASING_VOLUME:
-      key = "Increasing volume";
-      snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
+    case EDIT_ROW_SIGNAL:
+      key = "Signal";
+      if (a->vibration_enabled && a->sound_enabled) { snprintf(value, sizeof(value), "Vibe, Sound"); }
+      else if (a->vibration_enabled) { snprintf(value, sizeof(value), "Vibe"); }
+      else if (a->sound_enabled) { snprintf(value, sizeof(value), "Sound"); }
+      else { snprintf(value, sizeof(value), "Off"); }
       break;
     case EDIT_ROW_AUTO_DISMISS:
       key = "Auto-dismiss";
@@ -2541,27 +2556,8 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
     case EDIT_ROW_SNOOZE:
       snooze_edit_window_push(a->snooze_minutes, a->snooze_max, edit_on_snooze_confirm, NULL, NULL);
       break;
-    case EDIT_ROW_VIBE:
-      a->vibration_enabled = !a->vibration_enabled;
-      persist_all();
-      menu_layer_reload_data(s_edit_menu);
-      break;
-    case EDIT_ROW_VIBE_PATTERN:
-      // Double -> Short -> Long -> Double, same short-press-cycles
-      // convention as the main list's enable/disable/skip state.
-      a->vibe_pattern = (a->vibe_pattern + 1) % 3;
-      persist_all();
-      menu_layer_reload_data(s_edit_menu);
-      break;
-    case EDIT_ROW_SOUND:
-      a->sound_enabled = !a->sound_enabled;
-      persist_all();
-      menu_layer_reload_data(s_edit_menu);
-      break;
-    case EDIT_ROW_INCREASING_VOLUME:
-      a->increasing_volume = !a->increasing_volume;
-      persist_all();
-      menu_layer_reload_data(s_edit_menu);
+    case EDIT_ROW_SIGNAL:
+      signal_edit_window_push();
       break;
     case EDIT_ROW_AUTO_DISMISS:
       a->auto_dismiss = !a->auto_dismiss;
@@ -2602,6 +2598,441 @@ static void open_edit_window(int idx) {
       .load = edit_window_load, .unload = edit_window_unload });
   }
   window_stack_push(s_edit_window, true);
+}
+
+// ============================ Signal submenu + pattern pickers ============================
+//
+// The old edit menu's four separate Vibration/Vibe pattern/Sound/Increasing
+// volume rows are grouped under one "Signal" row (EDIT_ROW_SIGNAL above),
+// which opens this submenu. Vibe pattern and Sound pattern each open a
+// further picker (pattern_select_window, shared by both) offering the
+// existing presets (Double/Short/Long for vibe; just "Default" for sound)
+// plus "Custom", which opens the pattern-mode keyboard (multitap_keyboard's
+// numeric/space/period entry, see multitap_keyboard_set_pattern_mode).
+//
+// Both new windows operate directly on s_alarms[s_edit_idx] -- the same
+// alarm the edit window underneath is already showing -- rather than
+// threading generic on_confirm/on_cancel callbacks through like the
+// repeat/cron/snooze editors: there's exactly one call site for each (the
+// Signal submenu itself), so there's nothing generic to gain, and BACK out
+// of either window needs no snapshot-revert dance since nothing is mutated
+// until a row is actually selected.
+
+// Custom pattern text, worst case AC_PATTERN_MAX_SEGMENTS segments of up to
+// "100" (3 chars) each plus a separating space -- comfortably covers every
+// valid pattern with room to spare.
+#define PATTERN_KEYBOARD_MAX_LEN 64
+
+typedef enum { PATTERN_SELECT_VIBE, PATTERN_SELECT_SOUND } PatternSelectKind;
+
+static Window *s_signal_window;
+static MenuLayer *s_signal_menu;
+static Layer *s_signal_bottom_bar;
+
+#define SIGNAL_ROW_VIBRATION 0
+#define SIGNAL_ROW_SOUND     1
+#define SIGNAL_ROW_INCREASING_VOLUME 2
+#define SIGNAL_ROW_VIBE_PATTERN 3
+#define SIGNAL_ROW_SOUND_PATTERN 4
+#define SIGNAL_ROW_PATTERN_HELP 5
+#define SIGNAL_ROW_COUNT 6
+
+// ---- pattern_help_window: describes the custom sound/vibe pattern syntax,
+// same shape as cron_help_window (a plain scrollable text screen, no
+// bottom bar -- neither help screen in this app has one) -- shared by both
+// Vibe pattern and Sound pattern's Custom entry since the syntax is
+// identical either way. ----
+
+static Window *s_pattern_help_window;
+static ScrollLayer *s_pattern_help_scroll;
+static TextLayer *s_pattern_help_text;
+static Layer *s_pattern_help_header;
+
+#define PATTERN_HELP_HEADER_H 30
+
+static const char *const PATTERN_HELP_TEXT =
+  "A custom pattern is a list "
+  "of on/off durations, "
+  "separated by spaces. The "
+  "first value is always "
+  "\"on\" (sound or vibrate), "
+  "alternating with \"off\" "
+  "after that.\n"
+  "\n"
+  "Each value is a duration in "
+  "tenths of a second, e.g. "
+  "\"1\" = 100ms, \"3.3\" = "
+  "330ms. Extra decimal digits "
+  "are truncated, not "
+  "rejected. Values must be "
+  "between 0.1 and 10.0.\n"
+  "\n"
+  "Example patterns:\n"
+  "\n"
+  "\"1 1 1 1 1\"\n"
+  "five short, evenly spaced\n"
+  "\n"
+  "\"2 1 1 1 2\"\n"
+  "long, short, short, short,\n"
+  "long\n"
+  "\n"
+  "\"3.3 3.3 3.3\"\n"
+  "three medium beats";
+
+static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, "Pattern help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
+static void pattern_help_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect bounds = layer_get_bounds(root);
+
+  s_pattern_help_header = layer_create(GRect(0, 0, bounds.size.w, PATTERN_HELP_HEADER_H));
+  layer_set_update_proc(s_pattern_help_header, pattern_help_header_update_proc);
+  layer_add_child(root, s_pattern_help_header);
+
+  GRect scroll_bounds = GRect(0, PATTERN_HELP_HEADER_H, bounds.size.w, bounds.size.h - PATTERN_HELP_HEADER_H);
+  s_pattern_help_scroll = scroll_layer_create(scroll_bounds);
+  scroll_layer_set_click_config_onto_window(s_pattern_help_scroll, w);
+
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
+  int text_w = scroll_bounds.size.w - 8;
+  GSize sz = graphics_text_layout_get_content_size(
+      PATTERN_HELP_TEXT, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+
+  s_pattern_help_text = text_layer_create(GRect(4, 4, text_w, sz.h + 8));
+  text_layer_set_font(s_pattern_help_text, f);
+  text_layer_set_overflow_mode(s_pattern_help_text, GTextOverflowModeWordWrap);
+  text_layer_set_text(s_pattern_help_text, PATTERN_HELP_TEXT);
+  scroll_layer_add_child(s_pattern_help_scroll, text_layer_get_layer(s_pattern_help_text));
+  scroll_layer_set_content_size(s_pattern_help_scroll, GSize(scroll_bounds.size.w, sz.h + 16));
+
+  layer_add_child(root, scroll_layer_get_layer(s_pattern_help_scroll));
+}
+
+static void pattern_help_window_unload(Window *w) {
+  scroll_layer_destroy(s_pattern_help_scroll); s_pattern_help_scroll = NULL;
+  text_layer_destroy(s_pattern_help_text); s_pattern_help_text = NULL;
+  layer_destroy(s_pattern_help_header); s_pattern_help_header = NULL;
+}
+
+static void pattern_help_window_push(void) {
+  if (!s_pattern_help_window) {
+    s_pattern_help_window = window_create();
+    window_set_window_handlers(s_pattern_help_window, (WindowHandlers){
+      .load = pattern_help_window_load, .unload = pattern_help_window_unload });
+  }
+  window_stack_push(s_pattern_help_window, true);
+}
+
+static Window *s_pattern_select_window;
+static MenuLayer *s_pattern_select_menu;
+static PatternSelectKind s_pattern_select_kind;
+static bool s_pattern_select_show_invalid;   // transient: last Custom attempt from here failed to parse
+
+#define PATTERN_SELECT_VIBE_ROW_COUNT  4   // Double, Short, Long, Custom
+#define PATTERN_SELECT_SOUND_ROW_COUNT 2   // Default, Custom
+#define PATTERN_SELECT_VIBE_CUSTOM_ROW  3
+#define PATTERN_SELECT_SOUND_CUSTOM_ROW 1
+
+static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid);
+
+static uint16_t signal_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return SIGNAL_ROW_COUNT; }
+static int16_t signal_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
+
+static void signal_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  const Alarm *a = &s_alarms[s_edit_idx];
+  GRect b = layer_get_bounds(cell_layer);
+  const char *key = "";
+  char value[64] = "";
+  switch (cell_index->row) {
+    case SIGNAL_ROW_VIBRATION:
+      key = "Vibration";
+      snprintf(value, sizeof(value), "%s", a->vibration_enabled ? "On" : "Off");
+      break;
+    case SIGNAL_ROW_SOUND:
+      key = "Sound";
+      snprintf(value, sizeof(value), "%s", a->sound_enabled ? "On" : "Off");
+      break;
+    case SIGNAL_ROW_INCREASING_VOLUME:
+      key = "Increasing volume";
+      snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
+      break;
+    case SIGNAL_ROW_VIBE_PATTERN:
+      key = "Vibe pattern";
+      if (a->vibe_pattern_kind && a->vibe_pattern_len > 0) {
+        ac_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
+      } else {
+        snprintf(value, sizeof(value), "%s", vibe_pattern_name(a->vibe_pattern));
+      }
+      break;
+    case SIGNAL_ROW_SOUND_PATTERN:
+      key = "Sound pattern";
+      if (a->sound_pattern_kind && a->sound_pattern_len > 0) {
+        ac_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_len);
+      } else {
+        snprintf(value, sizeof(value), "Default");
+      }
+      break;
+    case SIGNAL_ROW_PATTERN_HELP:
+      key = "Pattern help";   // opens pattern_help_window; no value column
+      break;
+  }
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GRect row = GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26);
+  graphics_draw_text(ctx, key, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  if (value[0]) {
+    graphics_draw_text(ctx, value, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  }
+}
+
+static void signal_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  Alarm *a = &s_alarms[s_edit_idx];
+  switch (cell_index->row) {
+    case SIGNAL_ROW_VIBRATION:
+      a->vibration_enabled = !a->vibration_enabled;
+      persist_all();
+      menu_layer_reload_data(s_signal_menu);
+      break;
+    case SIGNAL_ROW_SOUND:
+      a->sound_enabled = !a->sound_enabled;
+      persist_all();
+      menu_layer_reload_data(s_signal_menu);
+      break;
+    case SIGNAL_ROW_INCREASING_VOLUME:
+      a->increasing_volume = !a->increasing_volume;
+      persist_all();
+      menu_layer_reload_data(s_signal_menu);
+      break;
+    case SIGNAL_ROW_VIBE_PATTERN:
+      pattern_select_window_push(PATTERN_SELECT_VIBE, false);
+      break;
+    case SIGNAL_ROW_SOUND_PATTERN:
+      pattern_select_window_push(PATTERN_SELECT_SOUND, false);
+      break;
+    case SIGNAL_ROW_PATTERN_HELP:
+      pattern_help_window_push();
+      break;
+  }
+}
+
+static void signal_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect bounds = layer_get_bounds(root);
+  GRect menu_bounds = bounds;
+  menu_bounds.size.h = bottom_bar_top_for_bounds(bounds);
+  s_signal_menu = menu_layer_create(menu_bounds);
+  menu_layer_set_callbacks(s_signal_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = signal_num_rows, .get_cell_height = signal_cell_height,
+    .draw_row = signal_draw_row, .select_click = signal_select });
+  menu_layer_set_normal_colors(s_signal_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_signal_menu, GColorBlack, GColorWhite);
+  menu_layer_set_click_config_onto_window(s_signal_menu, w);
+  layer_add_child(root, menu_layer_get_layer(s_signal_menu));
+  s_signal_bottom_bar = bottom_bar_attach(root);
+}
+static void signal_window_unload(Window *w) {
+  menu_layer_destroy(s_signal_menu); s_signal_menu = NULL;
+  layer_destroy(s_signal_bottom_bar); s_signal_bottom_bar = NULL;
+}
+
+static void signal_edit_window_push(void) {
+  if (!s_signal_window) {
+    s_signal_window = window_create();
+    window_set_window_handlers(s_signal_window, (WindowHandlers){
+      .load = signal_window_load, .unload = signal_window_unload });
+  }
+  window_stack_push(s_signal_window, true);
+}
+
+// ---- pattern_select_window: Double/Short/Long/Custom (vibe) or
+// Default/Custom (sound) -- shared by both since the shapes only differ in
+// row count and labels ----
+
+static void pattern_custom_done(const char *text, void *ctx);
+
+static uint16_t pattern_select_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
+  return (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? PATTERN_SELECT_VIBE_ROW_COUNT : PATTERN_SELECT_SOUND_ROW_COUNT;
+}
+static int16_t pattern_select_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
+
+static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  const Alarm *a = &s_alarms[s_edit_idx];
+  GRect b = layer_get_bounds(cell_layer);
+  int row = cell_index->row;
+  bool is_custom = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? (row == PATTERN_SELECT_VIBE_CUSTOM_ROW)
+                                                                   : (row == PATTERN_SELECT_SOUND_CUSTOM_ROW);
+  const char *label;
+  char value[64] = "";
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    label = is_custom ? "Custom" : vibe_pattern_name((uint8_t)row);
+  } else {
+    label = is_custom ? "Custom" : "Default";
+  }
+  if (is_custom) {
+    if (s_pattern_select_show_invalid) {
+      snprintf(value, sizeof(value), "invalid");
+    } else if (s_pattern_select_kind == PATTERN_SELECT_VIBE && a->vibe_pattern_len > 0) {
+      ac_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
+    } else if (s_pattern_select_kind == PATTERN_SELECT_SOUND && a->sound_pattern_len > 0) {
+      ac_pattern_format(value, sizeof(value), a->sound_pattern, a->sound_pattern_len);
+    }
+  }
+  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GRect row_rect = GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26);
+  graphics_draw_text(ctx, label, f, row_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  if (value[0]) {
+    graphics_draw_text(ctx, value, f, row_rect, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  }
+}
+
+static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  Alarm *a = &s_alarms[s_edit_idx];
+  int row = cell_index->row;
+  bool is_custom = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? (row == PATTERN_SELECT_VIBE_CUSTOM_ROW)
+                                                                   : (row == PATTERN_SELECT_SOUND_CUSTOM_ROW);
+  if (is_custom) {
+    char initial[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
+    if (s_pattern_select_kind == PATTERN_SELECT_VIBE && a->vibe_pattern_len > 0) {
+      ac_pattern_format(initial, sizeof(initial), a->vibe_pattern_custom, a->vibe_pattern_len);
+    } else if (s_pattern_select_kind == PATTERN_SELECT_SOUND && a->sound_pattern_len > 0) {
+      ac_pattern_format(initial, sizeof(initial), a->sound_pattern, a->sound_pattern_len);
+    }
+    window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
+    multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
+                                           PATTERN_KEYBOARD_MAX_LEN, NULL);
+    return;
+  }
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    a->vibe_pattern_kind = 0;
+    a->vibe_pattern = (uint8_t)row;
+  } else {
+    a->sound_pattern_kind = 0;
+  }
+  persist_all();
+  window_stack_pop(true);
+  if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
+}
+
+static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
+  MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
+  pattern_select_select(s_pattern_select_menu, &idx, ctx);
+}
+static void pattern_select_up_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_pattern_select_menu, true, MenuRowAlignCenter, true);
+}
+static void pattern_select_down_click(ClickRecognizerRef r, void *ctx) {
+  menu_layer_set_selected_next(s_pattern_select_menu, false, MenuRowAlignCenter, true);
+}
+// BACK simply pops -- nothing is mutated until a row is actually selected,
+// so there's no snapshot to revert (unlike repeat/cron/snooze's on_cancel
+// convention, which exists because those DO stage changes before Apply).
+static void pattern_select_back(ClickRecognizerRef r, void *ctx) {
+  window_stack_pop(true);
+}
+static void pattern_select_click_config(void *ctx) {
+  window_single_click_subscribe(BUTTON_ID_SELECT, pattern_select_select_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, pattern_select_up_click);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, pattern_select_down_click);
+  window_single_click_subscribe(BUTTON_ID_BACK, pattern_select_back);
+}
+
+#define PATTERN_SELECT_HEADER_H 30
+static Layer *s_pattern_select_header;
+static void pattern_select_header_update_proc(Layer *l, GContext *ctx) {
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibe pattern" : "Sound pattern";
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+static void pattern_select_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect bounds = layer_get_bounds(root);
+  s_pattern_select_header = layer_create(GRect(0, 0, bounds.size.w, PATTERN_SELECT_HEADER_H));
+  layer_set_update_proc(s_pattern_select_header, pattern_select_header_update_proc);
+  layer_add_child(root, s_pattern_select_header);
+  GRect menu_bounds = GRect(0, PATTERN_SELECT_HEADER_H, bounds.size.w, bounds.size.h - PATTERN_SELECT_HEADER_H);
+  s_pattern_select_menu = menu_layer_create(menu_bounds);
+  menu_layer_set_callbacks(s_pattern_select_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = pattern_select_num_rows, .get_cell_height = pattern_select_cell_height,
+    .draw_row = pattern_select_draw_row, .select_click = pattern_select_select });
+  menu_layer_set_normal_colors(s_pattern_select_menu, GColorWhite, GColorBlack);
+  menu_layer_set_highlight_colors(s_pattern_select_menu, GColorBlack, GColorWhite);
+  layer_add_child(root, menu_layer_get_layer(s_pattern_select_menu));
+  window_set_click_config_provider(w, pattern_select_click_config);
+}
+static void pattern_select_window_unload(Window *w) {
+  menu_layer_destroy(s_pattern_select_menu); s_pattern_select_menu = NULL;
+  layer_destroy(s_pattern_select_header); s_pattern_select_header = NULL;
+}
+
+static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid) {
+  s_pattern_select_kind = kind;
+  s_pattern_select_show_invalid = show_invalid;
+  if (!s_pattern_select_window) {
+    s_pattern_select_window = window_create();
+    window_set_window_handlers(s_pattern_select_window, (WindowHandlers){
+      .load = pattern_select_window_load, .unload = pattern_select_window_unload });
+  }
+  window_stack_push(s_pattern_select_window, true);
+  // Land on the row matching the alarm's current setting (like every other
+  // picker in this file opening pre-filled with the current value).
+  int row = 0;
+  if (s_edit_idx >= 0 && s_edit_idx < s_count) {
+    const Alarm *a = &s_alarms[s_edit_idx];
+    if (kind == PATTERN_SELECT_VIBE) {
+      row = a->vibe_pattern_kind ? PATTERN_SELECT_VIBE_CUSTOM_ROW : (a->vibe_pattern < 3 ? a->vibe_pattern : 0);
+    } else {
+      row = a->sound_pattern_kind ? PATTERN_SELECT_SOUND_CUSTOM_ROW : 0;
+    }
+  }
+  if (s_pattern_select_menu) {
+    menu_layer_set_selected_index(s_pattern_select_menu, (MenuIndex){ 0, row }, MenuRowAlignTop, false);
+  }
+}
+
+// Result handler for the pattern-mode keyboard, shared by both Vibe pattern
+// and Sound pattern's Custom row (multitap_keyboard_window_push_pattern's
+// `text` is NULL on BACK/cancel -- nothing to do, the keyboard already
+// popped itself and left the alarm's fields untouched). On a valid pattern,
+// per spec this exits straight back to the Signal menu (not re-showing the
+// pattern-select menu); on an invalid one, the pattern-select menu is
+// re-entered with the Custom row reading "invalid".
+static void pattern_custom_done(const char *text, void *ctx) {
+  if (!text) { return; }
+  if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+  Alarm *a = &s_alarms[s_edit_idx];
+  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  if (!ac_pattern_parse(text, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+    pattern_select_window_push(s_pattern_select_kind, true);
+    return;
+  }
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    a->vibe_pattern_kind = 1;
+    a->vibe_pattern_len = len;
+    memcpy(a->vibe_pattern_custom, parsed, len);
+  } else {
+    a->sound_pattern_kind = 1;
+    a->sound_pattern_len = len;
+    memcpy(a->sound_pattern, parsed, len);
+  }
+  persist_all();
+  if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
 }
 
 // ================================= "+ New alarm" creation flow =================================
@@ -2898,6 +3329,7 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
   if (s_time_bottom_bar && top == s_time_window) { layer_mark_dirty(s_time_bottom_bar); }
   if (s_cron_bottom_bar && top == s_cron_window) { layer_mark_dirty(s_cron_bottom_bar); }
   if (s_edit_bottom_bar && top == s_edit_window) { layer_mark_dirty(s_edit_bottom_bar); }
+  if (s_signal_bottom_bar && top == s_signal_window) { layer_mark_dirty(s_signal_bottom_bar); }
 }
 
 // ================================= AppMessage (phone settings) =================================
@@ -3044,6 +3476,32 @@ static bool handle_test_message(DictionaryIterator *iter) {
         changed = true;
       }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoDismiss))) { a->auto_dismiss = t->value->int32 != 0; changed = true; }
+      // Custom sound/vibe patterns: kind (0=Default/Preset, 1=Custom) is a
+      // plain int; the pattern itself is set via its own text field, parsed
+      // the same way the cron raw-text fields above are (warn + leave
+      // unchanged on unparseable input, never partially applied).
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundPatternKind))) { a->sound_pattern_kind = (uint8_t)t->value->int32; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundCustomPattern))) {
+        uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
+        if (ac_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+          a->sound_pattern_len = len;
+          memcpy(a->sound_pattern, parsed, len);
+        } else {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmSoundCustomPattern %s", t->value->cstring);
+        }
+        changed = true;
+      }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibePatternKind))) { a->vibe_pattern_kind = (uint8_t)t->value->int32; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibeCustomPattern))) {
+        uint8_t parsed[AC_PATTERN_MAX_SEGMENTS], len;
+        if (ac_pattern_parse(t->value->cstring, AC_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+          a->vibe_pattern_len = len;
+          memcpy(a->vibe_pattern_custom, parsed, len);
+        } else {
+          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmVibeCustomPattern %s", t->value->cstring);
+        }
+        changed = true;
+      }
     }
   }
 
@@ -3141,6 +3599,8 @@ static void deinit(void) {
   if (s_repeat_window) { window_destroy(s_repeat_window); }
   if (s_snooze_window) { window_destroy(s_snooze_window); }
   if (s_edit_window) { window_destroy(s_edit_window); }
+  if (s_signal_window) { window_destroy(s_signal_window); }
+  if (s_pattern_select_window) { window_destroy(s_pattern_select_window); }
   if (s_alarm_window) { window_destroy(s_alarm_window); }
   window_destroy(s_window);
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "alarm_calc.h"
 #include <stdio.h>
+#include <string.h>
 
 int ac_next_offset_days(const Alarm *a, int now_wday, int now_hour, int now_min) {
   if (!a->enabled) { return -1; }
@@ -120,6 +121,73 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
     if (used >= n) { break; }
     int written = snprintf(buf + used, n - used, "%s%c", i ? " " : "", c);
     if (written < 0) { break; }
+    used += (size_t)written;
+  }
+}
+
+// ============================ custom sound/vibe patterns ============================
+
+// Parses one whitespace-delimited token into a stored int 1-100 (0.1-10.0
+// tenths-of-a-second, truncated to one decimal digit). Returns false on any
+// malformed token: no leading digit, more than one '.', or an out-of-range
+// value (even after truncation).
+static bool pattern_parse_token(const char *tok, int len, uint8_t *out) {
+  if (len <= 0) { return false; }
+  const char *p = tok;
+  const char *end = tok + len;
+  int whole = 0;
+  bool have_digit = false;
+  while (p < end && *p >= '0' && *p <= '9') { whole = whole * 10 + (*p - '0'); p++; have_digit = true; }
+  if (!have_digit) { return false; }
+  int tenth = 0;
+  if (p < end && *p == '.') {
+    p++;
+    if (p >= end || *p < '0' || *p > '9') { return false; }   // '.' with no digit after it
+    tenth = *p - '0';
+    p++;
+    while (p < end && *p >= '0' && *p <= '9') { p++; }   // truncate: consume+ignore extra decimal digits
+  }
+  if (p != end) { return false; }   // trailing garbage (e.g. a second '.')
+  int stored = whole * 10 + tenth;
+  if (stored < 1 || stored > 100) { return false; }
+  *out = (uint8_t)stored;
+  return true;
+}
+
+bool ac_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len) {
+  if (!text) { return false; }
+  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t count = 0;
+  const char *p = text;
+  while (1) {
+    while (*p == ' ') { p++; }   // skip leading/repeated separators
+    if (!*p) { break; }
+    const char *tok_start = p;
+    while (*p && *p != ' ') { p++; }
+    if (count >= max_segments) { return false; }   // too many segments
+    if (!pattern_parse_token(tok_start, (int)(p - tok_start), &parsed[count])) { return false; }
+    count++;
+  }
+  if (count == 0) { return false; }
+  memcpy(out, parsed, count);
+  *out_len = count;
+  return true;
+}
+
+void ac_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t len) {
+  if (n == 0) { return; }
+  buf[0] = '\0';
+  size_t used = 0;
+  for (uint8_t i = 0; i < len; i++) {
+    int whole = pattern[i] / 10;
+    int tenth = pattern[i] % 10;
+    int written;
+    if (tenth == 0) {
+      written = snprintf(buf + used, n - used, "%s%d", i ? " " : "", whole);
+    } else {
+      written = snprintf(buf + used, n - used, "%s%d.%d", i ? " " : "", whole, tenth);
+    }
+    if (written < 0 || (size_t)written >= n - used) { break; }
     used += (size_t)written;
   }
 }

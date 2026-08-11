@@ -617,6 +617,106 @@ static void test_format_cron_summary(void) {
   assert(strcmp(buf, "* * * * * *") == 0);
 }
 
+static void test_pattern_parse_simple(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("1 1 1 1 1", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 5);
+  for (int i = 0; i < 5; i++) { assert(out[i] == 10); }
+}
+
+static void test_pattern_parse_decimals(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("3.3 3.3 3.3", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 3);
+  assert(out[0] == 33 && out[1] == 33 && out[2] == 33);
+}
+
+static void test_pattern_parse_mixed_lengths(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("2 1 1 1 2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 5);
+  assert(out[0] == 20 && out[1] == 10 && out[2] == 10 && out[3] == 10 && out[4] == 20);
+}
+
+static void test_pattern_parse_truncates_extra_precision(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("3.35", AC_PATTERN_MAX_SEGMENTS, out, &len));   // truncated to 3.3, not rejected
+  assert(len == 1);
+  assert(out[0] == 33);
+}
+
+static void test_pattern_parse_collapses_extra_whitespace(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("  1   2  ", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 2);
+  assert(out[0] == 10 && out[1] == 20);
+}
+
+static void test_pattern_parse_min_max_bounds(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("0.1", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 1 && out[0] == 1);
+  assert(ac_pattern_parse("10", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 1 && out[0] == 100);
+}
+
+static void test_pattern_parse_rejects_out_of_range(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(!ac_pattern_parse("0", AC_PATTERN_MAX_SEGMENTS, out, &len));      // below 0.1
+  assert(!ac_pattern_parse("10.1", AC_PATTERN_MAX_SEGMENTS, out, &len));   // above 10.0
+  assert(!ac_pattern_parse("0.0", AC_PATTERN_MAX_SEGMENTS, out, &len));
+}
+
+static void test_pattern_parse_rejects_malformed(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(!ac_pattern_parse("", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse("   ", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse("1..2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse(".5", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse("1.2.3", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse("1 a 2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_pattern_parse(NULL, AC_PATTERN_MAX_SEGMENTS, out, &len));
+}
+
+static void test_pattern_parse_rejects_too_many_segments(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(!ac_pattern_parse("1 1 1 1 1", 4, out, &len));   // 5 tokens, max 4
+  assert(ac_pattern_parse("1 1 1 1", 4, out, &len));
+  assert(len == 4);
+}
+
+static void test_pattern_format_round_trip(void) {
+  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  assert(ac_pattern_parse("1 1 1 1 1", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  char buf[64];
+  ac_pattern_format(buf, sizeof(buf), out, len);
+  assert(strcmp(buf, "1 1 1 1 1") == 0);
+
+  assert(ac_pattern_parse("2 1 1 1 2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  ac_pattern_format(buf, sizeof(buf), out, len);
+  assert(strcmp(buf, "2 1 1 1 2") == 0);
+
+  assert(ac_pattern_parse("3.3 3.3 3.3", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  ac_pattern_format(buf, sizeof(buf), out, len);
+  assert(strcmp(buf, "3.3 3.3 3.3") == 0);
+}
+
+static void test_pattern_format_empty(void) {
+  char buf[64];
+  ac_pattern_format(buf, sizeof(buf), NULL, 0);
+  assert(strcmp(buf, "") == 0);
+}
+
 int main(void) {
   test_disabled();
   test_one_time_today();
@@ -673,6 +773,17 @@ int main(void) {
   test_cron_next_offset_days_rare_week53_reports_no_match();
   test_cron_next_offset_days_week_crosses_new_year();
   test_format_cron_summary();
+  test_pattern_parse_simple();
+  test_pattern_parse_decimals();
+  test_pattern_parse_mixed_lengths();
+  test_pattern_parse_truncates_extra_precision();
+  test_pattern_parse_collapses_extra_whitespace();
+  test_pattern_parse_min_max_bounds();
+  test_pattern_parse_rejects_out_of_range();
+  test_pattern_parse_rejects_malformed();
+  test_pattern_parse_rejects_too_many_segments();
+  test_pattern_format_round_trip();
+  test_pattern_format_empty();
   printf("all alarm_calc tests passed\n");
   return 0;
 }

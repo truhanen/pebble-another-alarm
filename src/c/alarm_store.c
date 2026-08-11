@@ -36,7 +36,14 @@ static size_t alarm_size_for_schema(int schema) {
     case 11: return 248;  // the schema-10 fix: cron_week_mask/cron_week moved
                            // to their own extension key (see store_load/
                            // store_save below), so the frozen MAIN blob size
-                           // is unchanged from schema 9/10.
+                           // is unchanged from schema 9/10. Also the size to
+                           // migrate FROM for schema 12 (sound/vibe custom
+                           // pattern fields) -- those all landed in the
+                           // EXTENSION blob, which store_load reads via
+                           // ALARM_EXT_SIZE regardless of this table, so no
+                           // new case is needed for them; this table only
+                           // ever needs an entry for the version schema is
+                           // migrating FROM, never the current STORE_SCHEMA.
     default: return 0;
   }
 }

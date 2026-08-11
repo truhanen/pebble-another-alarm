@@ -22,7 +22,18 @@
 // PERSIST_KEY_ALARM_BASE's own 100..115 range (MAX_ALARMS=16) with room to
 // grow.
 #define PERSIST_KEY_ALARM_EXT_BASE     200
-#define STORE_SCHEMA 11  // bumped: Alarm gained cron fields (is_cron, cron_min/hour_mask,
+#define STORE_SCHEMA 12  // bumped: Alarm gained sound_pattern_kind/len/pattern[] and
+                          // vibe_pattern_kind/len/vibe_pattern_custom[] (custom sound/vibe
+                          // signal patterns, see AC_PATTERN_MAX_SEGMENTS/ac_pattern_parse in
+                          // alarm_calc.h) -- appended after cron_week/cron_week_mask, so they
+                          // land in the EXTENSION blob (PERSIST_KEY_ALARM_EXT_BASE), not the
+                          // frozen main one. Both new *_kind fields default to 0 on migration,
+                          // which is already the correct "behave exactly as before this
+                          // feature existed" default (same free pass increasing_volume got) --
+                          // no store_load() zero-fill fixup needed, unlike the cron dom/month/
+                          // week masks.
+                          //
+                          // Prior bump (11): Alarm gained cron fields (is_cron, cron_min/hour_mask,
                           // cron_last_fired_min, cron_min/hour/dow strings), then auto_dismiss,
                           // then vibe_pattern (per-alarm vibration pattern override), then
                           // increasing_volume (per-alarm ramp-up-to-max toggle), then cron

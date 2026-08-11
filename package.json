@@ -59,7 +59,11 @@
       "TestAlarmCronDom",
       "TestAlarmCronMonth",
       "DateFormat",
-      "TestAlarmCronWeek"
+      "TestAlarmCronWeek",
+      "TestAlarmSoundPatternKind",
+      "TestAlarmSoundCustomPattern",
+      "TestAlarmVibePatternKind",
+      "TestAlarmVibeCustomPattern"
     ],
     "resources": {
       "media": [

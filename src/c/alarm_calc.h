@@ -8,6 +8,12 @@
 #define NAME_LEN   31
 #define CRON_FIELD_LEN 28   // 27 usable chars + NUL; fits comma-lists like "0-59/5,10,20-25/3"
 
+// Custom sound/vibe pattern: alternating on/off durations, each stored as an
+// integer 1-100 (unit = 10ms, so 10ms..1000ms per segment). 16 segments is
+// generous headroom over a handful of beeps/buzzes while keeping the keyboard
+// input string (see multitap_keyboard's pattern mode) a manageable length.
+#define AC_PATTERN_MAX_SEGMENTS 16
+
 // Weekday bitmask, matching struct tm.tm_wday convention (0=Sunday..6=Saturday).
 #define AC_DAY_SUN (1u << 0)
 #define AC_DAY_MON (1u << 1)
@@ -148,6 +154,21 @@ typedef struct {
   // special case, same as dom/month before it.
   uint64_t cron_week_mask;   // bit i (1-53, AC_WEEK_BIT) set => ISO week i matches
   char cron_week[CRON_FIELD_LEN];   // raw text, e.g. "*/2" — parses into cron_week_mask
+
+  // Custom sound/vibe patterns (see AC_PATTERN_MAX_SEGMENTS above and
+  // ac_pattern_parse/ac_pattern_format below), appended here per the same
+  // append-only rule. *_kind==0 ("Default"/"Preset") is already the correct
+  // migration default -- unlike cron_dom_mask/cron_week_mask, a zero-filled
+  // kind doesn't mean "matches nothing", it means "keep behaving exactly as
+  // before this feature existed" (sound: the fixed beep loop; vibe: whatever
+  // vibe_pattern already held) -- so no store_load() fixup is needed for
+  // these fields, the same free pass increasing_volume got.
+  uint8_t sound_pattern_kind;   // 0 = Default (existing fixed beep loop), 1 = Custom
+  uint8_t sound_pattern_len;    // number of segments in sound_pattern[]; 0 = never set
+  uint8_t sound_pattern[AC_PATTERN_MAX_SEGMENTS];   // stored ints, 1-100 (x10ms); [0] is sound-on
+  uint8_t vibe_pattern_kind;    // 0 = Preset (use vibe_pattern above), 1 = Custom
+  uint8_t vibe_pattern_len;     // number of segments in vibe_pattern_custom[]; 0 = never set
+  uint8_t vibe_pattern_custom[AC_PATTERN_MAX_SEGMENTS];   // stored ints, 1-100 (x10ms); [0] is vibrate-on
 } Alarm;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
@@ -205,6 +226,26 @@ void ac_format_time(char *buf, size_t n, uint8_t hour, uint8_t minute, bool use_
 // comma-separated day list ("Mon, Wed, Fri") starting the enumeration at
 // `first_day_of_week` (0=Sunday, 1=Monday) and wrapping. Writes into buf.
 void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_days, int first_day_of_week);
+
+// Parses a custom sound/vibe pattern string: whitespace-separated decimal
+// tokens, each a duration in tenths of a second (e.g. "1" = 100ms, "3.3" =
+// 330ms). Any token with more than one decimal digit is truncated (not
+// rounded) to one before validation -- e.g. "3.35" is treated as "3.3", never
+// rejected for its extra precision. Each token's value must resolve to
+// 0.1-10.0 (i.e. a stored int of 1-100, unit = 10ms => 10ms-1000ms); token
+// count must be 1..max_segments. On success, writes stored ints (out[0] is
+// the first "on" duration, alternating on/off/on/... after that) into out
+// (capacity max_segments) and the count into *out_len, returning true.
+// Returns false (leaving out/*out_len untouched) on ANY malformed token, an
+// empty/whitespace-only string, or more than max_segments tokens.
+bool ac_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len);
+
+// Formats a parsed pattern back into the canonical space-joined decimal text
+// ac_pattern_parse would itself accept and round-trip exactly (each stored
+// int divided by 10, printed with at most one decimal digit, trailing ".0"
+// dropped -- e.g. stored 10 -> "1", stored 33 -> "3.3"). Writes into buf
+// (size n); *empty* string (not "0 segments") if len == 0.
+void ac_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t len);
 
 // ================================= cron mode =================================
 
