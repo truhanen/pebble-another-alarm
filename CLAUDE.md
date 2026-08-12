@@ -119,11 +119,19 @@ than trusting a mental model of the numbering.
 | `TestAlarmSoundCustomPattern` | 10037 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into `sound_pattern`/`sound_pattern_note`/`sound_pattern_len`. Logs a warning (fields left as previously set) if unparseable. |
 | `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
 | `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/break pattern (e.g. `"2 1- 2 1- 2"`), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. |
+| `TestClearTones` | 10040 | int, nonzero | Wipes the entire custom-tone library (`s_tone_count = 0`), independent of `TestClearAlarms`. See "Custom-tone library" below. |
+| `TestToneIndex` | 10041 | int | **Required** to touch tone fields, mirroring `TestAlarmIndex`'s own convention: `== s_tone_count` appends a new (empty-named) tone with a freshly allocated id; `< s_tone_count` edits that existing tone in place. |
+| `TestToneName` | 10042 | string | |
+| `TestToneCustomPattern` | 10043 | string | Same grammar/parser as `TestAlarmSoundCustomPattern` (sound, not vibe — the tone library is sound-only). Logs a warning (left unchanged) if unparseable. |
+| `TestAlarmToneId` | 10044 | int | Links an alarm directly to a tone by id — sets `custom_tone_id` and forces `sound_pattern_kind = 2`, skipping the Tone picker → Custom tones → Custom tone → Apply chain for test setup. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
 Applying any field calls `persist_all(); rearm_wakeup(); reload_ui();`, same
-as every other alarm-mutating code path.
+as every other alarm-mutating code path. The `Test*Tone*` keys are the one
+exception — they call `persist_tones()` (not `persist_all()`), since the
+tone library is a separate persisted table from `s_alarms`; see "Custom-tone
+library" below.
 
 ## Architecture
 
@@ -945,18 +953,121 @@ feature — see git history if curious):
     exactly one call site for each, and nothing is mutated by BACK/cancel
     alone (except the instant-apply "Off" row, which needs no revert since
     it doesn't touch anything BACK would need to restore).
+- **Custom-tone library**: named, reusable sound patterns any alarm can
+  reference by id instead of storing its own copy — a *live* reference, not
+  a copy: renaming/editing/deleting a tone affects every alarm currently
+  pointing at it. Persisted entirely separately from `s_alarms`/
+  `STORE_SCHEMA` — `CustomTone` (`alarm_calc.h`: `id`/`name`/`pattern_len`/
+  `pattern`/`pattern_note`, the same shape `Alarm`'s own inline custom sound
+  already has) lives in `s_tones[MAX_CUSTOM_TONES]`/`s_tone_count`
+  (`main.c`), loaded/saved via `store_load_tones()`/`store_save_tones()`
+  (`alarm_store.c`) under their own `TONE_STORE_SCHEMA`/`PERSIST_KEY_TONE_*`
+  keys (`alarm_store.h`) — a schema bump to `Alarm` doesn't force wiping the
+  tone library, and vice versa. `Alarm.sound_pattern_kind` gained a third
+  value, `2` ("Library"): `Alarm.custom_tone_id` (appended at the very end
+  of the struct, `STORE_SCHEMA` 16) holds which tone, resolved via
+  `find_tone_by_id()` both at ring time (`alarm_play_audio()`) and in the
+  UI (`signal_draw_row`'s Tone value). Values `0`/`1` (Default/inline
+  Custom) keep their exact previous meaning — a pre-existing alarm with an
+  inline custom pattern from before this feature keeps ringing with it
+  unchanged; it's just not reachable through the new UI below any more
+  (picking anything from it supersedes the old inline data outright, no
+  migration attempted).
+  - **Navigation**: the Tone picker's shape (Off/presets/Custom) is
+    UNCHANGED — only the SOUND "Custom" row's behavior changes, from
+    popping straight into the pattern keyboard to instead pushing a new
+    **"Custom tones"** list window ON TOP of the picker (not popping it, so
+    BACK unwinds one level at a time): every saved tone (name + 2-token
+    pattern preview, same treatment a preset gets) plus a trailing
+    **"+ New tone"** row. `pattern_select_draw_row`'s Custom row itself
+    shows no value when there's no library reference — it's a gateway,
+    not one specific pattern — **except** when `sound_pattern_kind == 2`
+    (a tone is currently linked), in which case it shows that tone's name
+    (via `find_tone_by_id`), same as any other row's value, so it's
+    visible at a glance without drilling in. `pattern_select_preview_
+    current_row` mirrors this: it skips the Custom row when there's no
+    linked tone (nothing to preview), but plays the linked tone when there
+    is one, navigating onto it the same as landing on any other row.
+    `pattern_select_window_push`'s preselect logic treats
+    `sound_pattern_kind == 2` the same as `== 1` (both land on the Custom
+    row, since there's no per-tone row in the picker itself to preselect
+    into). Vibe's own Custom row is entirely unaffected — this feature is
+    sound-only.
+  - The "Custom tones" list itself also previews-on-navigate
+    (`tones_list_preview_current_row()`, called from `tones_list_up_click`/
+    `tones_list_down_click`) — same treatment as every other picker in this
+    file, skipped for the trailing "+ New tone" row (not a tone).
+  - **"+ New tone"** runs a 2-step wizard (`new_tone_pattern_done`/
+    `new_tone_name_done`, staged in a transient `s_new_tone_draft`): the
+    pattern keyboard first, then the name keyboard. Cancelling (`text ==
+    NULL`) at *either* step aborts the whole thing outright — same "any
+    BACK aborts the flow" convention the "+ New alarm" wizard already
+    uses — nothing is created. An unparseable pattern or an empty name
+    (a saved tone always has one) re-shows the *same* keyboard with
+    whatever was typed still in it, rather than a separate error screen,
+    since the user is looking straight at what they typed. Finishing both
+    steps allocates an id (`store_alloc_tone_id()`, mirroring
+    `store_load_next_local_id`/`store_save_next_local_id`'s shape for
+    `Alarm.id`), appends to `s_tones`, persists, and pushes straight to the
+    same singular screen below — selecting an existing tone and finishing
+    this wizard both land in exactly the same place.
+  - **Selecting an existing tone** (or finishing the wizard) opens the
+    **"Custom tone"** singular screen: `Apply` / `Tone <value>` / `Name
+    <value>` / `Delete`, operating directly on `s_tones[s_custom_tone_idx]`
+    (resolved by id at push time via `find_tone_by_id`) — there's no
+    separate staging struct here, since by the time this screen exists the
+    tone is always already a saved record. `Tone`/`Name` write straight
+    through to the shared record immediately (`persist_tones()` +
+    `menu_layer_reload_data`, no "confirm" step) — the live-reference model
+    means every other alarm referencing this id sees the change too, and
+    BACK needs no snapshot-revert since nothing here is ever staged.
+    `Apply` is the one action that actually links the *current* alarm
+    (`s_edit_idx`, unchanged throughout this whole Signal → Tone picker →
+    Custom tones → Custom tone chain) to the tone —
+    `sound_pattern_kind=2`/`custom_tone_id=<id>`/`sound_enabled=true`, then
+    pops exactly **3** windows (this screen, the list, the Tone picker) to
+    land back on Signal. `Delete` (`confirm_window_push`, same shell
+    `edit_window`'s own Delete uses) removes the tone from `s_tones`
+    entirely and calls `revert_alarms_using_tone()` — every alarm with
+    `sound_pattern_kind==2` pointing at this id reverts to
+    `sound_pattern_kind=0` (Default; `sound_enabled` is left untouched) —
+    then pops only **1** window, back to the "Custom tones" list (not all
+    the way to Signal like Apply: deleting is "keep managing the library",
+    applying is "I'm done").
 - **Custom sound/vibe patterns**: a pattern is a space-separated list of
-  1-16 (`AC_PATTERN_MAX_SEGMENTS`) on-beats and (optional) breaks. Each
-  token starts with a duration DIGIT, one of `AC_NOTE_DURATION_DIGITS`
-  (`{1, 2, 4, 8}`, `alarm_calc.c`) — NOT any digit 1-9 ("3"/"5"/"6"/"7"/"9"
-  are all plain ASCII digits but invalid duration digits). Each digit IS
-  its own duration in hundreds of ms (digit × `AC_NOTE_DURATION_MS_PER_UNIT`,
-  i.e. 1=100ms, 2=200ms, 4=400ms, 8=800ms — doubling like real rhythm
-  notation) rather than an arbitrary 1-4 index into a lookup table, so the
-  digits themselves are informative to read even outside the app — no
-  separate ms table is needed, so every alarm's "1" always means the same
-  100ms. A
-  break is the digit followed by `-` (e.g. `"1-"`); an on-beat for VIBE is
+  on-beats and (optional) breaks. Sound (Tone) and vibe (Vibration) have
+  DIFFERENT segment caps, on request — `AC_SOUND_PATTERN_MAX_SEGMENTS`
+  (32) and `AC_VIBE_PATTERN_MAX_SEGMENTS` (8), `alarm_calc.h` — where both
+  used to share one `AC_PATTERN_MAX_SEGMENTS` (16). Every buffer/parse call
+  sized off the old shared constant had to move to whichever of the two
+  actually applies at that call site (sound-only call sites — including
+  the custom-tone library, which is sound-only — use the 32 cap; vibe-only
+  call sites use the 8 cap); this also grew `Alarm.sound_pattern[]`/
+  `sound_pattern_note[]` and `CustomTone.pattern[]`/`pattern_note[]` while
+  shrinking `Alarm.vibe_pattern_custom[]`, which is a genuine **resize** of
+  already-existing fields (not an append) — see `STORE_SCHEMA`
+  17/`TONE_STORE_SCHEMA` 2's own bump comments (`alarm_store.h`) for why
+  that's a hard break (wipes on migration) rather than the usual additive
+  case. `multitap_keyboard.c`'s own `BUFFER_CAP` (the vendored widget's
+  internal text-entry limit) also had to grow from 96 to 136 to actually
+  fit a 32-segment Tone pattern's worst case — `multitap_keyboard_set_max_
+  len()` silently ignores any caller-requested cap that isn't strictly less
+  than `BUFFER_CAP`, so `PATTERN_KEYBOARD_MAX_LEN` (`main.c`, bumped to
+  128 — shared by both keyboards, so sized for the larger of the two)
+  needed `BUFFER_CAP` to grow past it first. Each pattern token starts with
+  a duration DIGIT, one of `AC_NOTE_DURATION_DIGITS`
+  (`{1, 2, 3, 4, 5, 6, 7, 8}`, `alarm_calc.c`) — NOT any digit 1-9 ("0"/"9"
+  are plain ASCII digits but invalid duration digits, outside the 1-8
+  range). Each digit IS its own duration in hundreds of ms (digit ×
+  `AC_NOTE_DURATION_MS_PER_UNIT`, i.e. 1=100ms, 2=200ms, ..., 8=800ms —
+  every 100ms increment from 100-800ms, one per pattern-keyboard character
+  key) rather than an arbitrary index into a lookup table, so the digits
+  themselves are informative to read even outside the app — no separate ms
+  table is needed, so every alarm's "1" always means the same 100ms. (This
+  set used to be sparse — `{1,2,4,8}`, each double the last like real
+  rhythm notation, on only 4 keyboard keys — widened to the full contiguous
+  1-8 range on request, one digit per key; see the keyboard design point
+  below.) A break is the digit followed by `-` (e.g. `"1-"`); an on-beat for VIBE is
   just the bare digit (e.g. `"2"`); an on-beat for SOUND must additionally
   carry a note letter (e.g. `"1C"`) since sound has a pitch and vibe
   doesn't — a bare digit is valid for vibe but rejected for sound, the one
@@ -985,7 +1096,8 @@ feature — see git history if curious):
   design point below for why that keypress moved to the bottom-left key
   instead of staying on each note key's own cycle). Any malformed token
   (bad digit, missing/invalid note letter, a bare digit for sound, a
-  trailing character that isn't `'`/`,`, more than 16 segments) fails
+  trailing character that isn't `'`/`,`, more than the applicable cap's
+  segments) fails
   all-or-nothing, same convention as `ac_cron_parse_field`. Unlike cron's
   raw-text-plus-mask duplication, no raw string is persisted at all —
   `ac_vibe_pattern_format()`/`ac_sound_pattern_format()` deterministically
@@ -1051,19 +1163,27 @@ feature — see git history if curious):
   and its bottom-left key cycles `*`/`-`/`/`/`,`/repurposes space as `0`;
   pattern mode's character keys instead pull from one of two small,
   purpose-built tables selected by a second flag,
-  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (keys 0-3 cycle a
-  duration digit then that key's note letter; keys 4-6 have only a note
-  letter, G/A/B; keys 7-8 are spare/no-op, see the note-table description
-  above for why) for sound, or `PATTERN_KEY_VIBE[9]` (keys 0-3 a bare
-  duration digit; keys 4-8 empty/no-op) for vibe, since vibe has no pitch
-  to put on the spare keys — and its bottom-left key cycles `-`/`'`/`,`
+  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (keys 0-7 each show one
+  duration digit "1".."8", one per key, matching the full 1-8 digit range
+  above; keys 0-6 additionally cycle into that key's note letter
+  C/D/E/F/G/A/B after the digit, same key-order convention this table used
+  before the digit set widened from a sparse `{1,2,4,8}` on 4 keys; key 7
+  ("8") is digit-only since only 7 letters exist; key 8 is spare/no-op, see
+  the note-table description above for why) for sound, or `PATTERN_KEY_VIBE[9]`
+  (keys 0-7 each a bare duration digit "1".."8", no cycling; key 8
+  empty/no-op) for vibe, since vibe has no pitch to put on any key — and
+  its bottom-left key cycles `-`/`'`/`,`
   (`PATTERN_SYMS`, 3 elements — the break marker plus the two real
   ABC-notation octave markers, same multi-tap mechanism `CRON_SYMS`
   already uses for its own 4-symbol cycle) while the space key stays a
   literal space. Pushed via `multitap_keyboard_window_push_pattern(...,
-  notes_enabled)`, capped at 64 input chars (`PATTERN_KEYBOARD_MAX_LEN`,
-  `main.c`) — worst case 16 segments of up to 3 chars each (a digit, a
-  note letter, and an optional octave marker -- or `-` for a break). The
+  notes_enabled)`, capped at 128 input chars (`PATTERN_KEYBOARD_MAX_LEN`,
+  `main.c`, shared by both keyboards so sized for the larger of the two) —
+  worst case `AC_SOUND_PATTERN_MAX_SEGMENTS` (32) segments of up to 3 chars
+  each (a digit, a note letter, and an optional octave marker -- or `-`
+  for a break); vibe's own `AC_VIBE_PATTERN_MAX_SEGMENTS` (8) cap needs far
+  less. The vendored widget's own `BUFFER_CAP` (`multitap_keyboard.c`) had
+  to grow from 96 to 136 to accommodate this. The
   text field itself renders through the same shared `prv_draw_text_fitted()`
   ladder every other mode uses, no different treatment for pattern mode —
   an earlier version of this feature bolded on-beat tokens vs. regular

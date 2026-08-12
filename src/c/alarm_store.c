@@ -52,6 +52,11 @@ static size_t alarm_size_for_schema(int schema) {
                            // octave-marker rework) -- see its migration
                            // fixup below for why that bump needs more than
                            // just this size-table entry.
+    case 15: return 248;  // octave-marker rework -- also EXTENSION-blob-only
+                           // (sound_pattern_note[]'s byte meaning changed, no
+                           // new field), MAIN blob size unchanged. Also the
+                           // size to migrate FROM for schema 16
+                           // (custom_tone_id, EXTENSION-blob-only again).
     default: return 0;
   }
 }
@@ -272,4 +277,44 @@ bool store_load_default_increasing_volume(void) {
 
 void store_save_default_increasing_volume(bool enabled) {
   persist_write_int(PERSIST_KEY_DEFAULT_INCREASING_VOLUME, enabled ? 1 : 0);
+}
+
+_Static_assert(sizeof(CustomTone) <= PERSIST_DATA_MAX_LENGTH,
+               "CustomTone's persisted blob exceeds persist_write_data's per-key cap");
+
+// Brand-new table (TONE_STORE_SCHEMA 1 is the only version that has ever
+// existed), so unlike store_load() there's no per-version size table to
+// forward-migrate from yet -- any schema mismatch at all just wipes, same
+// as store_load() does for an unrecognized/downgraded STORE_SCHEMA.
+int store_load_tones(CustomTone *out) {
+  if (!persist_exists(PERSIST_KEY_TONE_SCHEMA)) { return 0; }
+  if (persist_read_int(PERSIST_KEY_TONE_SCHEMA) != TONE_STORE_SCHEMA) { return 0; }
+  int count = persist_exists(PERSIST_KEY_TONE_COUNT) ? persist_read_int(PERSIST_KEY_TONE_COUNT) : 0;
+  if (count > MAX_CUSTOM_TONES) { count = MAX_CUSTOM_TONES; }
+  if (count < 0) { count = 0; }
+  for (int i = 0; i < count; i++) {
+    memset(&out[i], 0, sizeof(CustomTone));
+    if (persist_exists(PERSIST_KEY_TONE_BASE + i)) {
+      persist_read_data(PERSIST_KEY_TONE_BASE + i, &out[i], sizeof(CustomTone));
+    }
+  }
+  return count;
+}
+
+void store_save_tones(const CustomTone *tones, int count) {
+  if (count > MAX_CUSTOM_TONES) { count = MAX_CUSTOM_TONES; }
+  persist_write_int(PERSIST_KEY_TONE_SCHEMA, TONE_STORE_SCHEMA);
+  persist_write_int(PERSIST_KEY_TONE_COUNT, count);
+  for (int i = 0; i < count; i++) {
+    persist_write_data(PERSIST_KEY_TONE_BASE + i, &tones[i], sizeof(CustomTone));
+  }
+  for (int i = count; i < MAX_CUSTOM_TONES; i++) {
+    if (persist_exists(PERSIST_KEY_TONE_BASE + i)) { persist_delete(PERSIST_KEY_TONE_BASE + i); }
+  }
+}
+
+uint32_t store_alloc_tone_id(void) {
+  uint32_t next = persist_exists(PERSIST_KEY_NEXT_TONE_ID) ? (uint32_t)persist_read_int(PERSIST_KEY_NEXT_TONE_ID) : 1;
+  persist_write_int(PERSIST_KEY_NEXT_TONE_ID, (int)(next + 1));
+  return next;
 }

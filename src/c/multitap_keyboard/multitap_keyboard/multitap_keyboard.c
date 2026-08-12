@@ -8,7 +8,16 @@
 #define GRID_COLS    3
 #define GRID_ROWS    4
 #define KEY_COUNT    (GRID_COLS * GRID_ROWS)
-#define BUFFER_CAP   96
+// Bumped from 96 for pebble-another-alarm's pattern mode: a Tone (sound)
+// pattern can now run up to AC_SOUND_PATTERN_MAX_SEGMENTS (32, alarm_calc.h)
+// segments of up to 3 chars each plus separating spaces, needing up to 128
+// bytes -- BUFFER_CAP must exceed the caller's own PATTERN_KEYBOARD_MAX_LEN
+// (main.c) for multitap_keyboard_set_max_len() to actually apply that cap
+// (see there: max_bytes >= BUFFER_CAP is treated as "unlimited, just use
+// BUFFER_CAP"), so this needs its own small headroom above 128, mirroring
+// this file's existing "+8"/"+16" margins on other BUFFER_CAP-sized temp
+// buffers below.
+#define BUFFER_CAP   136
 #define LABEL_CAP    24
 #define KEY_ELEV     2     // 3D key depth: raised by this many px, sunk on press
 #define GRID_VPAD    2     // white breathing room above and below the key grid
@@ -74,37 +83,43 @@ static const char *const PATTERN_SYMS[] = { "-", "'", "," };
 // Per-character-key (0-8) glyph lists for pattern mode, selected by
 // multitap_keyboard_set_pattern_mode's `notes_enabled` instead of by page --
 // this is a THIRD glyph source alongside PAGE_KEY/CRON_SYMS, not a variant
-// of PAGE_NUMBERS's plain 1-per-key digits, since a pattern-mode key can
-// need up to two very differently-shaped glyphs (a duration digit and a
-// note letter). With notes: keys 0-3 cycle duration digit 1/2/4/8 (see
+// of PAGE_NUMBERS's plain 1-per-key digits. Every duration digit 1-8 (see
 // AC_NOTE_DURATION_DIGITS, alarm_calc.h -- each digit literally IS its
-// duration in hundreds of ms) then that same "slot"'s note letter
-// (C/D/E/F); keys 4-6 have ONLY a note letter (G, A, B); keys 7-8 are
-// spare (no glyphs) -- octave shifts are applied via the bottom-left key's
-// "'"/"," markers instead of dedicated duplicate keys, so there's nothing
-// left to put on them. Without notes (vibe has no pitch): keys 0-3 have
-// only their duration digit; keys 4-8 have no glyphs at all (a key press
-// is simply a no-op, same as the widget already does for one-glyph/empty
-// pending logic).
+// duration in hundreds of ms) now gets its own key, one number per key --
+// keys 0-7 show "1".."8" respectively, key 8 is spare (no glyph). With
+// notes: keys 0-6 additionally cycle into a note letter (C/D/E/F/G/A/B, the
+// same key-order convention this table used before this digit set widened
+// from a sparse {1,2,4,8} on 4 keys to this contiguous 1-8 range on 8) --
+// only 7 letters exist, so key 7 ("8") is digit-only. Octave shifts are
+// applied via the bottom-left key's "'"/"," markers instead of dedicated
+// duplicate keys, so there's nothing left to put on a letter-only slot
+// anyway. Without notes (vibe has no pitch): keys 0-7 are bare single-glyph
+// digit keys (no cycling at all), key 8 has no glyph (a press on it, or any
+// key's cycle past its last real glyph, is simply a no-op, same as the
+// widget already does for one-glyph/empty pending logic).
 static const char *const PK_SOUND_0[] = { "1", "C", NULL };
 static const char *const PK_SOUND_1[] = { "2", "D", NULL };
-static const char *const PK_SOUND_2[] = { "4", "E", NULL };
-static const char *const PK_SOUND_3[] = { "8", "F", NULL };
-static const char *const PK_SOUND_4[] = { "G", NULL };
-static const char *const PK_SOUND_5[] = { "A", NULL };
-static const char *const PK_SOUND_6[] = { "B", NULL };
+static const char *const PK_SOUND_2[] = { "3", "E", NULL };
+static const char *const PK_SOUND_3[] = { "4", "F", NULL };
+static const char *const PK_SOUND_4[] = { "5", "G", NULL };
+static const char *const PK_SOUND_5[] = { "6", "A", NULL };
+static const char *const PK_SOUND_6[] = { "7", "B", NULL };
+static const char *const PK_SOUND_7[] = { "8", NULL };
 static const char *const PK_SOUND_EMPTY[] = { NULL };
 static const char *const *const PATTERN_KEY_SOUND[9] = {
-  PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_EMPTY, PK_SOUND_EMPTY,
+  PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_EMPTY,
 };
 static const char *const PK_VIBE_0[] = { "1", NULL };
 static const char *const PK_VIBE_1[] = { "2", NULL };
-static const char *const PK_VIBE_2[] = { "4", NULL };
-static const char *const PK_VIBE_3[] = { "8", NULL };
+static const char *const PK_VIBE_2[] = { "3", NULL };
+static const char *const PK_VIBE_3[] = { "4", NULL };
+static const char *const PK_VIBE_4[] = { "5", NULL };
+static const char *const PK_VIBE_5[] = { "6", NULL };
+static const char *const PK_VIBE_6[] = { "7", NULL };
+static const char *const PK_VIBE_7[] = { "8", NULL };
 static const char *const PK_VIBE_EMPTY[] = { NULL };
 static const char *const *const PATTERN_KEY_VIBE[9] = {
-  PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3,
-  PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY, PK_VIBE_EMPTY,
+  PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3, PK_VIBE_4, PK_VIBE_5, PK_VIBE_6, PK_VIBE_7, PK_VIBE_EMPTY,
 };
 
 // Toggleable extended (non-ASCII) characters. Each is appended to a base key's
@@ -602,7 +617,15 @@ static int prv_prefix_w(const char *text, int off, GFont f) {
 // Draw `text` left-aligned in `box`, picking the loosest layout that fits, in
 // increasing "tightness". The candidates form one ordered ladder:
 //   levels 0..N-1   : one line, shrinking through the font ladder by width;
-//   levels N..2N-1  : wrap to (up to) two lines, shrinking by height;
+//   level  2N-1     : wrap to (up to) two lines, at the SMALLEST font only --
+//                     the field is a fixed ~36px-tall box, which only the
+//                     smallest font's two real lines can plausibly fit (every
+//                     larger font in the ladder needs more than that for just
+//                     ONE line elsewhere in this app); levels N..2N-2 are
+//                     never produced by the selection below, though the
+//                     drawing code still handles any level in N..2N-1
+//                     generically, in case `wrap_floor` hysteresis ever
+//                     carries one in from elsewhere;
 //   level  2N       : truncate from the FRONT with a leading "..." so the most
 //                     recent characters stay visible.
 // Text is vertically centered.
@@ -647,15 +670,23 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
                  text, f, wide, GTextOverflowModeFill, GTextAlignmentLeft);
     if (sz.w <= box.size.w) { natural = i; break; }
   }
+  // The text field is a fixed ~36px-tall box -- comfortably one line at
+  // any of these fonts, but not genuinely two: elsewhere in this app a
+  // single line of GOTHIC_24_BOLD already needs a 34px row on its own, and
+  // 28pt/18pt aren't any shorter per line. Only the SMALLEST font in the
+  // ladder can plausibly fit two real lines in a box this size, so wrap
+  // mode only ever tries it -- looping through the larger fonts first (as
+  // this used to) let a font whose *reported* two-line content size
+  // technically passed the fit check still visibly overflow the field once
+  // actually drawn, since nothing here fits two lines of anything bigger.
   if (natural == 2 * N) {
-    for (int i = 0; i < N; i++) {
-      GFont f = fonts_get_system_font(LADDER[i].key);
-      int line_h = graphics_text_layout_get_content_size(
-                     "Ag", f, wide, GTextOverflowModeFill, GTextAlignmentLeft).h;
-      GSize sz = graphics_text_layout_get_content_size(
-                   text, f, wrap, GTextOverflowModeWordWrap, GTextAlignmentLeft);
-      if (sz.h <= line_h * 2 + 1 && sz.h <= box.size.h) { natural = N + i; break; }
-    }
+    int i = N - 1;
+    GFont f = fonts_get_system_font(LADDER[i].key);
+    int line_h = graphics_text_layout_get_content_size(
+                   "Ag", f, wide, GTextOverflowModeFill, GTextAlignmentLeft).h;
+    GSize sz = graphics_text_layout_get_content_size(
+                 text, f, wrap, GTextOverflowModeWordWrap, GTextAlignmentLeft);
+    if (sz.h <= line_h * 2 + 1 && sz.h <= box.size.h) { natural = N + i; }
   }
 
   int level = natural;

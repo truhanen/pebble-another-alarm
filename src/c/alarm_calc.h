@@ -13,10 +13,14 @@
 // -- e.g. "1C 2D 1- 1C 2D" (sound) or "2 1- 2 1- 2" (vibe). Breaks are
 // optional between on-beats (two on-beats with no break between them play
 // back to back with no gap); a break is written as the duration digit
-// followed by '-'. 16 segments is generous headroom over a handful of
-// beeps/buzzes while keeping the keyboard input string (see
-// multitap_keyboard's pattern mode) a manageable length.
-#define AC_PATTERN_MAX_SEGMENTS 16
+// followed by '-'. Sound (Tone) and vibe (Vibration) have DIFFERENT caps,
+// on request: vibe halved to 8 (short buzz patterns rarely need more, and
+// it keeps VibePattern's own run-length-encoded array small), sound/tone
+// doubled to 32 (tones -- including the custom-tone library, sound-only --
+// benefit from more headroom for longer musical phrases like Imperial
+// March). Each was 16 (a single shared constant) before this split.
+#define AC_VIBE_PATTERN_MAX_SEGMENTS 8
+#define AC_SOUND_PATTERN_MAX_SEGMENTS 32
 
 // Each stored pattern segment is one byte: bit 7 set means a break (silence/
 // no-vibrate); bit 7 clear means an on-beat (for sound, its pitch lives in
@@ -28,19 +32,22 @@
 #define AC_PATTERN_BREAK_BIT 0x80u
 #define AC_PATTERN_DURATION_MASK 0x7Fu
 
-// A small, fixed set of "conventional" relative note lengths (each double
-// the last, like real rhythm notation), replacing what used to be an
+// Every 100ms increment from 100-800ms is a valid duration digit -- one per
+// pattern-keyboard character key (0-7), replacing what used to be an
 // arbitrary raw millisecond value per segment -- so every alarm's "1" means
 // the same 100ms. Each digit IS its duration in hundreds of ms (1=100ms,
-// 2=200ms, 4=400ms, 8=800ms), rather than an arbitrary 1-4 index into a
-// lookup table, so the digits themselves are informative to read even
-// outside the keyboard/app. Defined in alarm_calc.c; AC_NOTE_DURATION_COUNT
-// is AC_NOTE_DURATION_DIGITS' length. ac_vibe_pattern_parse/
-// ac_sound_pattern_parse reject any digit not in this set (e.g. "3" or
-// "5"), even though it's a single ASCII digit character -- validity isn't
-// just "any digit 1-9".
-#define AC_NOTE_DURATION_COUNT 4
-extern const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT];   // { 1, 2, 4, 8 }
+// 2=200ms, ..., 8=800ms), rather than an arbitrary index into a lookup
+// table, so the digits themselves are informative to read even outside the
+// keyboard/app. Defined in alarm_calc.c; AC_NOTE_DURATION_COUNT is
+// AC_NOTE_DURATION_DIGITS' length. ac_vibe_pattern_parse/
+// ac_sound_pattern_parse reject any digit not in this set (i.e. anything
+// outside 1-8) -- "0" and "9" are plain ASCII digits but invalid duration
+// digits. (An earlier version of this set was sparse -- {1,2,4,8}, each
+// double the last like real rhythm notation -- widened to the full
+// contiguous 1-8 range on request, one digit per keyboard key; see
+// multitap_keyboard.c's PATTERN_KEY_SOUND/PATTERN_KEY_VIBE.)
+#define AC_NOTE_DURATION_COUNT 8
+extern const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT];   // { 1, 2, 3, 4, 5, 6, 7, 8 }
 #define AC_NOTE_DURATION_MS_PER_UNIT 100
 
 // Note letters for a custom SOUND pattern's on-beats (vibe has no pitch, so
@@ -202,8 +209,9 @@ typedef struct {
   uint64_t cron_week_mask;   // bit i (1-53, AC_WEEK_BIT) set => ISO week i matches
   char cron_week[CRON_FIELD_LEN];   // raw text, e.g. "*/2" — parses into cron_week_mask
 
-  // Custom sound/vibe patterns (see AC_PATTERN_MAX_SEGMENTS/AC_PATTERN_BREAK_BIT
-  // above and ac_sound_pattern_parse/ac_vibe_pattern_parse below), appended
+  // Custom sound/vibe patterns (see AC_SOUND_PATTERN_MAX_SEGMENTS/
+  // AC_VIBE_PATTERN_MAX_SEGMENTS/AC_PATTERN_BREAK_BIT above and
+  // ac_sound_pattern_parse/ac_vibe_pattern_parse below), appended
   // here per the same append-only rule. *_kind==0 ("Default"/"Preset") is
   // already the correct migration default -- unlike cron_dom_mask/
   // cron_week_mask, a zero-filled kind doesn't mean "matches nothing", it
@@ -217,17 +225,42 @@ typedef struct {
   // silently reinterpreted as garbage under the new scheme.
   uint8_t sound_pattern_kind;   // 0 = Default (existing fixed beep loop), 1 = Custom
   uint8_t sound_pattern_len;    // number of segments in sound_pattern[]/sound_pattern_note[]; 0 = never set
-  uint8_t sound_pattern[AC_PATTERN_MAX_SEGMENTS];        // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
+  uint8_t sound_pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];        // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
   uint8_t vibe_pattern_kind;    // 0 = Preset (use vibe_pattern above), 1 = Custom
   uint8_t vibe_pattern_len;     // number of segments in vibe_pattern_custom[]; 0 = never set
-  uint8_t vibe_pattern_custom[AC_PATTERN_MAX_SEGMENTS];  // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
+  uint8_t vibe_pattern_custom[AC_VIBE_PATTERN_MAX_SEGMENTS];  // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
   // sound_pattern_note is a brand-new array (didn't exist before STORE_SCHEMA
   // 13), appended here at the very end rather than next to sound_pattern
   // above, per the append-only rule -- see alarm_store.c's migration fixup
   // for why sound_pattern/vibe_pattern_custom's REINTERPRETED byte meaning
   // (not just this new array) also needs an explicit reset on migration.
-  uint8_t sound_pattern_note[AC_PATTERN_MAX_SEGMENTS];   // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index; meaningless when is_break
+  uint8_t sound_pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];   // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index; meaningless when is_break
+
+  // Appended for the custom-tone library (see CustomTone below) -- valid
+  // iff sound_pattern_kind == 2 ("Library"), a third value alongside the
+  // existing 0 (Default)/1 (inline Custom, unchanged). 0 = no reference.
+  // Zero-fills correctly on migration, same "already the safe default"
+  // category as vibe_pattern/increasing_volume's own past appends.
+  uint32_t custom_tone_id;
 } Alarm;
+
+// A named, separately-persisted sound pattern any alarm can reference by
+// id (Alarm.custom_tone_id, when Alarm.sound_pattern_kind == 2) instead of
+// storing its own copy -- edits/deletes are a live reference, so every
+// alarm pointing at the same id sees them. Mirrors the exact
+// (kind-less)/len/pattern/pattern_note shape Alarm already uses for its
+// own inline custom sound, so ac_sound_pattern_parse/ac_sound_pattern_
+// format work on it unchanged. Persisted independently of Alarm/
+// STORE_SCHEMA -- see TONE_STORE_SCHEMA, alarm_store.h.
+#define MAX_CUSTOM_TONES 20
+
+typedef struct {
+  uint32_t id;              // stable, allocated once (store_alloc_tone_id), never reused; 0 = unused slot
+  char name[NAME_LEN + 1];  // always non-empty for a saved tone (enforced by main.c's UI, not here)
+  uint8_t pattern_len;
+  uint8_t pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];       // bit7=is_break, bits0-6=duration digit
+  uint8_t pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];  // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index
+} CustomTone;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
 // hour:minute. Returns -1 if `a` is disabled. Not repeating: offset 0 (today,

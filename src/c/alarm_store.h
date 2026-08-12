@@ -16,13 +16,62 @@
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
+// Custom-tone library -- a separate persisted table from Alarm/STORE_SCHEMA
+// below, with its own schema counter (TONE_STORE_SCHEMA) since it's a
+// logically independent concern: a future Alarm-only schema bump shouldn't
+// force wiping the tone library, and vice versa. See store_load_tones()/
+// store_save_tones() in alarm_store.c.
+#define PERSIST_KEY_TONE_SCHEMA          14
+#define PERSIST_KEY_TONE_COUNT           15
+#define PERSIST_KEY_NEXT_TONE_ID         16
+#define TONE_STORE_SCHEMA 2
+// Bumped from 1: pattern[]/pattern_note[] grew from AC_PATTERN_MAX_SEGMENTS
+// (16) to AC_SOUND_PATTERN_MAX_SEGMENTS (32) -- a resize, not an append, so
+// (per the ground rules below) this is a hard break; store_load_tones()
+// wipes on any schema mismatch anyway, so this needed nothing beyond the
+// bump itself.
+//
+// Ground rules for growing CustomTone (alarm_calc.h), mirroring STORE_SCHEMA's
+// own rules below: append new fields at the very end only, never insert/
+// reorder/resize/remove; if a change genuinely isn't additive, just bump
+// TONE_STORE_SCHEMA (store_load_tones() wipes on any mismatch -- there's no
+// per-version size table for this table at all, unlike Alarm's own
+// alarm_size_for_schema(), since every mismatch here wipes regardless).
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
 // alarm i's trailing fields (from cron_week_mask onward -- see the
 // PERSIST_DATA_MAX_LENGTH note below) -> key 200+i. Kept well clear of
 // PERSIST_KEY_ALARM_BASE's own 100..115 range (MAX_ALARMS=16) with room to
 // grow.
 #define PERSIST_KEY_ALARM_EXT_BASE     200
-#define STORE_SCHEMA 15  // bumped: sound_pattern_note[]'s encoding changed from a plain
+// Tone i -> key 300+i (one CustomTone per key, no main/extension split
+// needed -- sizeof(CustomTone) is well under PERSIST_DATA_MAX_LENGTH).
+// Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
+#define PERSIST_KEY_TONE_BASE          300
+#define STORE_SCHEMA 17  // bumped: sound_pattern[]/sound_pattern_note[] grew from
+                          // AC_PATTERN_MAX_SEGMENTS(16) to AC_SOUND_PATTERN_MAX_SEGMENTS(32),
+                          // and vibe_pattern_custom[] shrank to AC_VIBE_PATTERN_MAX_SEGMENTS(8)
+                          // -- splitting what used to be one shared cap into separate sound/
+                          // vibe caps, on request. Unlike every append so far, this RESIZES
+                          // three already-existing fields (not just appends a new one), which
+                          // shifts every field's byte offset from vibe_pattern_custom onward --
+                          // a genuine hard break per rule #3 below, not an additive change, so
+                          // there's deliberately no alarm_size_for_schema(16) entry: migrating
+                          // from schema 16 wipes, same as any other unrecognized/hard-break
+                          // schema. (custom_tone_id itself, appended at schema 16, is
+                          // unaffected in shape -- only the three pattern-storage fields
+                          // resize.)
+                          //
+                          // Prior bump (16): Alarm gained custom_tone_id (uint32_t), appended at the
+                          // very end (lands in the EXTENSION blob, same category as every
+                          // append since schema 12) for the new custom-tone-library feature
+                          // -- see CustomTone, alarm_calc.h. 0 = "no reference" is already
+                          // the correct migration default (like vibe_pattern/
+                          // increasing_volume's own past appends), so no store_load() fixup
+                          // was needed, just the schema-marker bump and a new
+                          // alarm_size_for_schema(15) entry (MAIN blob size itself was
+                          // unaffected, since this field lands after cron_week_mask).
+                          //
+                          // Prior bump (15): sound_pattern_note[]'s encoding changed from a plain
                           // 0-8 AC_NOTE_LETTER/AC_NOTE_MIDI index (9-entry table incl.
                           // lowercase c/d for an octave-up duplicate) to
                           // `octave*AC_NOTE_COUNT + index` into a 7-entry table (C-B
@@ -168,6 +217,16 @@
 int store_load(Alarm *out);
 // Persists `count` alarms (one per key) + schema + count.
 void store_save(const Alarm *a, int count);
+
+// Loads custom tones into out (capacity MAX_CUSTOM_TONES); returns count, or
+// 0 if none/schema mismatch (wipes on any mismatch -- see TONE_STORE_SCHEMA).
+int store_load_tones(CustomTone *out);
+// Persists `count` tones (one per key) + schema + count.
+void store_save_tones(const CustomTone *tones, int count);
+// Allocates and persists the next tone id (starts at 1; 0 is reserved for
+// "none"), mirroring store_load_next_local_id/store_save_next_local_id's
+// shape for Alarm.id.
+uint32_t store_alloc_tone_id(void);
 
 // Wakeup id (-1 when none).
 int32_t store_load_wakeup_id(void);

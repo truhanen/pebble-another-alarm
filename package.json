@@ -63,7 +63,12 @@
       "TestAlarmSoundPatternKind",
       "TestAlarmSoundCustomPattern",
       "TestAlarmVibePatternKind",
-      "TestAlarmVibeCustomPattern"
+      "TestAlarmVibeCustomPattern",
+      "TestClearTones",
+      "TestToneIndex",
+      "TestToneName",
+      "TestToneCustomPattern",
+      "TestAlarmToneId"
     ],
     "resources": {
       "media": [

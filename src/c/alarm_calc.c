@@ -131,7 +131,7 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
 // (alarm_calc.h): the only valid duration digits, each literally the
 // number of AC_NOTE_DURATION_MS_PER_UNIT (100ms) units it represents, so
 // "4" always means 400ms with no lookup table needed -- just digit*100.
-const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT] = { 1, 2, 4, 8 };
+const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 
 // AC_NOTE_LETTER/AC_NOTE_MIDI -- see AC_NOTE_COUNT's doc comment
 // (alarm_calc.h): C major scale starting at MIDI 96 (C7, close to the
@@ -142,8 +142,8 @@ const char AC_NOTE_LETTER[AC_NOTE_COUNT] = { 'C', 'D', 'E', 'F', 'G', 'A', 'B' }
 const uint8_t AC_NOTE_MIDI[AC_NOTE_COUNT] = { 96, 98, 100, 101, 103, 105, 107 };
 
 // Parses a token's leading duration digit. Returns false unless `c` is one
-// of AC_NOTE_DURATION_DIGITS -- NOT just any digit '1'-'9': e.g. '3' and
-// '5' are plain ASCII digits but not valid duration digits.
+// of AC_NOTE_DURATION_DIGITS -- i.e. '1'-'8'; '0' and '9' are plain ASCII
+// digits but not valid duration digits.
 static bool pattern_parse_digit(char c, uint8_t *out_digit) {
   if (c < '0' || c > '9') { return false; }
   uint8_t d = (uint8_t)(c - '0');
@@ -163,7 +163,7 @@ static int pattern_note_index(char c) {
 
 bool ac_vibe_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len) {
   if (!text) { return false; }
-  uint8_t parsed[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t count = 0;
   const char *p = text;
   while (1) {
@@ -204,8 +204,8 @@ void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t
 bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
                              uint8_t *out_flags, uint8_t *out_notes, uint8_t *out_len) {
   if (!text) { return false; }
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS];
-  uint8_t notes[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS];
+  uint8_t notes[AC_SOUND_PATTERN_MAX_SEGMENTS];
   uint8_t count = 0;
   const char *p = text;
   while (1) {

@@ -618,18 +618,18 @@ static void test_format_cron_summary(void) {
 }
 
 static void test_vibe_pattern_parse_bare_digits_are_on(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(ac_vibe_pattern_parse("2 1 4", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(ac_vibe_pattern_parse("2 1 4", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(len == 3);
   assert(out[0] == 2 && out[1] == 1 && out[2] == 4);
   assert(!(out[0] & AC_PATTERN_BREAK_BIT) && !(out[1] & AC_PATTERN_BREAK_BIT) && !(out[2] & AC_PATTERN_BREAK_BIT));
 }
 
 static void test_vibe_pattern_parse_breaks_optional(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(len == 5);
   assert(out[0] == 2 && !(out[0] & AC_PATTERN_BREAK_BIT));
   assert(out[1] == (1 | AC_PATTERN_BREAK_BIT));
@@ -641,36 +641,34 @@ static void test_vibe_pattern_parse_breaks_optional(void) {
 static void test_vibe_pattern_parse_consecutive_on_beats(void) {
   // No break required between two on-beats -- this is the whole point of
   // making breaks optional.
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(ac_vibe_pattern_parse("1 2 4", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(ac_vibe_pattern_parse("1 2 4", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(len == 3);
 }
 
 static void test_vibe_pattern_parse_rejects_out_of_range_digit(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(!ac_vibe_pattern_parse("0", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("5", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  // '3' is a plain ASCII digit but not one of AC_NOTE_DURATION_DIGITS
-  // {1,2,4,8} -- validity isn't just "any digit 1-9".
-  assert(!ac_vibe_pattern_parse("3", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("9", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  // '0' and '9' are plain ASCII digits but outside AC_NOTE_DURATION_DIGITS'
+  // 1-8 range -- validity isn't just "any digit 1-9".
+  assert(!ac_vibe_pattern_parse("0", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("9", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
 }
 
 static void test_vibe_pattern_parse_rejects_malformed(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(!ac_vibe_pattern_parse("", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("   ", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("1--", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("1C", AC_PATTERN_MAX_SEGMENTS, out, &len));   // note letters aren't valid for vibe
-  assert(!ac_vibe_pattern_parse("a", AC_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse(NULL, AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("   ", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("1--", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("1C", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));   // note letters aren't valid for vibe
+  assert(!ac_vibe_pattern_parse("a", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse(NULL, AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
 }
 
 static void test_vibe_pattern_parse_rejects_too_many_segments(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
   assert(!ac_vibe_pattern_parse("1 1 1 1 1", 4, out, &len));   // 5 tokens, max 4
   assert(ac_vibe_pattern_parse("1 1 1 1", 4, out, &len));
@@ -678,16 +676,19 @@ static void test_vibe_pattern_parse_rejects_too_many_segments(void) {
 }
 
 static void test_vibe_pattern_format_round_trip(void) {
-  uint8_t out[AC_PATTERN_MAX_SEGMENTS];
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
   char buf[64];
-  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   ac_vibe_pattern_format(buf, sizeof(buf), out, len);
   assert(strcmp(buf, "2 1- 2 1- 2") == 0);
 
-  assert(ac_vibe_pattern_parse("1 2 4 8", AC_PATTERN_MAX_SEGMENTS, out, &len));
+  // Exercises the full 1-8 duration-digit range, one token per digit --
+  // exactly AC_VIBE_PATTERN_MAX_SEGMENTS (8) tokens.
+  assert(ac_vibe_pattern_parse("1 2 3 4 5 6 7 8", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 8);
   ac_vibe_pattern_format(buf, sizeof(buf), out, len);
-  assert(strcmp(buf, "1 2 4 8") == 0);
+  assert(strcmp(buf, "1 2 3 4 5 6 7 8") == 0);
 }
 
 static void test_vibe_pattern_format_empty(void) {
@@ -697,8 +698,8 @@ static void test_vibe_pattern_format_empty(void) {
 }
 
 static void test_sound_pattern_parse_notes_and_breaks(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(len == 5);
   // No octave marker -> AC_NOTE_OCTAVE_SAME; encoded as
   // AC_NOTE_OCTAVE_SAME*AC_NOTE_COUNT + base index ('C'=0, 'D'=1).
@@ -710,8 +711,8 @@ static void test_sound_pattern_parse_notes_and_breaks(void) {
 }
 
 static void test_sound_pattern_parse_octave_markers(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(ac_sound_pattern_parse("1C 1C' 1C,", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("1C 1C' 1C,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(len == 3);
   // No marker -> AC_NOTE_OCTAVE_SAME; encoded as octave*AC_NOTE_COUNT + base index (C = 0).
   assert(notes[0] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 0);
@@ -720,51 +721,57 @@ static void test_sound_pattern_parse_octave_markers(void) {
 }
 
 static void test_sound_pattern_parse_rejects_bad_octave_marker(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1C^", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // not a real marker
-  assert(!ac_sound_pattern_parse("1Cx", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("1C^", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // not a real marker
+  assert(!ac_sound_pattern_parse("1Cx", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bare_digit(void) {
   // Unlike vibe, sound always needs an explicit note letter or '-'.
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse("1C 2", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("1", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("1C 2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bad_note(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1H", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 'H' isn't a note letter
-  assert(!ac_sound_pattern_parse("1X 2D", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("1H", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 'H' isn't a note letter
+  assert(!ac_sound_pattern_parse("1X 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_malformed(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse("0C", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));    // digit out of range
-  assert(!ac_sound_pattern_parse("5C", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  // '3' is a plain ASCII digit but not one of AC_NOTE_DURATION_DIGITS.
-  assert(!ac_sound_pattern_parse("3C", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse(NULL, AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  // '0' and '9' are plain ASCII digits but outside AC_NOTE_DURATION_DIGITS'
+  // 1-8 range.
+  assert(!ac_sound_pattern_parse("0C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("9C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse(NULL, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_too_many_segments(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(!ac_sound_pattern_parse("1C 2D 4E 8F 1G", 4, flags, notes, &len));   // 5 tokens, max 4
   assert(ac_sound_pattern_parse("1C 2D 4E 8F", 4, flags, notes, &len));
   assert(len == 4);
 }
 
 static void test_sound_pattern_format_round_trip(void) {
-  uint8_t flags[AC_PATTERN_MAX_SEGMENTS], notes[AC_PATTERN_MAX_SEGMENTS], len;
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   char buf[64];
-  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
   assert(strcmp(buf, "1C 2D 1- 1C 2D") == 0);
 
-  assert(ac_sound_pattern_parse("1C' 1D,", AC_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("1C' 1D,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
   assert(strcmp(buf, "1C' 1D,") == 0);
+
+  // Exercises the full 1-8 duration-digit range, one token per digit.
+  assert(ac_sound_pattern_parse("1C 2D 3E 4F 5G 6A 7B 8C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 8);
+  ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
+  assert(strcmp(buf, "1C 2D 3E 4F 5G 6A 7B 8C") == 0);
 }
 
 static void test_sound_pattern_format_empty(void) {
