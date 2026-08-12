@@ -220,16 +220,28 @@ bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
     if (tlen == 2 && tok[1] == '-') {
       flags[count] = digit | AC_PATTERN_BREAK_BIT;
       notes[count] = 0;
-    } else if (tlen == 2 || tlen == 3) {
+    } else if (tlen >= 2) {
       int ni = pattern_note_index(tok[1]);
       if (ni < 0) { return false; }   // unrecognized note letter
       int octave = AC_NOTE_OCTAVE_SAME;
-      if (tlen == 3) {
-        // Real ABC-notation octave markers, right after the letter: "'"
-        // (apostrophe) up, "," (comma) down -- anything else is malformed.
-        if (tok[2] == '\'') { octave = AC_NOTE_OCTAVE_UP; }
-        else if (tok[2] == ',') { octave = AC_NOTE_OCTAVE_DOWN; }
-        else { return false; }
+      if (tlen > 2) {
+        // Real ABC-notation octave markers, right after the letter: one or
+        // more "'" (apostrophe) shift up an octave each, one or more ","
+        // (comma) shift down an octave each -- but never mixed within one
+        // token, and each direction has its own cap (see AC_NOTE_OCTAVE_
+        // MAX_UP/_MAX_DOWN's doc comment, alarm_calc.h, for why the range
+        // is asymmetric). Anything else (a stray non-marker char, a run
+        // longer than the cap) is malformed.
+        char marker = tok[2];
+        if (marker != '\'' && marker != ',') { return false; }
+        int mcount = 0;
+        for (int k = 2; k < tlen; k++) {
+          if (tok[k] != marker) { return false; }   // mixed markers, e.g. "1C',"
+          mcount++;
+        }
+        int max_count = (marker == '\'') ? AC_NOTE_OCTAVE_MAX_UP : AC_NOTE_OCTAVE_MAX_DOWN;
+        if (mcount > max_count) { return false; }
+        octave = (marker == '\'') ? AC_NOTE_OCTAVE_SAME + mcount : AC_NOTE_OCTAVE_SAME - mcount;
       }
       flags[count] = digit;
       notes[count] = (uint8_t)(octave * AC_NOTE_COUNT + ni);
@@ -259,8 +271,18 @@ void ac_sound_pattern_format(char *buf, size_t n, const uint8_t *flags, const ui
       int octave = notes[i] / AC_NOTE_COUNT;
       int ni = notes[i] % AC_NOTE_COUNT;
       char letter = (ni < AC_NOTE_COUNT) ? AC_NOTE_LETTER[ni] : '?';
-      const char *marker = (octave == AC_NOTE_OCTAVE_UP) ? "'" : (octave == AC_NOTE_OCTAVE_DOWN) ? "," : "";
-      written = snprintf(buf + used, n - used, "%s%d%c%s", i ? " " : "", digit, letter, marker);
+      // Emit N repeated marker characters for a shift of magnitude N,
+      // rather than a single fixed marker -- the exact inverse of parse's
+      // marker-run counting above. AC_NOTE_OCTAVE_MAX_DOWN+1 is generous
+      // headroom for the marker run plus its NUL.
+      char markers[AC_NOTE_OCTAVE_MAX_DOWN + 1];
+      int shift = octave - AC_NOTE_OCTAVE_SAME;
+      char mchar = (shift > 0) ? '\'' : ',';
+      int mcount = (shift > 0) ? shift : -shift;
+      if (mcount > AC_NOTE_OCTAVE_MAX_DOWN) { mcount = AC_NOTE_OCTAVE_MAX_DOWN; }   // defensive; shouldn't happen
+      for (int m = 0; m < mcount; m++) { markers[m] = mchar; }
+      markers[mcount] = '\0';
+      written = snprintf(buf + used, n - used, "%s%d%c%s", i ? " " : "", digit, letter, markers);
     }
     if (written < 0 || (size_t)written >= n - used) { break; }
     used += (size_t)written;

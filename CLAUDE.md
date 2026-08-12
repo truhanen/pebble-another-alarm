@@ -905,9 +905,11 @@ feature — see git history if curious):
   - **Navigating to any row (either picker) plays that pattern once as a
     preview** — `pattern_select_preview_current_row()` reads whichever row
     is currently highlighted and, if it's not "Off", builds its text
-    (`pattern_select_vibe_row_text()`/`pattern_select_sound_row_text()` —
-    a preset's fixed text, or the alarm's own current custom text for the
-    Custom row) and plays it via `alarm_preview_vibe_pattern()`/
+    (`pattern_select_vibe_row_text()` for vibe, `pattern_select_sound_row_
+    pattern()` for sound — a preset's fixed text, or (sound only, since
+    tones are inlined into the picker — see the Custom-tone library design
+    point below) a tone row's own formatted pattern) and plays it via
+    `alarm_preview_vibe_pattern()`/
     `alarm_preview_sound_pattern()` (parses on the fly, calls the same
     `alarm_play_vibe_pattern()`/`alarm_play_sound_pattern()` ring-time
     uses). Called from `pattern_select_up_click`/`pattern_select_down_click`
@@ -973,33 +975,64 @@ feature — see git history if curious):
   unchanged; it's just not reachable through the new UI below any more
   (picking anything from it supersedes the old inline data outright, no
   migration attempted).
-  - **Navigation**: the Tone picker's shape (Off/presets/Custom) is
-    UNCHANGED — only the SOUND "Custom" row's behavior changes, from
-    popping straight into the pattern keyboard to instead pushing a new
-    **"Custom tones"** list window ON TOP of the picker (not popping it, so
-    BACK unwinds one level at a time): every saved tone (name + 2-token
-    pattern preview, same treatment a preset gets) plus a trailing
-    **"+ New tone"** row. `pattern_select_draw_row`'s Custom row itself
-    shows no value when there's no library reference — it's a gateway,
-    not one specific pattern — **except** when `sound_pattern_kind == 2`
-    (a tone is currently linked), in which case it shows that tone's name
-    (via `find_tone_by_id`), same as any other row's value, so it's
-    visible at a glance without drilling in. `pattern_select_preview_
-    current_row` mirrors this: it skips the Custom row when there's no
-    linked tone (nothing to preview), but plays the linked tone when there
-    is one, navigating onto it the same as landing on any other row.
-    `pattern_select_window_push`'s preselect logic treats
-    `sound_pattern_kind == 2` the same as `== 1` (both land on the Custom
-    row, since there's no per-tone row in the picker itself to preselect
-    into). Vibe's own Custom row is entirely unaffected — this feature is
-    sound-only.
-  - The "Custom tones" list itself also previews-on-navigate
-    (`tones_list_preview_current_row()`, called from `tones_list_up_click`/
-    `tones_list_down_click`) — same treatment as every other picker in this
-    file, skipped for the trailing "+ New tone" row (not a tone).
-  - **"+ New tone"** runs a 2-step wizard (`new_tone_pattern_done`/
-    `new_tone_name_done`, staged in a transient `s_new_tone_draft`): the
-    pattern keyboard first, then the name keyboard. Cancelling (`text ==
+  - **Navigation**: tones are inlined directly into the Tone picker itself
+    now, below the presets — there is no separate "Custom tones" list
+    window any more (it existed briefly during this feature's development
+    and was removed on request as one screen too deep). The SOUND picker's
+    row layout is `Off, presets..., <one row per saved tone>, "+ Custom
+    tone"` — row count is dynamic
+    (`pattern_select_sound_row_count()` = `PATTERN_SELECT_SOUND_TONES_BASE`
+    (`SOUND_PRESET_COUNT + 1`) `+ s_tone_count + 1`), replacing the old
+    fixed `PATTERN_SELECT_SOUND_ROW_COUNT`/`_CUSTOM_ROW` constants (vibe's
+    own `PATTERN_SELECT_VIBE_ROW_COUNT`/`_CUSTOM_ROW` are untouched — this
+    whole redesign is sound-only). Selecting a tone row calls
+    `custom_tone_window_push(s_tones[i].id)` directly, pushed on top of the
+    picker (see the singular screen below) — no intermediate list to pass
+    through. Selecting **"+ Custom tone"** (the trailing row, at
+    `pattern_select_sound_new_row()`) runs the same 2-step creation wizard
+    described below.
+  - **Collapsed rows show no pattern preview at all** — neither presets nor
+    tones — a deliberate change from the picker's earlier behavior (which
+    showed every preset's first 2 tokens as a value column): the only
+    thing a collapsed sound row shows besides its label is, for a tone row
+    specifically, a literal **`"C"`** right-aligned (`pattern_select_draw_row`)
+    — a plain marker distinguishing a user tone from a built-in preset, not
+    an abbreviation of anything else on the row. `Off`/"+ Custom tone" show
+    nothing in that column either.
+  - **Expand-on-navigate**: whichever preset or tone row is the *currently
+    selected* row (checked via `pattern_select_row_is_selected()`, wrapping
+    `menu_layer_get_selected_index`) expands to two lines instead of one —
+    label on line 1, that row's full pattern text word-wrapped in
+    `GOTHIC_14_BOLD` on line 2 (`draw_label_and_notes_row()`). This is where
+    a pattern's actual notes become visible at all now, since the collapsed
+    view no longer shows them. `Off`/"+ Custom tone" never expand (no
+    pattern to show). `pattern_select_cell_height` returns a taller height
+    for exactly this case, computed via `graphics_text_layout_get_content_
+    size` on the wrapped notes text at `GOTHIC_14_BOLD` plus the label
+    line's own height; every other row (including every non-selected
+    preset/tone row) keeps the fixed 34px. This expand/collapse behavior is
+    SOUND-only — vibe's picker keeps its old always-visible 2-token preview
+    on every preset/Custom row, unchanged.
+  - `pattern_select_sound_row_pattern(row, out, out_size)` is the one helper
+    behind all of this — returns `false` for "Off"/"+ Custom tone" (nothing
+    to preview/expand/play), else fills `out` with a preset's fixed text or
+    a tone's `ac_sound_pattern_format()`-reconstructed text and returns
+    `true`. `pattern_select_preview_current_row`'s SOUND branch now just
+    calls this and previews unconditionally when it returns `true` — the
+    old `sound_pattern_kind == 2`-only gate (needed back when tones lived
+    one level deeper with no per-tone row here) is gone; every tone row
+    previews on navigate, same as a preset row always did.
+    `pattern_select_window_push`'s preselect logic: `sound_pattern_kind ==
+    2` now resolves `find_tone_by_id(a->custom_tone_id)` and preselects
+    `PATTERN_SELECT_SOUND_TONES_BASE + <that index>` directly (falling back
+    to the "+ Custom tone" row if the id is somehow stale/not found), rather
+    than landing on a shared "Custom" row the way it used to.
+  - **"+ Custom tone"** runs the same 2-step wizard as before
+    (`new_tone_pattern_done`/`new_tone_name_done`, staged in a transient
+    `s_new_tone_draft` — relocated next to `s_tones`/`s_tone_count` since a
+    forward reference from `pattern_select_select`, which now triggers it
+    directly, needs the variable defined before that point in the file):
+    the pattern keyboard first, then the name keyboard. Cancelling (`text ==
     NULL`) at *either* step aborts the whole thing outright — same "any
     BACK aborts the flow" convention the "+ New alarm" wizard already
     uses — nothing is created. An unparseable pattern or an empty name
@@ -1023,17 +1056,20 @@ feature — see git history if curious):
     BACK needs no snapshot-revert since nothing here is ever staged.
     `Apply` is the one action that actually links the *current* alarm
     (`s_edit_idx`, unchanged throughout this whole Signal → Tone picker →
-    Custom tones → Custom tone chain) to the tone —
+    Custom tone chain) to the tone —
     `sound_pattern_kind=2`/`custom_tone_id=<id>`/`sound_enabled=true`, then
-    pops exactly **3** windows (this screen, the list, the Tone picker) to
-    land back on Signal. `Delete` (`confirm_window_push`, same shell
-    `edit_window`'s own Delete uses) removes the tone from `s_tones`
-    entirely and calls `revert_alarms_using_tone()` — every alarm with
-    `sound_pattern_kind==2` pointing at this id reverts to
+    pops **2** windows (this screen, the Tone picker itself) to land back
+    on Signal — one fewer than before this redesign, since there's no
+    intermediate list to pop through any more. `Delete` (`confirm_window_
+    push`, same shell `edit_window`'s own Delete uses) removes the tone
+    from `s_tones` entirely and calls `revert_alarms_using_tone()` — every
+    alarm with `sound_pattern_kind==2` pointing at this id reverts to
     `sound_pattern_kind=0` (Default; `sound_enabled` is left untouched) —
-    then pops only **1** window, back to the "Custom tones" list (not all
-    the way to Signal like Apply: deleting is "keep managing the library",
-    applying is "I'm done").
+    then pops only **1** window, back to the **Tone picker** itself (not
+    all the way to Signal like Apply: deleting is "keep managing the
+    library", applying is "I'm done"); since the tone's own row just
+    disappeared from the picker, its selection is also reset to row 0
+    ("Off") rather than risk pointing past the now-shorter row count.
 - **Custom sound/vibe patterns**: a pattern is a space-separated list of
   on-beats and (optional) breaks. Sound (Tone) and vibe (Vibration) have
   DIFFERENT segment caps, on request — `AC_SOUND_PATTERN_MAX_SEGMENTS`
@@ -1086,15 +1122,30 @@ feature — see git history if curious):
   `octave*AC_NOTE_COUNT + <index into AC_NOTE_LETTER[]/AC_NOTE_MIDI[]>`
   (meaningless on a break segment). `AC_NOTE_LETTER`/`AC_NOTE_MIDI` are
   the 7 base-octave diatonic notes `C D E F G A B` (MIDI 96-107, one per
-  pattern-keyboard key 0-6); `AC_NOTE_OCTAVE_DOWN/SAME/UP` (0/1/2) shift
-  that base pitch by `12 * (octave - AC_NOTE_OCTAVE_SAME)` semitones —
-  the octave lives in this separate value rather than in a second table
-  of duplicate letters (an earlier version of this feature used lowercase
-  `c`/`d` on two spare keys for exactly one octave-up duplicate; the `'`/
-  `,` markers replaced that with full up/down coverage on every note, at
-  the cost of one extra keypress for a shifted note — see the keyboard
-  design point below for why that keypress moved to the bottom-left key
-  instead of staying on each note key's own cycle). Any malformed token
+  pattern-keyboard key 0-6); the octave field shifts that base pitch by
+  `12 * (octave - AC_NOTE_OCTAVE_SAME)` semitones, where `AC_NOTE_OCTAVE_SAME`
+  = 8 — the octave lives in this separate value rather than in a second
+  table of duplicate letters (an earlier version of this feature used
+  lowercase `c`/`d` on two spare keys for exactly one octave-up duplicate;
+  the `'`/`,` markers replaced that with full up/down coverage on every
+  note, at the cost of one extra keypress for a shifted note — see the
+  keyboard design point below for why that keypress moved to the
+  bottom-left key instead of staying on each note key's own cycle).
+  **Octave markers can stack**: `,` (down) may repeat up to
+  `AC_NOTE_OCTAVE_MAX_DOWN` (8) times in a row (e.g. `"1C,,,,,,,,"`), but
+  `'` (up) may only appear once (`AC_NOTE_OCTAVE_MAX_UP` = 1) — this asymmetry
+  isn't arbitrary, it's the exact range that keeps every one of the 7 base
+  notes' resulting MIDI value inside the valid 0-127 range: C(96) is the
+  binding constraint going down (`96 - 8*12 = 0` exactly; a 9th `,` would go
+  negative), and A(105)/B(107) are the binding constraint going up (2
+  octaves up would be 129/131, past 127). A run must be all the same
+  character — `"1C',"` (mixed) is rejected, same all-or-nothing philosophy
+  as every other malformed-token case in this grammar; there's no clamping
+  to the nearest valid value anywhere, a marker run past its cap is a parse
+  error, not silently truncated. `alarm_build_sound_notes()` (`main.c`) adds
+  a defensive `[0,127]` clamp on the final computed MIDI value anyway,
+  belt-and-suspenders since no validation existed there before this change.
+  Any malformed token
   (bad digit, missing/invalid note letter, a bare digit for sound, a
   trailing character that isn't `'`/`,`, more than the applicable cap's
   segments) fails
@@ -1112,10 +1163,22 @@ feature — see git history if curious):
   `sound_pattern_note[]` bytes under the new octave-aware encoding — this
   same dev cycle went through a raw 1-100-duration-per-segment encoding
   (schema 12), a bit7=break/bits0-6=contiguous-1-4-index encoding (schema
-  13), the `AC_NOTE_DURATION_DIGITS` sparse-digit scheme (schema 14), and
-  now this octave-marker rework (schema 15); each changed what the same
+  13), the `AC_NOTE_DURATION_DIGITS` sparse-digit scheme (schema 14), the
+  single-marker octave rework (schema 15), and now the stacked-marker
+  widening above (`STORE_SCHEMA` 18, `TONE_STORE_SCHEMA` 3 — widening the
+  encoded octave range means a previously-stored byte value now means a
+  *different* octave, e.g. old-encoding `0` meant "down 1 octave" but under
+  the new domain byte value `0` means "down 8 octaves," a silently wrong
+  reinterpretation rather than a safe zero-fill; `TONE_STORE_SCHEMA` already
+  wipes the whole tone table on any mismatch, so the bump alone suffices
+  there); each changed what the same
   stored bits mean, so every bump needed a reset rather than
-  reinterpreting. Every other alarm field is untouched by this.
+  reinterpreting. Notably, schema 18 needed **no explicit `store_load()`
+  reset fixup** despite reinterpreting bytes — schema 17 (the version being
+  migrated from) was already a hard break with no `alarm_size_for_schema(17)`
+  entry, so any schema-17 data wipes before this bump's logic would ever
+  matter; worth checking, on every future bump, whether the prior schema is
+  already a hard break before assuming a fixup is needed. Every other alarm field is untouched by this.
   `sound_pattern_note[]` itself is unchanged in size/position (still
   appended at the very end of the struct, since schema 13) — only its
   byte *meaning* moved again. Selecting "Custom" and submitting an unparseable

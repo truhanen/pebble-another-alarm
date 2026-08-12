@@ -59,14 +59,29 @@ extern const char AC_NOTE_LETTER[AC_NOTE_COUNT];   // 'C','D','E','F','G','A','B
 extern const uint8_t AC_NOTE_MIDI[AC_NOTE_COUNT];  // base-octave MIDI note number per AC_NOTE_LETTER entry
 
 // A note's octave relative to its own AC_NOTE_MIDI base pitch -- real ABC
-// notation's convention for shifting a note's octave: an apostrophe "'"
-// written right after the letter means an octave up, a comma ","
-// written right after means an octave down (e.g. "C" = base, "C'" = up,
-// "C," = down); no marker at all means AC_NOTE_OCTAVE_SAME. Applied as
+// notation's convention for shifting a note's octave: one or more
+// apostrophes "'" written right after the letter shift it up an octave
+// each, one or more commas "," shift it down an octave each (e.g. "C" =
+// base, "C'" = up 1, "C,,," = down 3); no marker at all means
+// AC_NOTE_OCTAVE_SAME. Applied as
 // `AC_NOTE_MIDI[base] + 12 * (octave - AC_NOTE_OCTAVE_SAME)`.
-#define AC_NOTE_OCTAVE_DOWN 0
-#define AC_NOTE_OCTAVE_SAME 1
-#define AC_NOTE_OCTAVE_UP   2
+//
+// The up/down range is deliberately asymmetric, derived from keeping every
+// one of the 7 notes' resulting MIDI pitch within the valid 0-127 range
+// (nothing here clamps a computed pitch, so this cap is the only thing
+// keeping it in range): the highest base note, B (AC_NOTE_MIDI 107), would
+// exceed 127 at 2 octaves up (131), so AC_NOTE_OCTAVE_MAX_UP is 1 for every
+// note, uniformly (no per-note special-casing -- simpler, and matches this
+// grammar's existing all-or-nothing validation style elsewhere). The
+// lowest base note, C (96), would go negative at 9 octaves down (96-108),
+// so AC_NOTE_OCTAVE_MAX_DOWN is 8. AC_NOTE_OCTAVE_SAME is the "zero point"
+// octave field value the shift is measured from -- chosen as
+// AC_NOTE_OCTAVE_MAX_DOWN so the full down range (0..AC_NOTE_OCTAVE_MAX_DOWN)
+// and the up range (AC_NOTE_OCTAVE_SAME+1..AC_NOTE_OCTAVE_SAME+
+// AC_NOTE_OCTAVE_MAX_UP) both stay non-negative field values.
+#define AC_NOTE_OCTAVE_MAX_DOWN 8
+#define AC_NOTE_OCTAVE_MAX_UP   1
+#define AC_NOTE_OCTAVE_SAME (AC_NOTE_OCTAVE_MAX_DOWN)
 
 // Weekday bitmask, matching struct tm.tm_wday convention (0=Sunday..6=Saturday).
 #define AC_DAY_SUN (1u << 0)
@@ -344,9 +359,13 @@ void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t
 // (unlike vibe, where a bare digit is a valid on-token) -- a break is still
 // just the duration digit followed by '-' ("1-"), with no letter, e.g.
 // "1C 2D 1- 1C 2D". An on-token's note letter may optionally be followed by
-// one octave marker -- "'" (apostrophe) for an octave up, "," (comma) for
-// an octave down, real ABC-notation convention (e.g. "1C'", "1C,"); no
-// marker means AC_NOTE_OCTAVE_SAME. On success, writes one packed
+// one or more octave markers of the SAME kind -- "'" (apostrophe) shifts up
+// an octave each, "," (comma) shifts down an octave each, real ABC-notation
+// convention (e.g. "1C'" up 1, "1C,,," down 3); no marker means
+// AC_NOTE_OCTAVE_SAME. Up is capped at AC_NOTE_OCTAVE_MAX_UP (1) and down at
+// AC_NOTE_OCTAVE_MAX_DOWN (8) -- see that constant's own doc comment for why
+// the range is asymmetric; exceeding either cap, or mixing "'" and ","
+// within one token, is malformed. On success, writes one packed
 // duration/break byte per segment into out_flags (same encoding as
 // ac_vibe_pattern_parse) and `octave*AC_NOTE_COUNT + <AC_NOTE_LETTER/
 // AC_NOTE_MIDI index>` into out_notes (capacity max_segments each; a break
@@ -355,8 +374,8 @@ void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t
 // true. Returns false (leaving every output untouched) on any malformed
 // token (missing/invalid letter on an on-token, a bare digit with no
 // suffix, digit out of range, an unrecognized letter, an octave marker
-// with no preceding letter), an empty/whitespace-only string, or more than
-// max_segments tokens.
+// with no preceding letter, mixed markers, or a marker run past its cap),
+// an empty/whitespace-only string, or more than max_segments tokens.
 bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
                              uint8_t *out_flags, uint8_t *out_notes, uint8_t *out_len);
 

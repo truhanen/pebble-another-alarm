@@ -716,14 +716,36 @@ static void test_sound_pattern_parse_octave_markers(void) {
   assert(len == 3);
   // No marker -> AC_NOTE_OCTAVE_SAME; encoded as octave*AC_NOTE_COUNT + base index (C = 0).
   assert(notes[0] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 0);
-  assert(notes[1] == AC_NOTE_OCTAVE_UP * AC_NOTE_COUNT + 0);
-  assert(notes[2] == AC_NOTE_OCTAVE_DOWN * AC_NOTE_COUNT + 0);
+  assert(notes[1] == (AC_NOTE_OCTAVE_SAME + 1) * AC_NOTE_COUNT + 0);
+  assert(notes[2] == (AC_NOTE_OCTAVE_SAME - 1) * AC_NOTE_COUNT + 0);
+}
+
+// Markers can stack: "'" up to AC_NOTE_OCTAVE_MAX_UP (1) times, "," up to
+// AC_NOTE_OCTAVE_MAX_DOWN (8) times -- see that constant's own doc comment
+// (alarm_calc.h) for why the range is asymmetric (keeping every note's
+// resulting MIDI pitch within 0-127).
+static void test_sound_pattern_parse_stacked_octave_markers(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("1C,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 8 commas, at the cap
+  assert(len == 1);
+  assert(notes[0] == (AC_NOTE_OCTAVE_SAME - 8) * AC_NOTE_COUNT + 0);
+
+  // A 9th comma exceeds AC_NOTE_OCTAVE_MAX_DOWN -- rejected outright.
+  assert(!ac_sound_pattern_parse("1C,,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+
+  // A 2nd apostrophe exceeds AC_NOTE_OCTAVE_MAX_UP (1) -- rejected, not
+  // silently clamped back down to 1.
+  assert(!ac_sound_pattern_parse("1C''", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bad_octave_marker(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(!ac_sound_pattern_parse("1C^", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // not a real marker
   assert(!ac_sound_pattern_parse("1Cx", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  // Mixing "'" and "," within one token is malformed, even if each half
+  // alone would be within its own cap.
+  assert(!ac_sound_pattern_parse("1C',", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("1C,'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bare_digit(void) {
@@ -772,6 +794,13 @@ static void test_sound_pattern_format_round_trip(void) {
   assert(len == 8);
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
   assert(strcmp(buf, "1C 2D 3E 4F 5G 6A 7B 8C") == 0);
+
+  // Both octave-marker extremes round-trip exactly: 8 stacked commas (max
+  // down) and 1 apostrophe (max up).
+  assert(ac_sound_pattern_parse("1C,,,,,,,, 1C'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 2);
+  ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
+  assert(strcmp(buf, "1C,,,,,,,, 1C'") == 0);
 }
 
 static void test_sound_pattern_format_empty(void) {
@@ -846,6 +875,7 @@ int main(void) {
   test_vibe_pattern_format_empty();
   test_sound_pattern_parse_notes_and_breaks();
   test_sound_pattern_parse_octave_markers();
+  test_sound_pattern_parse_stacked_octave_markers();
   test_sound_pattern_parse_rejects_bad_octave_marker();
   test_sound_pattern_parse_rejects_bare_digit();
   test_sound_pattern_parse_rejects_bad_note();

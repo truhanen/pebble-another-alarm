@@ -24,8 +24,15 @@
 #define PERSIST_KEY_TONE_SCHEMA          14
 #define PERSIST_KEY_TONE_COUNT           15
 #define PERSIST_KEY_NEXT_TONE_ID         16
-#define TONE_STORE_SCHEMA 2
-// Bumped from 1: pattern[]/pattern_note[] grew from AC_PATTERN_MAX_SEGMENTS
+#define TONE_STORE_SCHEMA 3
+// Bumped from 2: pattern_note[]'s octave encoding widened from 3 values
+// (down 1/same/up 1) to 10 (down up to 8/same/up 1), to support stacking
+// multiple "'"/"," markers -- see AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN's own doc
+// comment (alarm_calc.h). Same "byte VALUE means something different now"
+// category as Alarm's own schema-18 bump below; store_load_tones() wipes on
+// any mismatch anyway, so this needed nothing beyond the bump itself.
+//
+// Bumped from 1 to 2: pattern[]/pattern_note[] grew from AC_PATTERN_MAX_SEGMENTS
 // (16) to AC_SOUND_PATTERN_MAX_SEGMENTS (32) -- a resize, not an append, so
 // (per the ground rules below) this is a hard break; store_load_tones()
 // wipes on any schema mismatch anyway, so this needed nothing beyond the
@@ -47,7 +54,22 @@
 // needed -- sizeof(CustomTone) is well under PERSIST_DATA_MAX_LENGTH).
 // Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
 #define PERSIST_KEY_TONE_BASE          300
-#define STORE_SCHEMA 17  // bumped: sound_pattern[]/sound_pattern_note[] grew from
+#define STORE_SCHEMA 18  // bumped: sound_pattern_note[]'s octave encoding widened from
+                          // 3 values (down 1/same/up 1) to 10 (down up to 8/same/up 1),
+                          // to support stacking multiple "'"/"," markers -- see
+                          // AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN's own doc comment
+                          // (alarm_calc.h). This REINTERPRETS already-stored byte values
+                          // (old encoded 0 meant "down 1"; under the new domain byte
+                          // value 0 means "down 8" -- silently wrong, not a safe
+                          // zero-fill), same category as the schema-13/14/15 bumps.
+                          // Unlike those, though, no explicit store_load() reset fixup
+                          // is needed THIS time: schema 17 (the version being migrated
+                          // FROM) is already a hard break with no alarm_size_for_schema()
+                          // entry, so any schema-17 data already wipes outright before
+                          // this bump's own logic would ever run -- migrating from 17
+                          // was never actually possible to begin with.
+                          //
+                          // Prior bump (17): sound_pattern[]/sound_pattern_note[] grew from
                           // AC_PATTERN_MAX_SEGMENTS(16) to AC_SOUND_PATTERN_MAX_SEGMENTS(32),
                           // and vibe_pattern_custom[] shrank to AC_VIBE_PATTERN_MAX_SEGMENTS(8)
                           // -- splitting what used to be one shared cap into separate sound/

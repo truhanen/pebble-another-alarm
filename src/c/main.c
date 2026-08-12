@@ -112,6 +112,7 @@ static int s_order[MAX_ALARMS];   // display order (by time-of-day ascending)
 // store_save_tones, alarm_store.c) via its own persist_tones() below.
 static CustomTone s_tones[MAX_CUSTOM_TONES];
 static int s_tone_count = 0;
+static CustomTone s_new_tone_draft;   // staged between the "+ Custom tone" wizard's two steps
 
 static int s_first_day_of_week = 1;   // 0=Sunday, 1=Monday
 // Default vibration pattern (0=Double, 1=Short, 2=Long) copied into a new
@@ -221,9 +222,10 @@ static void signal_edit_window_push(void);
 static void start_new_alarm_flow(void);
 static void resync_last_fired_for_schedule_change(Alarm *a);
 static void confirm_window_push(const char *label0, const char *label1, void (*cb)(int, void *), void *ctx);
-static void custom_tones_list_window_push(void);
 static void custom_tone_window_push(uint32_t tone_id);
 static int find_tone_by_id(uint32_t id);
+static void new_tone_pattern_done(const char *text, void *ctx);
+static void new_tone_name_done(const char *text, void *ctx);
 static int16_t bottom_bar_top_for_bounds(GRect bounds);
 static Layer *bottom_bar_attach(Layer *root);
 static void bottom_bar_compact_ampm(char *buf);
@@ -961,8 +963,19 @@ static void alarm_build_sound_notes(const uint8_t *flags, const uint8_t *notes_a
     uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
     uint8_t octave = notes_arr[i] / AC_NOTE_COUNT;
     uint8_t base = notes_arr[i] % AC_NOTE_COUNT;
-    uint8_t midi = (!is_break && base < AC_NOTE_COUNT)
-      ? (uint8_t)(AC_NOTE_MIDI[base] + 12 * (octave - AC_NOTE_OCTAVE_SAME)) : 0;
+    uint8_t midi = 0;
+    if (!is_break && base < AC_NOTE_COUNT) {
+      // Computed in a signed int before the final clamp+cast -- octave can
+      // legitimately be less than AC_NOTE_OCTAVE_SAME (a down-shift), and
+      // parse-time validation (AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN,
+      // alarm_calc.c) already keeps every valid pattern's result within
+      // 0-127, but nothing here trusted that -- clamp defensively rather
+      // than let a stray/corrupt value silently wrap on the uint8_t cast.
+      int computed = AC_NOTE_MIDI[base] + 12 * ((int)octave - AC_NOTE_OCTAVE_SAME);
+      if (computed < 0) { computed = 0; }
+      if (computed > 127) { computed = 127; }
+      midi = (uint8_t)computed;
+    }
     out[i] = (SpeakerNote){
       .midi_note = midi,
       .waveform = is_break ? SpeakerWaveformSine : SpeakerWaveformSquare,
@@ -2941,11 +2954,14 @@ static const char *const PATTERN_HELP_TEXT =
   "for either.\n"
   "\n"
   "For sound, a note letter can "
-  "have an octave mark right "
-  "after it: \"'\" for an octave "
-  "up, \",\" for an octave down "
-  "(e.g. \"1C'\", \"1C,\"). No "
-  "mark means the base octave.\n"
+  "have octave marks right "
+  "after it: \"'\" for up, \",\" "
+  "for down (e.g. \"1C'\", "
+  "\"1C,\"). No mark means the "
+  "base octave. \",\" can repeat "
+  "up to 8 times for deeper "
+  "octaves down (e.g. \"1C,,,\"); "
+  "\"'\" only once, up.\n"
   "\n"
   "Breaks are optional -- two "
   "on-beats with nothing "
@@ -3021,9 +3037,16 @@ static bool s_pattern_select_show_invalid;   // transient: last Custom attempt f
 // on/off toggle (see the SIGNAL_ROW_* comment above) -- so every preset
 // row and the Custom row are shifted one down from their original index.
 #define PATTERN_SELECT_VIBE_ROW_COUNT  (VIBE_PRESET_COUNT + 2)   // Off, presets..., Custom
-#define PATTERN_SELECT_SOUND_ROW_COUNT (SOUND_PRESET_COUNT + 2)   // Off, presets... (row 1 = Triple/default), Custom
 #define PATTERN_SELECT_VIBE_CUSTOM_ROW  (VIBE_PRESET_COUNT + 1)
-#define PATTERN_SELECT_SOUND_CUSTOM_ROW (SOUND_PRESET_COUNT + 1)
+
+// SOUND is laid out as Off, presets..., <one row per s_tones[] entry>,
+// "+ Custom tone" -- unlike vibe, there's no single fixed "Custom" row any
+// more (custom tones are inlined here directly, on request, replacing the
+// old separate "Custom tones" list window); row count is therefore dynamic
+// (depends on s_tone_count), not a compile-time constant.
+#define PATTERN_SELECT_SOUND_TONES_BASE (SOUND_PRESET_COUNT + 1)   // first tone row's index
+static int pattern_select_sound_row_count(void) { return PATTERN_SELECT_SOUND_TONES_BASE + s_tone_count + 1; }
+static int pattern_select_sound_new_row(void) { return PATTERN_SELECT_SOUND_TONES_BASE + s_tone_count; }
 
 static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid);
 
@@ -3185,72 +3208,142 @@ static void signal_edit_window_push(void) {
 static void pattern_custom_done(const char *text, void *ctx);
 
 static uint16_t pattern_select_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
-  return (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? PATTERN_SELECT_VIBE_ROW_COUNT : PATTERN_SELECT_SOUND_ROW_COUNT;
+  return (uint16_t)((s_pattern_select_kind == PATTERN_SELECT_VIBE)
+                     ? PATTERN_SELECT_VIBE_ROW_COUNT : pattern_select_sound_row_count());
 }
-static int16_t pattern_select_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
+
+// Returns true and fills `out` with the raw pattern text a given SOUND row
+// represents (a preset's fixed text, or a saved tone's formatted pattern)
+// -- false for "Off"/"+ Custom tone", which have no pattern of their own.
+// Shared by draw_row (to build the expanded notes line), the preview-on-
+// navigate helper, and pattern_select_select's keyboard pre-fill.
+static bool pattern_select_sound_row_pattern(int row, char *out, size_t out_size) {
+  out[0] = '\0';
+  if (row >= 1 && row <= SOUND_PRESET_COUNT) {
+    strncpy(out, SOUND_PRESETS[row - 1].pattern, out_size - 1);
+    return true;
+  }
+  int tone_idx = row - PATTERN_SELECT_SOUND_TONES_BASE;
+  if (tone_idx >= 0 && tone_idx < s_tone_count) {
+    ac_sound_pattern_format(out, out_size, s_tones[tone_idx].pattern,
+                            s_tones[tone_idx].pattern_note, s_tones[tone_idx].pattern_len);
+    return true;
+  }
+  return false;   // "Off" or "+ Custom tone"
+}
+
+static bool pattern_select_row_is_selected(MenuLayer *ml, int row) {
+  if (!ml) { return false; }
+  MenuIndex sel = menu_layer_get_selected_index(ml);
+  return sel.row == row;
+}
+
+// The selected row (if it has a pattern -- SOUND presets/tones only, per
+// request; VIBE is unaffected) expands to 2 lines to show its notes; every
+// other row stays the usual fixed 34px. Computed from the wrapped height
+// of the notes text at GOTHIC_14_BOLD, since that's what draw_row below
+// will actually render.
+static int16_t pattern_select_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) {
+  if (s_pattern_select_kind == PATTERN_SELECT_SOUND && pattern_select_row_is_selected(ml, idx->row)) {
+    char pattern[PATTERN_KEYBOARD_MAX_LEN + 1];
+    if (pattern_select_sound_row_pattern(idx->row, pattern, sizeof(pattern))) {
+      GRect mb = layer_get_bounds(menu_layer_get_layer(ml));
+      GFont nf = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+      GSize sz = graphics_text_layout_get_content_size(
+                   pattern, nf, GRect(0, 0, mb.size.w - 12, 200), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      return (int16_t)(2 + 26 + 2 + sz.h + 4);   // label line + gap + wrapped notes + bottom pad
+    }
+  }
+  return 34;
+}
+
+// Label on line 1 (GOTHIC_24_BOLD, same position draw_key_value_row's
+// label uses), the row's raw pattern notes wrapped below in
+// GOTHIC_14_BOLD -- the expanded form of a SOUND row, shown only while
+// it's the selected row (see pattern_select_cell_height above). Notes are
+// deliberately NOT shown on the collapsed line at all any more (on
+// request) -- only while actively navigated onto.
+static void draw_label_and_notes_row(GContext *ctx, GRect b, const char *label, const char *notes) {
+  GFont lf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+  GRect label_row = GRect(6, 2, b.size.w - 12, 26);
+  graphics_draw_text(ctx, label, lf, label_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  GFont nf = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+  GRect notes_row = GRect(6, 2 + 26 + 2, b.size.w - 12, b.size.h - (2 + 26 + 2));
+  graphics_draw_text(ctx, notes, nf, notes_row, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+}
 
 static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   const Alarm *a = &s_alarms[s_edit_idx];
   GRect b = layer_get_bounds(cell_layer);
   int row = cell_index->row;
+
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    bool is_off = (row == 0);
+    bool is_custom = (row == PATTERN_SELECT_VIBE_CUSTOM_ROW);
+    int preset_idx = (!is_off && !is_custom) ? row - 1 : -1;
+    const char *label;
+    char value[64] = "";
+    if (is_off) {
+      label = "Off";
+    } else if (preset_idx >= 0) {
+      label = VIBE_PRESETS[preset_idx].label;
+      pattern_preset_preview(VIBE_PRESETS[preset_idx].pattern, value, sizeof(value));
+    } else {
+      label = "Custom";
+    }
+    if (is_custom) {
+      if (s_pattern_select_show_invalid) {
+        snprintf(value, sizeof(value), "invalid");
+      } else if (a->vibe_pattern_len > 0) {
+        ac_vibe_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
+      }
+    }
+    draw_key_value_row(ctx, b, label, value);
+    return;
+  }
+
+  // PATTERN_SELECT_SOUND: Off, presets..., <tones...>, "+ Custom tone".
   bool is_off = (row == 0);
-  bool is_custom = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? (row == PATTERN_SELECT_VIBE_CUSTOM_ROW)
-                                                                   : (row == PATTERN_SELECT_SOUND_CUSTOM_ROW);
-  // Row 0 is always "Off" (the merged Vibration/Sound toggle); every
-  // preset/Custom row is shifted one down from its raw preset index to
-  // make room for it.
-  int preset_idx = (!is_off && !is_custom) ? row - 1 : -1;
-  const char *label;
+  int new_row = pattern_select_sound_new_row();
+  bool is_new = (row == new_row);
+  int preset_idx = (!is_off && row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
+  int tone_idx = (preset_idx < 0 && !is_off && !is_new) ? row - PATTERN_SELECT_SOUND_TONES_BASE : -1;
+
+  const char *label = "";
   char value[64] = "";
+  char pattern_text[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
+  bool has_pattern = false;
   if (is_off) {
     label = "Off";
-  } else if (preset_idx >= 0 && s_pattern_select_kind == PATTERN_SELECT_VIBE) {
-    label = VIBE_PRESETS[preset_idx].label;
-    pattern_preset_preview(VIBE_PRESETS[preset_idx].pattern, value, sizeof(value));
+  } else if (is_new) {
+    label = "+ Custom tone";
   } else if (preset_idx >= 0) {
     label = SOUND_PRESETS[preset_idx].label;
-    pattern_preset_preview(SOUND_PRESETS[preset_idx].pattern, value, sizeof(value));
+    strncpy(pattern_text, SOUND_PRESETS[preset_idx].pattern, sizeof(pattern_text) - 1);
+    has_pattern = true;
+  } else if (tone_idx >= 0 && tone_idx < s_tone_count) {
+    label = s_tones[tone_idx].name;
+    ac_sound_pattern_format(pattern_text, sizeof(pattern_text), s_tones[tone_idx].pattern,
+                            s_tones[tone_idx].pattern_note, s_tones[tone_idx].pattern_len);
+    has_pattern = true;
+    snprintf(value, sizeof(value), "C");   // the one collapsed-line cue distinguishing a custom tone from a preset
+  }
+
+  if (has_pattern && pattern_select_row_is_selected(s_pattern_select_menu, row)) {
+    draw_label_and_notes_row(ctx, b, label, pattern_text);
   } else {
-    label = "Custom";
+    draw_key_value_row(ctx, b, label, value);
   }
-  // The SOUND Custom row is a gateway to the "Custom tones" list now (see
-  // pattern_select_select) rather than a single pattern of its own, so it
-  // shows no value at all -- EXCEPT when the alarm currently has a library
-  // tone linked (sound_pattern_kind==2), in which case it shows that
-  // tone's name (right-aligned, same as every other row's value), so it's
-  // visible at a glance which tone is active without having to drill in.
-  // VIBE's Custom row still opens the keyboard directly and has a current
-  // pattern (or "invalid") to show instead.
-  if (is_custom && s_pattern_select_kind == PATTERN_SELECT_VIBE) {
-    if (s_pattern_select_show_invalid) {
-      snprintf(value, sizeof(value), "invalid");
-    } else if (a->vibe_pattern_len > 0) {
-      ac_vibe_pattern_format(value, sizeof(value), a->vibe_pattern_custom, a->vibe_pattern_len);
-    }
-  } else if (is_custom && a->sound_pattern_kind == 2) {
-    int ti = find_tone_by_id(a->custom_tone_id);
-    if (ti >= 0) { snprintf(value, sizeof(value), "%s", s_tones[ti].name); }
-  }
-  draw_key_value_row(ctx, b, label, value);
 }
 
-// Builds the pattern text a given (non-"Off") PATTERN_SELECT_SOUND row
+// Builds the pattern text a given (non-"Off") PATTERN_SELECT_VIBE row
 // represents -- a preset's fixed text, or the alarm's own currently-stored
 // custom text for the Custom row -- shared by pattern_select_select (to
 // pre-fill the keyboard) and the preview-on-navigate helper below.
-static void pattern_select_sound_row_text(const Alarm *a, int row, char *out, size_t out_size) {
-  out[0] = '\0';
-  if (row == PATTERN_SELECT_SOUND_CUSTOM_ROW) {
-    if (a->sound_pattern_len > 0) {
-      ac_sound_pattern_format(out, out_size, a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len);
-    }
-  } else {
-    strncpy(out, SOUND_PRESETS[row - 1].pattern, out_size - 1);
-  }
-}
-
-// pattern_select_sound_row_text's vibe equivalent.
+// (SOUND's equivalent is pattern_select_sound_row_pattern, above, shared
+// more widely since SOUND rows also need it for the expand-on-navigate
+// notes line.)
 static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, size_t out_size) {
   out[0] = '\0';
   if (row == PATTERN_SELECT_VIBE_CUSTOM_ROW) {
@@ -3278,24 +3371,14 @@ static void pattern_select_preview_current_row(void) {
     alarm_preview_vibe_pattern(text);
     return;
   }
-  // The SOUND Custom row is a gateway to the "Custom tones" list, not one
-  // specific pattern of its own -- EXCEPT when the alarm currently has a
-  // library tone linked (sound_pattern_kind==2), in which case navigating
-  // onto it should preview THAT tone, same as landing on any other row.
-  if (idx.row == PATTERN_SELECT_SOUND_CUSTOM_ROW) {
-    const Alarm *a = &s_alarms[s_edit_idx];
-    if (a->sound_pattern_kind != 2) { return; }
-    int ti = find_tone_by_id(a->custom_tone_id);
-    if (ti < 0) { return; }
+  // Every SOUND row with a pattern of its own (a preset or a tone --
+  // "Off"/"+ Custom tone" have none) previews it, unconditionally now --
+  // there's no more single "Custom" gateway row needing the old special
+  // case, since every tone is its own row here.
 #if PBL_SPEAKER
-    ac_sound_pattern_format(text, sizeof(text), s_tones[ti].pattern, s_tones[ti].pattern_note, s_tones[ti].pattern_len);
+  if (pattern_select_sound_row_pattern(idx.row, text, sizeof(text))) {
     alarm_preview_sound_pattern(text);
-#endif
-    return;
   }
-#if PBL_SPEAKER
-  pattern_select_sound_row_text(&s_alarms[s_edit_idx], idx.row, text, sizeof(text));
-  alarm_preview_sound_pattern(text);
 #endif
 }
 
@@ -3321,13 +3404,24 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
     return;
   }
 
-  // The SOUND Custom row is a gateway to the shared "Custom tones" list --
-  // pushed on TOP of this picker (not popped), unlike every other row
-  // below which replaces this screen with the keyboard. BACK from the list
-  // naturally returns here.
-  if (s_pattern_select_kind == PATTERN_SELECT_SOUND && row == PATTERN_SELECT_SOUND_CUSTOM_ROW) {
-    custom_tones_list_window_push();
-    return;
+  if (s_pattern_select_kind == PATTERN_SELECT_SOUND) {
+    int tones_base = PATTERN_SELECT_SOUND_TONES_BASE;
+    int new_row = pattern_select_sound_new_row();
+    // An existing tone row opens the "Custom tone" singular screen
+    // directly -- pushed ON TOP of this picker (not popped), so BACK
+    // naturally returns here. No more intermediate "Custom tones" list.
+    if (row >= tones_base && row < new_row) {
+      custom_tone_window_push(s_tones[row - tones_base].id);
+      return;
+    }
+    // "+ Custom tone" starts the 2-step creation wizard, also pushed on
+    // top (matching an existing tone row's own push-not-pop semantics --
+    // both paths end up at the same singular screen, same stack depth).
+    if (row == new_row) {
+      memset(&s_new_tone_draft, 0, sizeof(s_new_tone_draft));
+      multitap_keyboard_window_push_pattern(new_tone_pattern_done, NULL, PATTERN_KEYBOARD_MAX_LEN, NULL, true);
+      return;
+    }
   }
 
   // Every remaining row (a preset, or vibe's Custom) pops straight into the
@@ -3341,7 +3435,7 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
   if (is_vibe) {
     pattern_select_vibe_row_text(a, row, initial, sizeof(initial));
   } else {
-    pattern_select_sound_row_text(a, row, initial, sizeof(initial));
+    pattern_select_sound_row_pattern(row, initial, sizeof(initial));
   }
   window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
   multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
@@ -3434,13 +3528,15 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
     } else if (a->sound_pattern_kind == 0) {
       row = 1;   // "Triple (default)"
     } else if (a->sound_pattern_kind == 2) {
-      // Library reference -- there's no per-tone row in this picker any
-      // more (tones live one level deeper, in the Custom-tones list), so
-      // land on the Custom row same as an unrecognized inline pattern would.
-      row = PATTERN_SELECT_SOUND_CUSTOM_ROW;
+      // Library reference -- land directly on that tone's own inline row
+      // (falling back to "+ Custom tone" if the id is somehow stale --
+      // shouldn't happen, revert_alarms_using_tone is what's supposed to
+      // prevent it).
+      int ti = find_tone_by_id(a->custom_tone_id);
+      row = (ti >= 0) ? PATTERN_SELECT_SOUND_TONES_BASE + ti : pattern_select_sound_new_row();
     } else {
       int match = sound_preset_match(a);
-      row = (match >= 0) ? match + 1 : PATTERN_SELECT_SOUND_CUSTOM_ROW;
+      row = (match >= 0) ? match + 1 : pattern_select_sound_new_row();
     }
   }
   if (s_pattern_select_menu) {
@@ -3491,45 +3587,14 @@ static void pattern_custom_done(const char *text, void *ctx) {
 
 // ================================= Custom-tone library UI =================================
 //
-// Reached via the Tone picker's SOUND "Custom" row (pattern_select_select
-// above), pushed ON TOP of it (not popping it) so BACK naturally unwinds
-// one level at a time: "Custom tones" (every saved tone + "+ New tone")
-// -> "Custom tone" (Apply/Tone/Name/Delete) for either an existing tone or
-// one just created by the "+ New tone" wizard. Both windows share
-// pattern_select_window's header+MenuLayer shell shape (no bottom bar,
-// custom click config so BACK is a plain pop -- nothing here is staged;
-// every edit writes straight through to s_tones immediately).
-
-// ---- "Custom tones" list ----
-
-static Window *s_tones_list_window;
-static MenuLayer *s_tones_list_menu;
-static Layer *s_tones_list_header;
-#define TONES_LIST_HEADER_H 30
-
-static uint16_t tones_list_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
-  return (uint16_t)(s_tone_count + 1);   // + trailing "+ New tone" row
-}
-static int16_t tones_list_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
-
-static void tones_list_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
-  GRect b = layer_get_bounds(cell_layer);
-  int row = cell_index->row;
-  if (row == s_tone_count) {
-    draw_key_value_row(ctx, b, "+ New tone", "");
-    return;
-  }
-  char pattern_text[PATTERN_KEYBOARD_MAX_LEN + 1];
-  ac_sound_pattern_format(pattern_text, sizeof(pattern_text), s_tones[row].pattern,
-                          s_tones[row].pattern_note, s_tones[row].pattern_len);
-  char value[64];
-  pattern_preset_preview(pattern_text, value, sizeof(value));
-  draw_key_value_row(ctx, b, s_tones[row].name, value);
-}
-
-static void new_tone_pattern_done(const char *text, void *ctx);
-static void new_tone_name_done(const char *text, void *ctx);
-static CustomTone s_new_tone_draft;   // staged between the "+ New tone" wizard's two steps
+// Custom tones are listed directly inline in the Tone picker now (below the
+// presets, see pattern_select_draw_row/select below) -- there's no separate
+// "Custom tones" list window any more (there used to be one; removed on
+// request to cut a level of navigation depth). Selecting an existing tone
+// row pushes the "Custom tone" singular screen below (Apply/Tone/Name/
+// Delete) directly, ON TOP of the picker (not popping it) so BACK naturally
+// returns to it. The picker's own shell (header+MenuLayer, no bottom bar,
+// custom click config so BACK is a plain pop) is unaffected.
 
 // multitap_keyboard_window's own push functions guard against a second
 // keyboard with `if (s_window) return;` (a single reused static instance) --
@@ -3584,20 +3649,10 @@ static void push_name_keyboard_deferred(MultitapKeyboardResultHandler handler, c
   app_timer_register(1, deferred_kb_push_cb, NULL);
 }
 
-static void tones_list_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
-  int row = cell_index->row;
-  if (row == s_tone_count) {
-    memset(&s_new_tone_draft, 0, sizeof(s_new_tone_draft));
-    multitap_keyboard_window_push_pattern(new_tone_pattern_done, NULL, PATTERN_KEYBOARD_MAX_LEN, NULL, true);
-    return;
-  }
-  custom_tone_window_push(s_tones[row].id);
-}
-
-// "+ New tone" step 1: the pattern keyboard. NULL text = BACK/cancel,
+// "+ Custom tone" step 1: the pattern keyboard. NULL text = BACK/cancel,
 // aborting the whole wizard outright (same "any BACK aborts the flow"
 // convention the "+ New alarm" wizard already uses) -- nothing is created,
-// the list is already back on top. An unparseable pattern re-shows the
+// the picker is already back on top. An unparseable pattern re-shows the
 // same keyboard with the invalid text still in it rather than a separate
 // error screen, since the user is looking straight at what they typed.
 static void new_tone_pattern_done(const char *text, void *ctx) {
@@ -3613,8 +3668,8 @@ static void new_tone_pattern_done(const char *text, void *ctx) {
   push_name_keyboard_deferred(new_tone_name_done, "");
 }
 
-// "+ New tone" step 2: the name keyboard. NULL text = abort the whole
-// wizard (discard s_new_tone_draft, list stays on top). An empty name
+// "+ Custom tone" step 2: the name keyboard. NULL text = abort the whole
+// wizard (discard s_new_tone_draft, picker stays on top). An empty name
 // re-shows the same keyboard -- a saved tone always has a name.
 static void new_tone_name_done(const char *text, void *ctx) {
   if (!text) { return; }
@@ -3622,93 +3677,13 @@ static void new_tone_name_done(const char *text, void *ctx) {
     push_name_keyboard_deferred(new_tone_name_done, text);
     return;
   }
-  if (s_tone_count >= MAX_CUSTOM_TONES) { return; }   // rare edge case, silently drop back to the list
+  if (s_tone_count >= MAX_CUSTOM_TONES) { return; }   // rare edge case, silently drop back to the picker
   strncpy(s_new_tone_draft.name, text, NAME_LEN);
   s_new_tone_draft.name[NAME_LEN] = '\0';
   s_new_tone_draft.id = store_alloc_tone_id();
   s_tones[s_tone_count++] = s_new_tone_draft;
   persist_tones();
   custom_tone_window_push(s_new_tone_draft.id);
-}
-
-// Plays a one-off preview of whichever tone row is currently highlighted --
-// same "preview as you browse" treatment the Tone/Vibration pickers give
-// their own rows. Skipped for the trailing "+ New tone" row (not a tone).
-static void tones_list_preview_current_row(void) {
-#if PBL_SPEAKER
-  if (!s_tones_list_menu) { return; }
-  MenuIndex idx = menu_layer_get_selected_index(s_tones_list_menu);
-  if (idx.row >= s_tone_count) { return; }
-  char text[PATTERN_KEYBOARD_MAX_LEN + 1];
-  ac_sound_pattern_format(text, sizeof(text), s_tones[idx.row].pattern,
-                          s_tones[idx.row].pattern_note, s_tones[idx.row].pattern_len);
-  alarm_preview_sound_pattern(text);
-#endif
-}
-
-static void tones_list_select_click(ClickRecognizerRef r, void *ctx) {
-  MenuIndex idx = menu_layer_get_selected_index(s_tones_list_menu);
-  tones_list_select(s_tones_list_menu, &idx, ctx);
-}
-static void tones_list_up_click(ClickRecognizerRef r, void *ctx) {
-  menu_layer_set_selected_next(s_tones_list_menu, true, MenuRowAlignCenter, true);
-  tones_list_preview_current_row();
-}
-static void tones_list_down_click(ClickRecognizerRef r, void *ctx) {
-  menu_layer_set_selected_next(s_tones_list_menu, false, MenuRowAlignCenter, true);
-  tones_list_preview_current_row();
-}
-static void tones_list_back(ClickRecognizerRef r, void *ctx) {
-  window_stack_pop(true);
-}
-static void tones_list_click_config(void *ctx) {
-  window_single_click_subscribe(BUTTON_ID_SELECT, tones_list_select_click);
-  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, tones_list_up_click);
-  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, tones_list_down_click);
-  window_single_click_subscribe(BUTTON_ID_BACK, tones_list_back);
-}
-
-static void tones_list_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Custom tones", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
-static void tones_list_window_load(Window *w) {
-  Layer *root = window_get_root_layer(w);
-  GRect bounds = layer_get_bounds(root);
-  s_tones_list_header = layer_create(GRect(0, 0, bounds.size.w, TONES_LIST_HEADER_H));
-  layer_set_update_proc(s_tones_list_header, tones_list_header_update_proc);
-  layer_add_child(root, s_tones_list_header);
-  GRect menu_bounds = GRect(0, TONES_LIST_HEADER_H, bounds.size.w, bounds.size.h - TONES_LIST_HEADER_H);
-  s_tones_list_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_tones_list_menu, NULL, (MenuLayerCallbacks){
-    .get_num_rows = tones_list_num_rows, .get_cell_height = tones_list_cell_height,
-    .draw_row = tones_list_draw_row, .select_click = tones_list_select });
-  menu_layer_set_normal_colors(s_tones_list_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_tones_list_menu, GColorBlack, GColorWhite);
-  layer_add_child(root, menu_layer_get_layer(s_tones_list_menu));
-  window_set_click_config_provider(w, tones_list_click_config);
-}
-static void tones_list_window_unload(Window *w) {
-  menu_layer_destroy(s_tones_list_menu); s_tones_list_menu = NULL;
-  layer_destroy(s_tones_list_header); s_tones_list_header = NULL;
-}
-
-static void custom_tones_list_window_push(void) {
-  if (!s_tones_list_window) {
-    s_tones_list_window = window_create();
-    window_set_window_handlers(s_tones_list_window, (WindowHandlers){
-      .load = tones_list_window_load, .unload = tones_list_window_unload });
-  }
-  window_stack_push(s_tones_list_window, true);
-  if (s_tones_list_menu) {
-    menu_layer_reload_data(s_tones_list_menu);
-    menu_layer_set_selected_index(s_tones_list_menu, (MenuIndex){ 0, 0 }, MenuRowAlignTop, false);
-  }
 }
 
 // ---- "Custom tone" singular screen: Apply / Tone / Name / Delete ----
@@ -3772,7 +3747,6 @@ static void custom_tone_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) 
         persist_all();
       }
       window_stack_pop(true);   // this screen
-      window_stack_pop(true);   // the "Custom tones" list
       window_stack_pop(true);   // the Tone picker -- lands back on Signal
       if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
       break;
@@ -3811,6 +3785,7 @@ static void custom_tone_tone_done(const char *text, void *ctx) {
   memcpy(t->pattern_note, notes, len);
   persist_tones();
   if (s_custom_tone_menu) { menu_layer_reload_data(s_custom_tone_menu); }
+  if (s_pattern_select_menu) { menu_layer_reload_data(s_pattern_select_menu); }
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
 }
 
@@ -3826,13 +3801,17 @@ static void custom_tone_name_done(const char *text, void *ctx) {
   t->name[NAME_LEN] = '\0';
   persist_tones();
   if (s_custom_tone_menu) { menu_layer_reload_data(s_custom_tone_menu); }
+  if (s_pattern_select_menu) { menu_layer_reload_data(s_pattern_select_menu); }
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
 }
 
 // Removes the tone entirely and reverts every alarm referencing it to
 // Default (revert_alarms_using_tone), then pops back ONE level to the
-// "Custom tones" list (not all the way to Signal like Apply -- deleting is
-// "keep managing the library", applying is "I'm done").
+// Tone picker itself now (not a separate list -- deleting is "keep
+// managing the library", applying is "I'm done", so it stays one level up
+// from Apply's full pop-to-Signal either way). A row just disappeared, so
+// the picker's selection is reset to "Off" (row 0) rather than risk
+// pointing past the new, shorter row count.
 static void custom_tone_on_delete_choice(int choice, void *ctx) {
   if (choice != 0) { return; }   // 0 = "Delete", 1 = "Cancel"
   if (s_custom_tone_idx < 0 || s_custom_tone_idx >= s_tone_count) { return; }
@@ -3840,8 +3819,11 @@ static void custom_tone_on_delete_choice(int choice, void *ctx) {
   remove_tone_at(s_custom_tone_idx);
   persist_tones();
   revert_alarms_using_tone(id);
-  window_stack_pop(true);   // this screen
-  if (s_tones_list_menu) { menu_layer_reload_data(s_tones_list_menu); }
+  window_stack_pop(true);   // this screen -- back to the Tone picker
+  if (s_pattern_select_menu) {
+    menu_layer_reload_data(s_pattern_select_menu);
+    menu_layer_set_selected_index(s_pattern_select_menu, (MenuIndex){ 0, 0 }, MenuRowAlignTop, false);
+  }
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
 }
 
