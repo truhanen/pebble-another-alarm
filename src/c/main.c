@@ -744,6 +744,7 @@ static bool show_next_pending_alarm(void) {
 // ================================= ring screen =================================
 
 #define ALARM_BUZZ_INTERVAL_MS 4000
+#define ALARM_BUZZ_MIN_GAP_MS  2000   // silent gap enforced after a pattern longer than ALARM_BUZZ_INTERVAL_MS finishes, before the next cycle starts
 #define ALARM_BUZZ_MAX_S       600
 #define ALARM_AUTO_DISMISS_MS 2000   // "a couple seconds"
 #define ALARM_VOLUME_STEP 10   // increasing_volume: volume units added per buzz cycle (after the initial 0->1->5 warm-up)
@@ -786,21 +787,9 @@ static const SoundPreset SOUND_PRESETS[] = {
   { "Double", "2C 2- 2C" },
   { "Triple fast", "1C 1- 1C 1- 1C" },
   { "Analog bell", "1C 1G 1C 1G 1C 1G 1C 1G" },
-  { "Mary's Lamb", "2E 2D 2C 2D 2E 2E 4E" },
-  { "Happy Birthday", "1C 1- 1C 1- 2D 1- 2C 1- 2F 1- 4E" },
-  // The opening motif, transposed onto this grammar's natural-notes-only
-  // (no sharp/flat) scale -- Eb/Bb round down to D/A. Includes the real
-  // tune's own quarter-rests (after the opening G-G-G and after each G that
-  // follows a D-A pair) and D held longer than the quick A -- an earlier,
-  // uniform-duration/no-rest version didn't actually read as the tune. The
-  // opening G-G-G is itself staccato (a short break between each punch,
-  // not one blurred tone) -- also on request, after the first no-rest-
-  // anywhere pass still didn't read as the tune's martial rhythm there
-  // either. Durations are double the "natural" transcription (1/2/4 ->
-  // 2/4/8) and every note is shifted an octave down (","), on request; the
-  // final sustained G is already at the grammar's max duration digit (8)
-  // so it isn't doubled again on top of that.
-  { "Imperial March", "4G, 1- 4G, 1- 4G, 4- 8D, 2A, 4G, 4- 8D, 2A, 8G," },
+  { "Celebration", "3C 1- 2C 6D 6C 6F 6E" },
+  { "Lullaby", "8D 4F 2E 2D 4E 4A 6A," },
+  { "March", "4A,,, 2- 4A,,, 2- 4A,,, 2- 3F,,, 2- 1C,, 4A,,, 2- 3F,,, 2- 1C,, 6A,,," },
 };
 #define SOUND_PRESET_COUNT (int)(sizeof(SOUND_PRESETS) / sizeof(SOUND_PRESETS[0]))
 
@@ -850,25 +839,28 @@ static int vibe_preset_match(const Alarm *a) {
   return -1;
 }
 
-// Writes at most the first 2 space-separated tokens of `pattern` into
-// `out`, appending "..." if there were more -- the Tone picker shows this
-// instead of a preset's full pattern text, which got cluttered once
-// presets started running to a dozen-plus segments (e.g. SOS).
+// Writes at most the first 6 space-separated tokens of `pattern` into
+// `out`, appending "..." if there were more -- the Vibration picker shows
+// this instead of a preset's full pattern text, which got cluttered once
+// presets started running to a dozen-plus segments (e.g. SOS). (Sound's
+// presets/tones don't use this any more -- they show no preview at all
+// when collapsed, expanding to their full pattern text on navigate instead;
+// this cap only still applies to Vibration, which never expands.)
 static void pattern_preset_preview(const char *pattern, char *out, size_t out_size) {
   const char *p = pattern;
-  const char *end_of_second = pattern;
+  const char *end_of_last = pattern;
   int tokens = 0;
-  for (int i = 0; i < 2 && *p; i++) {
+  for (int i = 0; i < 6 && *p; i++) {
     while (*p == ' ') { p++; }
     if (!*p) { break; }
     while (*p && *p != ' ') { p++; }
-    end_of_second = p;
+    end_of_last = p;
     tokens++;
   }
-  const char *rest = end_of_second;
+  const char *rest = end_of_last;
   while (*rest == ' ') { rest++; }
   bool more = (*rest != '\0');
-  size_t len = (size_t)(end_of_second - pattern);
+  size_t len = (size_t)(end_of_last - pattern);
   if (len > out_size - 1) { len = out_size - 1; }
   memcpy(out, pattern, len);
   out[len] = '\0';
@@ -944,6 +936,40 @@ static void alarm_vibrate(const Alarm *a) {
     return;   // unreachable: every VIBE_PRESETS entry is a fixed, valid literal
   }
   alarm_play_vibe_pattern(parsed, len);
+}
+
+// Sums a pattern's segment durations (ms) regardless of the break bit --
+// on-beat and break segments both consume their encoded digit's duration,
+// so this one loop covers both grammars (sound's flags[]/vibe's raw
+// pattern[] use the same bit7=break/bits0-6=duration encoding). Shared by
+// alarm_vibe_duration_ms/alarm_sound_duration_ms below, which each add
+// their own channel's fixed lead-in on top -- see alarm_play_vibe_pattern/
+// alarm_play_sound_pattern for why that lead-in is always exactly 100ms
+// regardless of the pattern's own content.
+static uint32_t pattern_duration_ms(const uint8_t *flags, uint8_t len) {
+  uint32_t total = 0;
+  for (int i = 0; i < len; i++) {
+    total += (uint32_t)(flags[i] & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+  }
+  return total;
+}
+
+// How long alarm_vibrate(a) will actually keep the motor busy for -- used by
+// alarm_buzz_cb to size the gap before the next buzz cycle so a long custom
+// vibe pattern is never cut off mid-playback (see alarm_play_vibe_pattern's
+// own doc comment for why the total is always the pattern's own segment sum
+// plus a flat 100ms, regardless of how those segments get run-length-merged
+// for the SDK's VibePattern). Mirrors alarm_vibrate's own default/custom
+// branching exactly, so "what plays" and "how long it takes" can never
+// disagree.
+static uint32_t alarm_vibe_duration_ms(const Alarm *a) {
+  if (a->vibe_pattern_kind == 1 && a->vibe_pattern_len > 0) {
+    return 100 + pattern_duration_ms(a->vibe_pattern_custom, a->vibe_pattern_len);
+  }
+  uint8_t idx = (a->vibe_pattern < VIBE_PRESET_COUNT) ? a->vibe_pattern : 0;
+  uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_vibe_pattern_parse(VIBE_PRESETS[idx].pattern, AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) { return 0; }
+  return 100 + pattern_duration_ms(parsed, len);
 }
 
 // Builds one SpeakerNote per pattern segment: a break plays as silence
@@ -1031,6 +1057,26 @@ static void alarm_play_audio(const Alarm *a, uint8_t volume) {
   alarm_play_sound_pattern(flags, note_idx, len, volume);
 }
 
+// alarm_vibe_duration_ms's sound-side counterpart -- mirrors alarm_play_
+// audio()'s own default/custom/tone-library branching exactly (notes aren't
+// needed for a duration, only flags/len), so "what plays" and "how long it
+// takes" can never disagree. The lead-in is always 100ms regardless of
+// pattern content, matching alarm_play_sound_pattern's own fixed silent note.
+static uint32_t alarm_sound_duration_ms(const Alarm *a) {
+  if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
+    return 100 + pattern_duration_ms(a->sound_pattern, a->sound_pattern_len);
+  }
+  if (a->sound_pattern_kind == 2) {
+    int ti = find_tone_by_id(a->custom_tone_id);
+    if (ti >= 0 && s_tones[ti].pattern_len > 0) {
+      return 100 + pattern_duration_ms(s_tones[ti].pattern, s_tones[ti].pattern_len);
+    }
+  }
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], note_idx[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  if (!ac_sound_pattern_parse(SOUND_PRESETS[0].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) { return 0; }
+  return 100 + pattern_duration_ms(flags, len);
+}
+
 // Plays a raw pattern string once, for the Tone picker's preview-on-select
 // (pattern_select_select) -- parses on the fly rather than needing a stored
 // Alarm's fields, since a preview can be of a preset that isn't applied yet.
@@ -1072,11 +1118,63 @@ static uint8_t alarm_current_volume(const Alarm *a) {
 static void alarm_buzz_cb(void *ctx) {
   s_alarm_buzz_timer = NULL;
   if (now_s() - s_alarm_buzz_start_s >= ALARM_BUZZ_MAX_S) { return; }
+  uint32_t next_delay_ms = ALARM_BUZZ_INTERVAL_MS;
   if (s_alarm_idx >= 0 && s_alarm_idx < s_count) {
-    if (s_alarms[s_alarm_idx].vibration_enabled) { alarm_vibrate(&s_alarms[s_alarm_idx]); }
+    const Alarm *a = &s_alarms[s_alarm_idx];
+    // A custom vibe/sound pattern can run longer than the classic
+    // ALARM_BUZZ_INTERVAL_MS cadence assumes (e.g. a long Tone preset).
+    // vibes_cancel()/speaker_stop() (kept below as a defensive safety net --
+    // see their own comment) used to be the only guard against that, but
+    // unconditionally firing every ALARM_BUZZ_INTERVAL_MS meant a pattern
+    // that ran even slightly past 4s got its tail clipped by the *next*
+    // cycle's own cancel call, sounding like it aborted early. Instead,
+    // size THIS cycle's own delay to whichever channel's pattern takes
+    // longer (both, if both are enabled) plus a fixed minimum silent gap
+    // (ALARM_BUZZ_MIN_GAP_MS, at least 2s -- long enough to read as a
+    // deliberate pause between repeats, not just "the next one started
+    // immediately") -- so a short/default pattern still buzzes on the
+    // familiar ~4s cadence (needed_ms comfortably under
+    // ALARM_BUZZ_INTERVAL_MS - ALARM_BUZZ_MIN_GAP_MS), while a long one
+    // gets exactly the runway it needs, plus the same minimum gap, before
+    // the next cycle starts -- never cutting it off mid-playback, and
+    // never leaving back-to-back cycles sounding like one continuous loop.
+    uint32_t needed_ms = 0;
+    if (a->vibration_enabled) {
+      uint32_t d = alarm_vibe_duration_ms(a);
+      if (d > needed_ms) { needed_ms = d; }
+    }
 #if PBL_SPEAKER
-    if (s_alarms[s_alarm_idx].sound_enabled) {
-      alarm_play_audio(&s_alarms[s_alarm_idx], alarm_current_volume(&s_alarms[s_alarm_idx]));
+    // increasing_volume's early cycles (see alarm_current_volume) compute
+    // to volume 0 -- alarm_play_sound_pattern() itself no-ops on that (no
+    // sound actually plays), so counting the tone's full duration here
+    // anyway would pad the gap for a cycle that's silent regardless,
+    // needlessly slowing down the ramp-up. Only factor sound's duration in
+    // when THIS cycle will actually make sound -- computed once and reused
+    // below for the real alarm_play_audio() call, so the two can never
+    // disagree about what "this cycle" means.
+    uint8_t sound_volume = a->sound_enabled ? alarm_current_volume(a) : 0;
+    if (sound_volume > 0 && !speaker_is_muted()) {
+      uint32_t d = alarm_sound_duration_ms(a);
+      if (d > needed_ms) { needed_ms = d; }
+    }
+#endif // PBL_SPEAKER
+    if (needed_ms + ALARM_BUZZ_MIN_GAP_MS > next_delay_ms) {
+      next_delay_ms = needed_ms + ALARM_BUZZ_MIN_GAP_MS;
+    }
+    // Cancels whatever's still playing from a PREVIOUS cycle before
+    // starting this one -- now just a safety net against drift (e.g. a
+    // ramping-volume replay taking marginally longer than its own duration
+    // calc expected) rather than the primary mechanism, since next_delay_ms
+    // above should already have given the previous cycle enough time to
+    // finish naturally.
+    vibes_cancel();
+#if PBL_SPEAKER
+    speaker_stop();
+#endif // PBL_SPEAKER
+    if (a->vibration_enabled) { alarm_vibrate(a); }
+#if PBL_SPEAKER
+    if (a->sound_enabled) {
+      alarm_play_audio(a, sound_volume);
     }
 #endif // PBL_SPEAKER
     // Advances the increasing_volume ramp one step regardless of whether
@@ -1085,7 +1183,7 @@ static void alarm_buzz_cb(void *ctx) {
     // than depending on PBL_SPEAKER or the alarm's own sound_enabled toggle.
     s_alarm_buzz_count++;
   }
-  s_alarm_buzz_timer = app_timer_register(ALARM_BUZZ_INTERVAL_MS, alarm_buzz_cb, NULL);
+  s_alarm_buzz_timer = app_timer_register(next_delay_ms, alarm_buzz_cb, NULL);
 }
 
 static void alarm_buzz_start(void) {
@@ -2918,25 +3016,30 @@ static Layer *s_signal_header;
 #define SIGNAL_ROW_VIBE_PATTERN 0
 #define SIGNAL_ROW_SOUND_PATTERN 1
 #define SIGNAL_ROW_INCREASING_VOLUME 2
-#define SIGNAL_ROW_PATTERN_HELP 3
-#define SIGNAL_ROW_COUNT 4
+#define SIGNAL_ROW_COUNT 3
 
 // ---- pattern_help_window: describes the custom sound/vibe pattern syntax,
 // same shape as cron_help_window (a plain scrollable text screen, no
-// bottom bar -- neither help screen in this app has one) -- shared by both
-// Vibe pattern and Sound pattern's Custom entry, even though sound's
-// grammar additionally requires a note letter on every on-token (vibe has
-// no pitch) -- the text covers both. ----
+// bottom bar -- neither help screen in this app has one). One shared window
+// instance serves both kinds (like pattern_select_window itself) -- on
+// request, each picker (Vibration/Tone) now has its own trailing "Help" row
+// rather than one combined "Pattern/Tone help" row living in the Signal
+// menu, so the header title and text shown here are picked by
+// `s_pattern_help_kind` (set right before push), split into two texts since
+// sound's grammar additionally requires a note letter (and supports octave
+// marks) on every on-token, which is simply inapplicable/confusing to show
+// in the Vibration picker's help. ----
 
 static Window *s_pattern_help_window;
 static ScrollLayer *s_pattern_help_scroll;
 static TextLayer *s_pattern_help_text;
 static Layer *s_pattern_help_header;
+static PatternSelectKind s_pattern_help_kind;
 
 #define PATTERN_HELP_HEADER_H 30
 
-static const char *const PATTERN_HELP_TEXT =
-  "A custom pattern is a list "
+static const char *const PATTERN_HELP_TEXT_VIBE =
+  "A vibration pattern is a list "
   "of on-beats and breaks, "
   "separated by spaces.\n"
   "\n"
@@ -2944,44 +3047,61 @@ static const char *const PATTERN_HELP_TEXT =
   "digit: 1-8 -- the number of "
   "100ms units (1=100ms, "
   "2=200ms, ... 8=800ms). A "
-  "bare digit "
-  "means \"on\" for vibration; "
-  "for sound it must be "
-  "followed by a note letter "
-  "(C D E F G A B). A digit "
-  "followed by \"-\" is a "
-  "break/pause of that length, "
-  "for either.\n"
-  "\n"
-  "For sound, a note letter can "
-  "have octave marks right "
-  "after it: \"'\" for up, \",\" "
-  "for down (e.g. \"1C'\", "
-  "\"1C,\"). No mark means the "
-  "base octave. \",\" can repeat "
-  "up to 8 times for deeper "
-  "octaves down (e.g. \"1C,,,\"); "
-  "\"'\" only once, up.\n"
+  "bare digit means \"on\". A "
+  "digit followed by \"-\" is a "
+  "break/pause of that length.\n"
   "\n"
   "Breaks are optional -- two "
   "on-beats with nothing "
   "between them play back to "
   "back with no gap.\n"
   "\n"
-  "Example patterns:\n"
+  "Example pattern:\n"
   "\n"
-  "Sound:\n"
-  "\"1C 2D' 1- 1C 2D,\"\n"
-  "\n"
-  "Vibration:\n"
   "\"2 1- 2 1- 2\"";
+
+static const char *const PATTERN_HELP_TEXT_SOUND =
+  "A tone is a list "
+  "of on-beats and breaks, "
+  "separated by spaces.\n"
+  "\n"
+  "Each starts with a duration "
+  "digit: 1-8 -- the number of "
+  "100ms units (1=100ms, "
+  "2=200ms, ... 8=800ms). An "
+  "on-beat must be followed by "
+  "a note letter (C D E F G A "
+  "B). A digit followed by "
+  "\"-\" is a break/pause of "
+  "that length.\n"
+  "\n"
+  "A note letter can have "
+  "octave marks right after "
+  "it: \"'\" for up, \",\" for "
+  "down (e.g. \"1C'\", \"1C,\"). "
+  "No mark means the base "
+  "octave. \",\" can repeat up "
+  "to 8 times for deeper "
+  "octaves down (e.g. "
+  "\"1C,,,\"); \"'\" only once, "
+  "up.\n"
+  "\n"
+  "Breaks are optional -- two "
+  "on-beats with nothing "
+  "between them play back to "
+  "back with no gap.\n"
+  "\n"
+  "Example pattern:\n"
+  "\n"
+  "\"1C 2D' 1- 1C 2D,\"";
 
 static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
   graphics_context_set_fill_color(ctx, GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Pattern/Tone help", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+  const char *title = (s_pattern_help_kind == PATTERN_SELECT_VIBE) ? "Pattern help" : "Tone help";
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                      GRect(4, 2, b.size.w - 8, 26),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
@@ -2989,6 +3109,7 @@ static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
 static void pattern_help_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
+  const char *text = (s_pattern_help_kind == PATTERN_SELECT_VIBE) ? PATTERN_HELP_TEXT_VIBE : PATTERN_HELP_TEXT_SOUND;
 
   s_pattern_help_header = layer_create(GRect(0, 0, bounds.size.w, PATTERN_HELP_HEADER_H));
   layer_set_update_proc(s_pattern_help_header, pattern_help_header_update_proc);
@@ -3001,12 +3122,12 @@ static void pattern_help_window_load(Window *w) {
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
   int text_w = scroll_bounds.size.w - 8;
   GSize sz = graphics_text_layout_get_content_size(
-      PATTERN_HELP_TEXT, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      text, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
 
   s_pattern_help_text = text_layer_create(GRect(4, 4, text_w, sz.h + 8));
   text_layer_set_font(s_pattern_help_text, f);
   text_layer_set_overflow_mode(s_pattern_help_text, GTextOverflowModeWordWrap);
-  text_layer_set_text(s_pattern_help_text, PATTERN_HELP_TEXT);
+  text_layer_set_text(s_pattern_help_text, text);
   scroll_layer_add_child(s_pattern_help_scroll, text_layer_get_layer(s_pattern_help_text));
   scroll_layer_set_content_size(s_pattern_help_scroll, GSize(scroll_bounds.size.w, sz.h + 16));
 
@@ -3019,7 +3140,8 @@ static void pattern_help_window_unload(Window *w) {
   layer_destroy(s_pattern_help_header); s_pattern_help_header = NULL;
 }
 
-static void pattern_help_window_push(void) {
+static void pattern_help_window_push(PatternSelectKind kind) {
+  s_pattern_help_kind = kind;
   if (!s_pattern_help_window) {
     s_pattern_help_window = window_create();
     window_set_window_handlers(s_pattern_help_window, (WindowHandlers){
@@ -3036,8 +3158,9 @@ static bool s_pattern_select_show_invalid;   // transient: last Custom attempt f
 // Row 0 of each picker is "Off" -- the merged former Vibration/Sound
 // on/off toggle (see the SIGNAL_ROW_* comment above) -- so every preset
 // row and the Custom row are shifted one down from their original index.
-#define PATTERN_SELECT_VIBE_ROW_COUNT  (VIBE_PRESET_COUNT + 2)   // Off, presets..., Custom
+#define PATTERN_SELECT_VIBE_ROW_COUNT  (VIBE_PRESET_COUNT + 3)   // Off, presets..., Custom, Help
 #define PATTERN_SELECT_VIBE_CUSTOM_ROW  (VIBE_PRESET_COUNT + 1)
+#define PATTERN_SELECT_VIBE_HELP_ROW  (VIBE_PRESET_COUNT + 2)
 
 // SOUND is laid out as Off, presets..., <one row per s_tones[] entry>,
 // "+ Custom tone" -- unlike vibe, there's no single fixed "Custom" row any
@@ -3045,8 +3168,9 @@ static bool s_pattern_select_show_invalid;   // transient: last Custom attempt f
 // old separate "Custom tones" list window); row count is therefore dynamic
 // (depends on s_tone_count), not a compile-time constant.
 #define PATTERN_SELECT_SOUND_TONES_BASE (SOUND_PRESET_COUNT + 1)   // first tone row's index
-static int pattern_select_sound_row_count(void) { return PATTERN_SELECT_SOUND_TONES_BASE + s_tone_count + 1; }
+static int pattern_select_sound_row_count(void) { return PATTERN_SELECT_SOUND_TONES_BASE + s_tone_count + 2; }   // + "+ Custom tone" + Help
 static int pattern_select_sound_new_row(void) { return PATTERN_SELECT_SOUND_TONES_BASE + s_tone_count; }
+static int pattern_select_sound_help_row(void) { return pattern_select_sound_new_row() + 1; }
 
 static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid);
 
@@ -3131,9 +3255,6 @@ static void signal_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
       key = "Increasing volume";
       snprintf(value, sizeof(value), "%s", a->increasing_volume ? "On" : "Off");
       break;
-    case SIGNAL_ROW_PATTERN_HELP:
-      key = "Pattern/Tone help";   // opens pattern_help_window; no value column
-      break;
   }
   draw_key_value_row(ctx, b, key, value);
 }
@@ -3152,9 +3273,6 @@ static void signal_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       a->increasing_volume = !a->increasing_volume;
       persist_all();
       menu_layer_reload_data(s_signal_menu);
-      break;
-    case SIGNAL_ROW_PATTERN_HELP:
-      pattern_help_window_push();
       break;
   }
 }
@@ -3263,13 +3381,66 @@ static int16_t pattern_select_cell_height(MenuLayer *ml, MenuIndex *idx, void *c
 // it's the selected row (see pattern_select_cell_height above). Notes are
 // deliberately NOT shown on the collapsed line at all any more (on
 // request) -- only while actively navigated onto.
-static void draw_label_and_notes_row(GContext *ctx, GRect b, const char *label, const char *notes) {
+//
+// This row is ALWAYS the currently-selected one (that's the only time it's
+// drawn at all), so it's always meant to render as the highlight box --
+// but MenuLayer's own automatic highlight-color fill (menu_layer_set_
+// highlight_colors) only ever paints a fixed single-row-tall rect, not the
+// taller dynamic height this expanded row actually occupies, leaving the
+// wrapped notes line sitting on the plain white row background below it
+// instead of inside the highlight. Painted manually here instead, filling
+// the cell rect `b` (whatever height pattern_select_cell_height computed),
+// shifted 4px down off both the top and bottom edges (same height, just
+// translated down), with the same colors menu_layer_set_highlight_colors
+// was given, so the highlight background and the visible content can
+// never disagree.
+//
+// `badge`, when non-empty, is the same right-aligned collapsed-line cue
+// draw_key_value_row shows ("Custom", for a tone row) -- it disappears
+// entirely once a row expands unless it's drawn here too, so a selected
+// custom tone would otherwise show its notes with no indication it's a
+// tone rather than a preset. Presets pass an empty badge and get a
+// full-width label line, same as before.
+static void draw_label_and_notes_row(GContext *ctx, GRect b, const char *label, const char *notes, const char *badge) {
+  GRect fill = GRect(b.origin.x, b.origin.y + 4, b.size.w, b.size.h);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, fill, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorWhite);
   GFont lf = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   GRect label_row = GRect(6, 2, b.size.w - 12, 26);
-  graphics_draw_text(ctx, label, lf, label_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  if (badge && badge[0]) {
+    int badge_w = graphics_text_layout_get_content_size(badge, lf, label_row, GTextOverflowModeFill, GTextAlignmentLeft).w;
+    int gap = 8;
+    GRect label_only = label_row;
+    label_only.size.w -= badge_w + gap;
+    graphics_draw_text(ctx, label, lf, label_only, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    GRect badge_row = label_row;
+    badge_row.origin.x += label_row.size.w - badge_w;
+    badge_row.size.w = badge_w;
+    graphics_draw_text(ctx, badge, lf, badge_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  } else {
+    graphics_draw_text(ctx, label, lf, label_row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  }
   GFont nf = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
   GRect notes_row = GRect(6, 2 + 26 + 2, b.size.w - 12, b.size.h - (2 + 26 + 2));
   graphics_draw_text(ctx, notes, nf, notes_row, GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+}
+
+// MenuLayer's own automatic highlight-color fill (menu_layer_set_highlight_
+// colors) paints BEFORE draw_row is invoked, using a fixed row height --
+// not whatever pattern_select_cell_height computed for THIS row -- so it
+// can't be nudged from here for a row whose height varies (see
+// draw_label_and_notes_row's own painting for why that matters). This
+// picker now takes over painting the highlight for every row itself
+// (menu_layer_set_highlight_colors is set to match the normal colors
+// below, i.e. a no-op) so both the expanding and non-expanding rows get
+// pixel-exact, independently controllable placement instead of fighting
+// whatever the automatic fill already committed to first.
+static void pattern_select_paint_highlight_if_selected(GContext *ctx, GRect b, MenuLayer *ml, int row) {
+  if (!pattern_select_row_is_selected(ml, row)) { return; }
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorWhite);
 }
 
 static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
@@ -3279,12 +3450,16 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
   int row = cell_index->row;
 
   if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    pattern_select_paint_highlight_if_selected(ctx, b, s_pattern_select_menu, row);
     bool is_off = (row == 0);
     bool is_custom = (row == PATTERN_SELECT_VIBE_CUSTOM_ROW);
-    int preset_idx = (!is_off && !is_custom) ? row - 1 : -1;
+    bool is_help = (row == PATTERN_SELECT_VIBE_HELP_ROW);
+    int preset_idx = (!is_off && !is_custom && !is_help) ? row - 1 : -1;
     const char *label;
     char value[64] = "";
-    if (is_off) {
+    if (is_help) {
+      label = "Custom pattern help";
+    } else if (is_off) {
       label = "Off";
     } else if (preset_idx >= 0) {
       label = VIBE_PRESETS[preset_idx].label;
@@ -3303,21 +3478,24 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
     return;
   }
 
-  // PATTERN_SELECT_SOUND: Off, presets..., <tones...>, "+ Custom tone".
+  // PATTERN_SELECT_SOUND: Off, presets..., <tones...>, "+ Custom tone", Help.
   bool is_off = (row == 0);
   int new_row = pattern_select_sound_new_row();
   bool is_new = (row == new_row);
-  int preset_idx = (!is_off && row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
-  int tone_idx = (preset_idx < 0 && !is_off && !is_new) ? row - PATTERN_SELECT_SOUND_TONES_BASE : -1;
+  bool is_help = (row == pattern_select_sound_help_row());
+  int preset_idx = (!is_off && !is_new && !is_help && row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
+  int tone_idx = (preset_idx < 0 && !is_off && !is_new && !is_help) ? row - PATTERN_SELECT_SOUND_TONES_BASE : -1;
 
   const char *label = "";
   char value[64] = "";
   char pattern_text[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
   bool has_pattern = false;
-  if (is_off) {
+  if (is_help) {
+    label = "Custom tone help";
+  } else if (is_off) {
     label = "Off";
   } else if (is_new) {
-    label = "+ Custom tone";
+    label = "+ Custom";
   } else if (preset_idx >= 0) {
     label = SOUND_PRESETS[preset_idx].label;
     strncpy(pattern_text, SOUND_PRESETS[preset_idx].pattern, sizeof(pattern_text) - 1);
@@ -3327,12 +3505,17 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
     ac_sound_pattern_format(pattern_text, sizeof(pattern_text), s_tones[tone_idx].pattern,
                             s_tones[tone_idx].pattern_note, s_tones[tone_idx].pattern_len);
     has_pattern = true;
-    snprintf(value, sizeof(value), "C");   // the one collapsed-line cue distinguishing a custom tone from a preset
+    snprintf(value, sizeof(value), "(custom)");   // the one collapsed-line cue distinguishing a custom tone from a preset
   }
 
   if (has_pattern && pattern_select_row_is_selected(s_pattern_select_menu, row)) {
-    draw_label_and_notes_row(ctx, b, label, pattern_text);
+    draw_label_and_notes_row(ctx, b, label, pattern_text, value);
   } else {
+    // "Off"/"+ Custom tone" when selected -- a preset/tone row lands here
+    // too, but only while UNSELECTED (the has_pattern-and-selected branch
+    // above already claims it otherwise), so this call is a safe no-op for
+    // those.
+    pattern_select_paint_highlight_if_selected(ctx, b, s_pattern_select_menu, row);
     draw_key_value_row(ctx, b, label, value);
   }
 }
@@ -3346,6 +3529,9 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
 // notes line.)
 static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, size_t out_size) {
   out[0] = '\0';
+  if (row == PATTERN_SELECT_VIBE_HELP_ROW) {
+    return;   // no pattern of its own -- guards the VIBE_PRESETS[] index below from going out of bounds
+  }
   if (row == PATTERN_SELECT_VIBE_CUSTOM_ROW) {
     if (a->vibe_pattern_len > 0) {
       ac_vibe_pattern_format(out, out_size, a->vibe_pattern_custom, a->vibe_pattern_len);
@@ -3404,7 +3590,45 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
     return;
   }
 
+  // The trailing "Help" row (one per picker, on request -- replacing the
+  // single combined "Pattern/Tone help" row that used to live in the
+  // Signal menu itself) pushes the matching help screen ON TOP, same
+  // push-not-pop convention as a tone row/"+ Custom tone" below, so BACK
+  // naturally returns to the picker.
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE && row == PATTERN_SELECT_VIBE_HELP_ROW) {
+    pattern_help_window_push(PATTERN_SELECT_VIBE);
+    return;
+  }
+
+  // A Vibration preset commits immediately (on request, matching Tone's own
+  // presets below) rather than opening the keyboard to review/tweak first
+  // -- unlike vibe's own Custom row, which still goes through the keyboard
+  // before anything is applied. The audible preview already happened as
+  // this row was navigated to (see pattern_select_preview_current_row), so
+  // by the time Select is pressed the user has already heard what they're
+  // committing to.
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    int preset_idx = (row >= 1 && row <= VIBE_PRESET_COUNT) ? row - 1 : -1;
+    if (preset_idx >= 0) {
+      uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], len;
+      if (ac_vibe_pattern_parse(VIBE_PRESETS[preset_idx].pattern, AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+        a->vibe_pattern_kind = 1;
+        a->vibe_pattern_len = len;
+        memcpy(a->vibe_pattern_custom, parsed, len);
+        a->vibration_enabled = true;
+        persist_all();
+        window_stack_pop(true);   // back to Signal
+        if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
+      }
+      return;
+    }
+  }
+
   if (s_pattern_select_kind == PATTERN_SELECT_SOUND) {
+    if (row == pattern_select_sound_help_row()) {
+      pattern_help_window_push(PATTERN_SELECT_SOUND);
+      return;
+    }
     int tones_base = PATTERN_SELECT_SOUND_TONES_BASE;
     int new_row = pattern_select_sound_new_row();
     // An existing tone row opens the "Custom tone" singular screen
@@ -3422,36 +3646,82 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
       multitap_keyboard_window_push_pattern(new_tone_pattern_done, NULL, PATTERN_KEYBOARD_MAX_LEN, NULL, true);
       return;
     }
+    // A Tone preset commits immediately (on request) rather than opening
+    // the keyboard to review/tweak first -- unlike vibe's own presets
+    // (below) and unlike a tone row, which both still go through an
+    // intermediate step (the keyboard, the Custom-tone screen) before
+    // anything is applied. The audible preview already happened as this
+    // row was navigated to (see pattern_select_preview_current_row), so by
+    // the time Select is pressed the user has already heard what they're
+    // committing to.
+    int preset_idx = (row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
+    if (preset_idx >= 0) {
+      uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+      if (ac_sound_pattern_parse(SOUND_PRESETS[preset_idx].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
+        a->sound_pattern_kind = 1;
+        a->sound_pattern_len = len;
+        memcpy(a->sound_pattern, flags, len);
+        memcpy(a->sound_pattern_note, notes, len);
+        a->sound_enabled = true;
+        persist_all();
+        window_stack_pop(true);   // back to Signal
+        if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
+      }
+      return;
+    }
   }
 
-  // Every remaining row (a preset, or vibe's Custom) pops straight into the
-  // pattern keyboard pre-filled with its associated text, so selecting one
-  // is "start from this template" rather than "apply immediately" -- only
-  // pressing Select in the keyboard (-> pattern_custom_done) actually
-  // commits it. (The audible preview already happened as this row was
-  // navigated to -- see pattern_select_preview_current_row.)
+  // The only row left is vibe's own Custom row -- it still pops straight
+  // into the pattern keyboard pre-filled with its current text, so
+  // reviewing/editing it is "start from what's already there" rather than
+  // "apply immediately" -- only pressing Select in the keyboard
+  // (-> pattern_custom_done) actually commits it. Neither kind's presets
+  // reach here any more (both commit directly, above), and SOUND never
+  // reaches here at all -- every one of its rows (Off, a preset, a tone,
+  // "+ Custom tone") is handled above.
   char initial[PATTERN_KEYBOARD_MAX_LEN + 1];
-  bool is_vibe = (s_pattern_select_kind == PATTERN_SELECT_VIBE);
-  if (is_vibe) {
-    pattern_select_vibe_row_text(a, row, initial, sizeof(initial));
-  } else {
-    pattern_select_sound_row_pattern(row, initial, sizeof(initial));
-  }
+  pattern_select_vibe_row_text(a, row, initial, sizeof(initial));
   window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
   multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
-                                         PATTERN_KEYBOARD_MAX_LEN, NULL, !is_vibe);
+                                         PATTERN_KEYBOARD_MAX_LEN, NULL, false);
 }
 
 static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
   pattern_select_select(s_pattern_select_menu, &idx, ctx);
 }
+// SOUND rows resize on selection (expand-on-navigate, see
+// pattern_select_cell_height) -- MenuLayer caches each row's cell height and
+// only re-queries it on menu_layer_reload_data(), not on a plain selection
+// change, so the move+reload+re-select dance below is needed for both
+// alignment AND scrolling:
+//   1. move the selection first, with NO animation and using the (still
+//      stale) old heights -- we're about to throw this positioning away, it
+//      only needs to land on the right row index.
+//   2. reload_data so the now-selected row's real (possibly taller) height
+//      gets computed. Without this, the highlight rect keeps using the
+//      stale pre-move layout while draw_row always paints the live,
+//      correctly-sized content -- the two visibly disagree, showing the
+//      highlight offset from (or entirely detached from) the row it's
+//      supposed to mark.
+//   3. re-apply the SAME selected index, animated -- reload_data recomputes
+//      heights but never repositions scroll on its own, so without this
+//      step the list stops auto-scrolling entirely once a row's height
+//      changes underneath it. Setting the index again (even though it's
+//      already selected) forces MenuLayer to recompute the scroll offset
+//      against the now-correct heights and animate to it.
 static void pattern_select_up_click(ClickRecognizerRef r, void *ctx) {
-  menu_layer_set_selected_next(s_pattern_select_menu, true, MenuRowAlignCenter, true);
+  menu_layer_set_selected_next(s_pattern_select_menu, true, MenuRowAlignCenter, false);
+  menu_layer_reload_data(s_pattern_select_menu);
+  MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
+  menu_layer_set_selected_index(s_pattern_select_menu, idx, MenuRowAlignCenter, true);
   pattern_select_preview_current_row();
 }
 static void pattern_select_down_click(ClickRecognizerRef r, void *ctx) {
-  menu_layer_set_selected_next(s_pattern_select_menu, false, MenuRowAlignCenter, true);
+  menu_layer_set_selected_next(s_pattern_select_menu, false, MenuRowAlignCenter, false);
+  menu_layer_reload_data(s_pattern_select_menu);
+  MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
+  menu_layer_set_selected_index(s_pattern_select_menu, idx, MenuRowAlignCenter, true);
   pattern_select_preview_current_row();
 }
 // BACK simply pops -- nothing is mutated until a row is actually selected,
@@ -3491,7 +3761,13 @@ static void pattern_select_window_load(Window *w) {
     .get_num_rows = pattern_select_num_rows, .get_cell_height = pattern_select_cell_height,
     .draw_row = pattern_select_draw_row, .select_click = pattern_select_select });
   menu_layer_set_normal_colors(s_pattern_select_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_pattern_select_menu, GColorBlack, GColorWhite);
+  // Highlight colors deliberately match normal colors here (a no-op
+  // overlay) -- pattern_select_draw_row now paints every row's selected
+  // state itself (see pattern_select_paint_highlight_if_selected and
+  // draw_label_and_notes_row), since MenuLayer's own automatic highlight
+  // fill runs before draw_row using a fixed row height, not whatever
+  // pattern_select_cell_height computed for that row.
+  menu_layer_set_highlight_colors(s_pattern_select_menu, GColorWhite, GColorBlack);
   layer_add_child(root, menu_layer_get_layer(s_pattern_select_menu));
   window_set_click_config_provider(w, pattern_select_click_config);
 }
@@ -3540,7 +3816,22 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
     }
   }
   if (s_pattern_select_menu) {
-    menu_layer_set_selected_index(s_pattern_select_menu, (MenuIndex){ 0, row }, MenuRowAlignTop, false);
+    // The menu instance is reused across opens, so its cached cell-height
+    // layout may still reflect whichever row was selected/how many tones
+    // existed last time it was shown. Same move+reload+re-select dance as
+    // pattern_select_up_click/down_click below: select at the (still stale)
+    // old heights, reload so the newly-preselected row's real height (which
+    // depends on that very selection, for SOUND's expand-on-navigate) gets
+    // computed, then re-apply the same index so MenuLayer repositions
+    // scroll against the now-correct heights instead of leaving the
+    // pre-reload scroll offset in place. MenuRowAlignCenter here matches
+    // pattern_select_up_click/down_click's own alignment -- using a
+    // different alignment (e.g. Top) here would land the very same row at a
+    // visibly different scroll offset than navigating to it by hand would.
+    MenuIndex target = (MenuIndex){ 0, row };
+    menu_layer_set_selected_index(s_pattern_select_menu, target, MenuRowAlignCenter, false);
+    menu_layer_reload_data(s_pattern_select_menu);
+    menu_layer_set_selected_index(s_pattern_select_menu, target, MenuRowAlignCenter, false);
   }
   pattern_select_preview_current_row();
 }

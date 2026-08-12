@@ -856,10 +856,13 @@ feature — see git history if curious):
   itemized `MenuLayer` (same bottom-bar-bearing shell as `edit_window`
   itself, plus its own "Signal" header, `signal_header_update_proc`)
   operating on the same `s_edit_idx` alarm. The submenu itself has only
-  **4** rows now — `SIGNAL_ROW_VIBE_PATTERN` ("Vibration"),
-  `SIGNAL_ROW_SOUND_PATTERN` ("Tone"), `SIGNAL_ROW_INCREASING_VOLUME`,
-  `SIGNAL_ROW_PATTERN_HELP` — the standalone Vibration and Sound on/off
-  toggles were **merged into** the Vibration/Tone rows respectively
+  **3** rows now — `SIGNAL_ROW_VIBE_PATTERN` ("Vibration"),
+  `SIGNAL_ROW_SOUND_PATTERN` ("Tone"), `SIGNAL_ROW_INCREASING_VOLUME` (a
+  4th, `SIGNAL_ROW_PATTERN_HELP`, used to live here too — a single combined
+  "Pattern/Tone help" row; removed in favor of each picker having its own
+  trailing "Help" row instead, see `pattern_select_window_push()` below).
+  The standalone Vibration and Sound on/off toggles were **merged into**
+  the Vibration/Tone rows respectively
   (removed as separate rows entirely, each row taking over its toggle's old
   slot: Vibration sits where the old Vibration toggle used to, Tone sits
   where Sound used to) rather than living alongside them;
@@ -883,25 +886,59 @@ feature — see git history if curious):
     set before. `PATTERN_SELECT_VIBE_ROW_COUNT`/`PATTERN_SELECT_SOUND_ROW_COUNT`
     and the `_CUSTOM_ROW` constants all account for this extra leading row
     (every preset/Custom row index is its old index + 1).
-  - **Every row past "Off" — every preset and Custom alike — opens the
-    pattern-mode keyboard pre-filled with that row's text**, rather than
-    any row committing instantly: for vibe, rows 1..`VIBE_PRESET_COUNT` are
-    the `VIBE_PRESETS[]` table, for sound, rows 1..`SOUND_PRESET_COUNT` are
-    the `SOUND_PRESETS[]` table (both below), and the last row of either is
-    Custom. Only pressing Select *inside* the keyboard (`pattern_custom_
-    done`) actually commits — selecting a preset is "start from this
-    template", not "apply immediately" (an earlier version instant-applied
-    the first preset as a special `_kind=0` row 0; that special case is
-    gone for both vibe and sound — selecting it now commits like any other
-    preset, as `_kind=1` with that preset's exact bytes, which `sound_
-    preset_match()`/`vibe_preset_match()` still recognize and display by
-    name). Committing a preset/Custom pattern (`pattern_custom_done`) also
-    sets `vibration_enabled`/`sound_enabled` back to `true` — picking a
-    real pattern implies turning that channel back on, symmetric with
-    "Off" leaving it alone rather than the other way around. `pattern_
-    select_window_push()`'s preselect logic checks `vibration_enabled`/
+  - **Vibe's presets/Custom row still open the pattern-mode keyboard
+    pre-filled with that row's text**, rather than committing instantly:
+    rows 1..`VIBE_PRESET_COUNT` are the `VIBE_PRESETS[]` table (below), and
+    the last row is Custom. Only pressing Select *inside* the keyboard
+    (`pattern_custom_done`) actually commits — selecting a preset is "start
+    from this template", not "apply immediately" (an earlier version
+    instant-applied the first preset as a special `_kind=0` row 0; that
+    special case is gone — selecting it now commits like any other preset,
+    as `_kind=1` with that preset's exact bytes, which `vibe_preset_match()`
+    still recognizes and displays by name). **Sound's presets are the one
+    exception, on request**: selecting a Tone preset row (rows
+    1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]` table, below) commits
+    immediately from `pattern_select_select` itself — `sound_pattern_kind=1`
+    with that preset's exact bytes, `sound_enabled=true`, straight back to
+    Signal — with no keyboard step at all; the audible preview already
+    happened as the row was navigated to (`pattern_select_preview_
+    current_row`), so there's nothing left to review by the time Select is
+    pressed. A sound tone row and "+ Custom tone" are unaffected by this —
+    they still go through their own intermediate step (the Custom-tone
+    screen, the 2-step creation wizard respectively) same as before.
+    Committing a pattern also sets `vibration_enabled`/`sound_enabled` back
+    to `true` — picking a real pattern implies turning that channel back
+    on, symmetric with "Off" leaving it alone rather than the other way
+    around. `pattern_select_window_push()`'s preselect logic checks
+    `vibration_enabled`/
     `sound_enabled` FIRST (landing on row 0 if either is false) before
     falling through to the existing preset-match logic.
+  - **Each picker's trailing row is its own "Help"** —
+    `PATTERN_SELECT_VIBE_HELP_ROW` (`VIBE_PRESET_COUNT + 2`, right after
+    Custom) for Vibration, `pattern_select_sound_help_row()` (right after
+    "+ Custom tone", dynamic like every other SOUND row index since it
+    depends on `s_tone_count`) for Tone — replacing the single combined
+    "Pattern/Tone help" row that used to live in the Signal submenu itself
+    (see that design point above). Selecting it pushes `pattern_help_
+    window_push(kind)` ON TOP of the picker (same push-not-pop convention
+    a tone row/"+ Custom tone" already use), so BACK returns to the picker
+    rather than all the way to Signal. `pattern_help_window` is one shared
+    window instance for both (`s_pattern_help_kind`, set right before push,
+    picks the header title — "Vibration help"/"Tone help" — and which of
+    `PATTERN_HELP_TEXT_VIBE`/`PATTERN_HELP_TEXT_SOUND` to show), split into
+    two texts rather than one combined one now that each has its own
+    screen: vibe's grammar has no pitch, so its text drops sound-only
+    content (the note-letter requirement, octave marks) entirely instead
+    of describing rules that don't apply to what the user is currently
+    looking at.
+  - Both pickers' Help row is excluded from `pattern_select_preview_
+    current_row`/expand-on-navigate/pattern-lookup — `pattern_select_sound_
+    row_pattern()` already returns `false` for any row past "+ Custom
+    tone" (Help sits one further index past it) with no code change
+    needed, but `pattern_select_vibe_row_text()` needed an explicit guard
+    (`row == PATTERN_SELECT_VIBE_HELP_ROW` → empty string) — without it,
+    the row's index would fall through to `VIBE_PRESETS[row - 1]`, reading
+    one past the end of that array.
   - **Navigating to any row (either picker) plays that pattern once as a
     preview** — `pattern_select_preview_current_row()` reads whichever row
     is currently highlighted and, if it's not "Off", builds its text
@@ -925,11 +962,11 @@ feature — see git history if curious):
     above the Signal-menu UI section so `alarm_play_audio()`/`alarm_
     vibrate()` can see them) are the Tone/Vibration preset libraries —
     `{ label, pattern }` pairs. Sound, currently: Triple (default)/Double/
-    Triple fast/Analog bell/Mary's Lamb/Happy Birthday/Imperial March (the
-    last one has no break tokens at all — every segment is an on-beat —
-    unlike every other preset here; its notes are also a diatonic
-    approximation of the real Eb/Bb since this grammar has no sharp/flat
-    support, rounded down to D/A). Vibe, currently: Double/Short/Long.
+    Triple fast/Analog bell/Mary's Lamb/Happy Birthday/Imperial March (this
+    one leans on the multi-octave-marker support above — its low A/F/C
+    notes are each written 2-3 octaves down, e.g. `"4A,,,"`, to land in a
+    register that actually sounds like the tune's real bassline instead of
+    the base octave). Vibe, currently: Double/Short/Long.
     `sound_preset_match()`/`vibe_preset_match()` re-parse each entry and
     `memcmp` it against an alarm's stored pattern bytes to find which
     preset (if any) the alarm's current Custom pattern is byte-identical
@@ -995,10 +1032,12 @@ feature — see git history if curious):
     tones — a deliberate change from the picker's earlier behavior (which
     showed every preset's first 2 tokens as a value column): the only
     thing a collapsed sound row shows besides its label is, for a tone row
-    specifically, a literal **`"C"`** right-aligned (`pattern_select_draw_row`)
-    — a plain marker distinguishing a user tone from a built-in preset, not
-    an abbreviation of anything else on the row. `Off`/"+ Custom tone" show
-    nothing in that column either.
+    specifically, a literal **`"(custom)"`** right-aligned
+    (`pattern_select_draw_row`) — a plain marker distinguishing a user tone
+    from a built-in preset, not an abbreviation of anything else on the
+    row (lowercase and parenthesized deliberately, to read as a quiet tag
+    rather than a second label competing with the tone's own name). `Off`/
+    "+ Custom tone" show nothing in that column either.
   - **Expand-on-navigate**: whichever preset or tone row is the *currently
     selected* row (checked via `pattern_select_row_is_selected()`, wrapping
     `menu_layer_get_selected_index`) expands to two lines instead of one —
@@ -1219,6 +1258,52 @@ feature — see git history if curious):
     leading break (summed durations) if it has one, rather than inserted as
     a redundant separate OFF entry that would violate the array's required
     strict on/off alternation.
+  - **Repeated buzz cycles size their own gap to the actual pattern
+    duration, not a bare fixed interval** — a real bug fix, not a
+    theoretical one: `alarm_buzz_cb()` (`main.c`) used to always schedule
+    the next cycle at a flat `ALARM_BUZZ_INTERVAL_MS` (4s) regardless of
+    how long the currently-playing vibe/sound pattern actually takes. A
+    custom Tone/Vibration pattern can easily run longer than 4s (e.g. the
+    "Imperial March" preset) — when it does, the fixed interval either let
+    the next cycle's playback call queue up behind/overlap the still-
+    running previous one (drifting vibration and sound out of sync with
+    each other more and more every cycle, since the two channels don't
+    necessarily take the same time), or — after a first fix pass added an
+    unconditional `vibes_cancel()`/`speaker_stop()` at the top of every
+    cycle specifically to stop that drift — cut a pattern's own tail off
+    early the instant it ran even slightly past 4s, since the timer fired
+    and force-stopped it before it naturally finished. `alarm_vibe_
+    duration_ms()`/`alarm_sound_duration_ms()` (`main.c`) compute a
+    pattern's real total playback time (mirroring `alarm_vibrate()`/
+    `alarm_play_audio()`'s own default/custom/tone-library branching
+    exactly via the shared `pattern_duration_ms()` helper, plus each
+    channel's own fixed ~100ms lead-in from the workaround above, so "what
+    plays" and "how long it takes" can never disagree) — `alarm_buzz_cb()`
+    now sizes each cycle's own next-timer delay to
+    `max(ALARM_BUZZ_INTERVAL_MS, longer-of-{vibe,sound} duration +
+    ALARM_BUZZ_MIN_GAP_MS)`, so a short/default pattern keeps the familiar
+    ~4s cadence unchanged while a long one gets exactly the runway it
+    needs, plus a fixed minimum silent gap (`ALARM_BUZZ_MIN_GAP_MS`, 2s —
+    long enough to read as a deliberate pause, not "the next one started
+    immediately"), before the next cycle starts. The `vibes_cancel()`/
+    `speaker_stop()` pair from the first fix pass stays in place, now just
+    a defensive safety net against any remaining drift (e.g. a ramping-
+    volume replay taking marginally longer than its own calc expected)
+    rather than the primary mechanism.
+    - **`increasing_volume`'s early cycles don't actually make sound at
+      all** — `alarm_current_volume()` returns 0 for the first couple of
+      buzz cycles (see its own doc comment above), and
+      `alarm_play_sound_pattern()` itself no-ops outright when `volume ==
+      0`. Counting the tone's full duration toward the gap on one of those
+      silent cycles would pad the wait for a sound that was never going to
+      play anyway, slowing down the ramp-up for no reason. `alarm_buzz_cb()`
+      computes THIS cycle's volume once (`sound_volume`, also gating on
+      `speaker_is_muted()` the same way `alarm_play_sound_pattern()` does)
+      and only factors `alarm_sound_duration_ms()` into the gap when that
+      volume is actually nonzero — reusing the same `sound_volume` for the
+      real `alarm_play_audio()` call right below, so the gap calculation
+      and the actual playback can never disagree about whether this cycle
+      makes sound.
 - **The pattern-entry keyboard is a new `multitap_keyboard` mode**
   (`multitap_keyboard_set_pattern_mode()`), a sibling of cron's existing
   numeric mode rather than a restyle of it: both lock the layout to
