@@ -762,21 +762,20 @@ static int64_t s_alarm_buzz_start_s;
 static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
 static AppTimer *s_alarm_auto_dismiss_timer;   // auto_dismiss: dismisses the ring screen on its own
 
-// Ready-made Tone presets -- each is just a Custom pattern the user would
-// otherwise have to type by hand, offered as a one-tap shortcut. Selecting
-// ANY row, including "Classic (default)", opens the pattern keyboard
-// pre-filled with its text instead of committing immediately (see
-// pattern_select_select) -- selecting one is a starting point to review or
-// tweak, not an instant-apply action; only Select in the keyboard actually
-// commits it, always as sound_pattern_kind=1 (Custom) with that preset's
-// exact bytes -- so "Classic (default)" isn't really a distinct storage
-// mode any more, just the first preset in the list, matched back by
-// sound_preset_match() the same as any other. alarm_play_audio()'s
-// sound_pattern_kind==0 fallback (a brand new, never-touched alarm) still
-// reuses SOUND_PRESETS[0].pattern directly, so the two literal sources of
-// "what Classic sounds like" can never drift apart either way. Declared up
-// here (rather than down in the Signal-menu UI section) so
-// alarm_play_audio() can see it.
+// Ready-made Tone presets. Selecting any row commits it immediately (see
+// pattern_select_select's Tone-preset-commit branch) as `sound_pattern_kind
+// = 0` with `sound_preset` set to that row's index into this table -- a
+// plain index, like `vibe_pattern`'s own approach, not a byte copy: an
+// earlier version of this feature stored a verbatim copy of the preset's
+// parsed bytes (`sound_pattern_kind = 1`, "Custom"), but tracing every call
+// site that could still reach that path found none left that weren't
+// simply re-copying one of these same table entries -- so the copy was
+// pure redundancy, removed in favor of this index (see STORE_SCHEMA's own
+// history, alarm_store.h, for the migration story). `alarm_play_audio()`'s
+// `sound_pattern_kind == 0` branch resolves `SOUND_PRESETS[a->sound_preset]`
+// directly, so "what a given preset sounds like" has exactly one source of
+// truth. Declared up here (rather than down in the Signal-menu UI section)
+// so `alarm_play_audio()` can see it.
 typedef struct { const char *label; const char *pattern; } SoundPreset;
 static const SoundPreset SOUND_PRESETS[] = {
   // Steady repeating beep -- the generic "digital alarm clock" sound. No
@@ -808,26 +807,17 @@ static const VibePreset VIBE_PRESETS[] = {
 };
 #define VIBE_PRESET_COUNT (int)(sizeof(VIBE_PRESETS) / sizeof(VIBE_PRESETS[0]))
 
-// Finds which SOUND_PRESETS entry (if any) `a`'s currently-stored custom
-// sound pattern is byte-identical to, by re-parsing each preset's literal
-// text and comparing -- used both to pre-select the right row when
-// reopening the Tone picker (pattern_select_window_push) and to show the
-// preset's NAME rather than its raw notes in the Signal menu
-// (signal_draw_row). Returns -1 if sound_pattern_kind isn't Custom, or the
-// stored pattern doesn't match any preset (a genuinely hand-typed pattern).
-static int sound_preset_match(const Alarm *a) {
-  if (a->sound_pattern_kind != 1 || a->sound_pattern_len == 0) { return -1; }
-  for (int i = 0; i < SOUND_PRESET_COUNT; i++) {
-    uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-    if (!ac_sound_pattern_parse(SOUND_PRESETS[i].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) { continue; }
-    if (len != a->sound_pattern_len) { continue; }
-    if (memcmp(flags, a->sound_pattern, len) == 0 && memcmp(notes, a->sound_pattern_note, len) == 0) { return i; }
-  }
-  return -1;
-}
-
-// vibe_preset_match's own equivalent of sound_preset_match -- see there for
-// the general rationale (preselecting the right picker row on reopen).
+// vibe_preset_match finds which VIBE_PRESETS entry (if any) `a`'s
+// currently-stored custom vibe pattern is byte-identical to, by re-parsing
+// each preset's literal text and comparing -- used both to pre-select the
+// right row when reopening the Vibration picker (pattern_select_window_
+// push) and to show the preset's NAME rather than its raw pattern in the
+// Signal menu (signal_draw_row). Returns -1 if vibe_pattern_kind isn't
+// Custom, or the stored pattern doesn't match any preset (a genuinely
+// hand-typed pattern). Sound has no equivalent any more -- its presets are
+// referenced by a plain stored index (`sound_preset`) rather than a byte
+// copy that would need re-matching; see SOUND_PRESETS[]'s own doc comment
+// above.
 static int vibe_preset_match(const Alarm *a) {
   if (a->vibe_pattern_kind != 1 || a->vibe_pattern_len == 0) { return -1; }
   for (int i = 0; i < VIBE_PRESET_COUNT; i++) {
@@ -1029,20 +1019,16 @@ static void alarm_play_sound_pattern(const uint8_t *flags, const uint8_t *notes_
   speaker_play_notes(notes, (uint32_t)len + 1, volume);
 }
 
-// A custom sound pattern (sound_pattern_kind==1) plays the alarm's own
-// stored pattern; a library reference (sound_pattern_kind==2) resolves
-// custom_tone_id via find_tone_by_id and plays that tone's pattern instead
-// (falling through to Default if the id is somehow stale -- shouldn't
-// happen, since deleting a tone reverts every alarm referencing it, but
-// this keeps ring time from going silent if it ever does); Default
-// (sound_pattern_kind==0, or a stale kind==2) plays SOUND_PRESETS[0]
-// ("Classic") instead of a separately-maintained fixed note array, so the
-// two literal sources of "what Default sounds like" can never drift apart.
+// A library reference (sound_pattern_kind==2) resolves custom_tone_id via
+// find_tone_by_id and plays that tone's pattern (falling through to a
+// preset if the id is somehow stale -- shouldn't happen, since deleting a
+// tone reverts every alarm referencing it, but this keeps ring time from
+// going silent if it ever does); otherwise (sound_pattern_kind==0, or a
+// stale kind==2) plays SOUND_PRESETS[a->sound_preset] directly, the same
+// bounds-checked index approach vibe_pattern already uses -- an
+// out-of-range index (never possible via the UI, only via a stale/corrupt
+// stored value) falls back to preset 0.
 static void alarm_play_audio(const Alarm *a, uint8_t volume) {
-  if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
-    alarm_play_sound_pattern(a->sound_pattern, a->sound_pattern_note, a->sound_pattern_len, volume);
-    return;
-  }
   if (a->sound_pattern_kind == 2) {
     int ti = find_tone_by_id(a->custom_tone_id);
     if (ti >= 0 && s_tones[ti].pattern_len > 0) {
@@ -1050,30 +1036,29 @@ static void alarm_play_audio(const Alarm *a, uint8_t volume) {
       return;
     }
   }
+  uint8_t idx = (a->sound_preset < SOUND_PRESET_COUNT) ? a->sound_preset : 0;
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], note_idx[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  if (!ac_sound_pattern_parse(SOUND_PRESETS[0].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) {
-    return;   // unreachable: SOUND_PRESETS[0].pattern is a fixed, valid literal
+  if (!ac_sound_pattern_parse(SOUND_PRESETS[idx].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) {
+    return;   // unreachable: every SOUND_PRESETS entry is a fixed, valid literal
   }
   alarm_play_sound_pattern(flags, note_idx, len, volume);
 }
 
 // alarm_vibe_duration_ms's sound-side counterpart -- mirrors alarm_play_
-// audio()'s own default/custom/tone-library branching exactly (notes aren't
-// needed for a duration, only flags/len), so "what plays" and "how long it
-// takes" can never disagree. The lead-in is always 100ms regardless of
-// pattern content, matching alarm_play_sound_pattern's own fixed silent note.
+// audio()'s own tone-library/preset branching exactly (notes aren't needed
+// for a duration, only flags/len), so "what plays" and "how long it takes"
+// can never disagree. The lead-in is always 100ms regardless of pattern
+// content, matching alarm_play_sound_pattern's own fixed silent note.
 static uint32_t alarm_sound_duration_ms(const Alarm *a) {
-  if (a->sound_pattern_kind == 1 && a->sound_pattern_len > 0) {
-    return 100 + pattern_duration_ms(a->sound_pattern, a->sound_pattern_len);
-  }
   if (a->sound_pattern_kind == 2) {
     int ti = find_tone_by_id(a->custom_tone_id);
     if (ti >= 0 && s_tones[ti].pattern_len > 0) {
       return 100 + pattern_duration_ms(s_tones[ti].pattern, s_tones[ti].pattern_len);
     }
   }
+  uint8_t idx = (a->sound_preset < SOUND_PRESET_COUNT) ? a->sound_preset : 0;
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], note_idx[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  if (!ac_sound_pattern_parse(SOUND_PRESETS[0].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) { return 0; }
+  if (!ac_sound_pattern_parse(SOUND_PRESETS[idx].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, note_idx, &len)) { return 0; }
   return 100 + pattern_duration_ms(flags, len);
 }
 
@@ -3240,14 +3225,7 @@ static void signal_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *c
         int ti = find_tone_by_id(a->custom_tone_id);
         snprintf(value, sizeof(value), "%s", (ti >= 0) ? s_tones[ti].name : "Custom");
       } else {
-        int match = sound_preset_match(a);
-        if (a->sound_pattern_kind == 0) {
-          snprintf(value, sizeof(value), "%s", SOUND_PRESETS[0].label);   // "Triple (default)"
-        } else if (match >= 0) {
-          snprintf(value, sizeof(value), "%s", SOUND_PRESETS[match].label);
-        } else {
-          snprintf(value, sizeof(value), "Custom");
-        }
+        snprintf(value, sizeof(value), "%s", SOUND_PRESETS[a->sound_preset < SOUND_PRESET_COUNT ? a->sound_preset : 0].label);
       }
       break;
     }
@@ -3656,17 +3634,12 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
     // committing to.
     int preset_idx = (row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
     if (preset_idx >= 0) {
-      uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-      if (ac_sound_pattern_parse(SOUND_PRESETS[preset_idx].pattern, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
-        a->sound_pattern_kind = 1;
-        a->sound_pattern_len = len;
-        memcpy(a->sound_pattern, flags, len);
-        memcpy(a->sound_pattern_note, notes, len);
-        a->sound_enabled = true;
-        persist_all();
-        window_stack_pop(true);   // back to Signal
-        if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
-      }
+      a->sound_pattern_kind = 0;
+      a->sound_preset = (uint8_t)preset_idx;
+      a->sound_enabled = true;
+      persist_all();
+      window_stack_pop(true);   // back to Signal
+      if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
       return;
     }
   }
@@ -3801,8 +3774,6 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
       }
     } else if (!a->sound_enabled) {
       row = 0;   // "Off"
-    } else if (a->sound_pattern_kind == 0) {
-      row = 1;   // "Triple (default)"
     } else if (a->sound_pattern_kind == 2) {
       // Library reference -- land directly on that tone's own inline row
       // (falling back to "+ Custom tone" if the id is somehow stale --
@@ -3811,8 +3782,7 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
       int ti = find_tone_by_id(a->custom_tone_id);
       row = (ti >= 0) ? PATTERN_SELECT_SOUND_TONES_BASE + ti : pattern_select_sound_new_row();
     } else {
-      int match = sound_preset_match(a);
-      row = (match >= 0) ? match + 1 : pattern_select_sound_new_row();
+      row = (a->sound_preset < SOUND_PRESET_COUNT ? a->sound_preset : 0) + 1;
     }
   }
   if (s_pattern_select_menu) {
@@ -3843,35 +3813,23 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
 // per spec this exits straight back to the Signal menu (not re-showing the
 // pattern-select menu); on an invalid one, the pattern-select menu is
 // re-entered with the Custom row reading "invalid".
+// SOUND never reaches this any more -- every one of its rows (Off, a
+// preset, a tone, "+ Custom tone") is handled directly in
+// pattern_select_select, so the only caller left is vibe's own Custom row.
 static void pattern_custom_done(const char *text, void *ctx) {
   if (!text) { return; }
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
-  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
-    uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS];
-    uint8_t len;
-    if (!ac_vibe_pattern_parse(text, AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) {
-      pattern_select_window_push(s_pattern_select_kind, true);
-      return;
-    }
-    a->vibe_pattern_kind = 1;
-    a->vibe_pattern_len = len;
-    memcpy(a->vibe_pattern_custom, parsed, len);
-    a->vibration_enabled = true;
-  } else {
-    uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS];
-    uint8_t notes[AC_SOUND_PATTERN_MAX_SEGMENTS];
-    uint8_t len;
-    if (!ac_sound_pattern_parse(text, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
-      pattern_select_window_push(s_pattern_select_kind, true);
-      return;
-    }
-    a->sound_pattern_kind = 1;
-    a->sound_pattern_len = len;
-    memcpy(a->sound_pattern, flags, len);
-    memcpy(a->sound_pattern_note, notes, len);
-    a->sound_enabled = true;
+  uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  if (!ac_vibe_pattern_parse(text, AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) {
+    pattern_select_window_push(s_pattern_select_kind, true);
+    return;
   }
+  a->vibe_pattern_kind = 1;
+  a->vibe_pattern_len = len;
+  memcpy(a->vibe_pattern_custom, parsed, len);
+  a->vibration_enabled = true;
   persist_all();
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
 }
@@ -4624,22 +4582,15 @@ static bool handle_test_message(DictionaryIterator *iter) {
         changed = true;
       }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoDismiss))) { a->auto_dismiss = t->value->int32 != 0; changed = true; }
-      // Custom sound/vibe patterns: kind (0=Default/Preset, 1=Custom) is a
-      // plain int; the pattern itself is set via its own text field, parsed
-      // the same way the cron raw-text fields above are (warn + leave
-      // unchanged on unparseable input, never partially applied).
+      // Sound's kind (0=Preset, 2=Library) is a plain int; MESSAGE_KEY_
+      // TestAlarmSoundCustomPattern used to set an inline-Custom (kind==1)
+      // pattern here the same way vibe's own hook below still does, but
+      // that whole representation is retired (see alarm_calc.h's own
+      // sound_pattern_kind doc comment) -- sound's only per-alarm test hook
+      // left is TestAlarmToneId (library reference) further down; a preset
+      // is set directly via sound_preset, with no dedicated test hook of
+      // its own since main.c's own picker already exercises that path.
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundPatternKind))) { a->sound_pattern_kind = (uint8_t)t->value->int32; changed = true; }
-      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmSoundCustomPattern))) {
-        uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-        if (ac_sound_pattern_parse(t->value->cstring, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) {
-          a->sound_pattern_len = len;
-          memcpy(a->sound_pattern, flags, len);
-          memcpy(a->sound_pattern_note, notes, len);
-        } else {
-          APP_LOG(APP_LOG_LEVEL_WARNING, "invalid TestAlarmSoundCustomPattern %s", t->value->cstring);
-        }
-        changed = true;
-      }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibePatternKind))) { a->vibe_pattern_kind = (uint8_t)t->value->int32; changed = true; }
       if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmVibeCustomPattern))) {
         uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], len;

@@ -115,14 +115,13 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
-| `TestAlarmSoundPatternKind` | 10036 | int 0/1 | 0=Default (fixed beep loop), 1=Custom. Sets `sound_pattern_kind` directly. See "Signal submenu / custom sound &amp; vibe patterns" below. |
-| `TestAlarmSoundCustomPattern` | 10037 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into `sound_pattern`/`sound_pattern_note`/`sound_pattern_len`. Logs a warning (fields left as previously set) if unparseable. |
+| `TestAlarmSoundPatternKind` | 10036 | int 0/2 | 0=Preset (use `sound_preset`), 2=Library (use `custom_tone_id`) — 1 ("inline Custom") is retired, see "Signal submenu / custom sound &amp; vibe patterns" below. Sets `sound_pattern_kind` directly; no test hook sets `sound_preset` itself, since main.c's own Tone picker already exercises that path directly. |
 | `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
 | `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/break pattern (e.g. `"2 1- 2 1- 2"`), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. |
 | `TestClearTones` | 10040 | int, nonzero | Wipes the entire custom-tone library (`s_tone_count = 0`), independent of `TestClearAlarms`. See "Custom-tone library" below. |
 | `TestToneIndex` | 10041 | int | **Required** to touch tone fields, mirroring `TestAlarmIndex`'s own convention: `== s_tone_count` appends a new (empty-named) tone with a freshly allocated id; `< s_tone_count` edits that existing tone in place. |
 | `TestToneName` | 10042 | string | |
-| `TestToneCustomPattern` | 10043 | string | Same grammar/parser as `TestAlarmSoundCustomPattern` (sound, not vibe — the tone library is sound-only). Logs a warning (left unchanged) if unparseable. |
+| `TestToneCustomPattern` | 10043 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into the tone's own `pattern`/`pattern_note`/`pattern_len` (`CustomTone`, unaffected by sound's own `kind==1` retirement — the tone library was always a separate representation). Logs a warning (left unchanged) if unparseable. `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
 | `TestAlarmToneId` | 10044 | int | Links an alarm directly to a tone by id — sets `custom_tone_id` and forces `sound_pattern_kind = 2`, skipping the Tone picker → Custom tones → Custom tone → Apply chain for test setup. |
 
 Only keys present in the message are applied — anything omitted is left
@@ -333,13 +332,14 @@ in this app at all, so every message key is now just an ordinary scalar at
   `memset`-zeroed current-sized buffer already reproduces every field that
   existed at write time correctly, leaving only new trailing field(s) at 0.
   `alarm_size_for_schema()` is the gate: it maps a stored schema version to
-  its historical `sizeof(Alarm)` as a **frozen literal** (never `sizeof
+  its historical MAIN-blob `sizeof` as a **frozen literal** (never `sizeof
   (Alarm)` itself, which tracks the current struct and would be wrong for
   a past version once the struct grows again); a version with no case there
-  (its `default: return 0`) either predates this migration or was a
-  declared hard break, and `store_load()` wipes for both of those, plus for
-  a newer-than-us stored schema (a downgrade) — exactly like every schema
-  mismatch did before this migration existed. On a successful migration,
+  (its `default: return 0`) predates schema 7, when this migration first
+  shipped — MAIN's own layout has never changed since, so every schema from
+  7 onward has an entry here regardless of what happened to the EXTENSION
+  blob (see the next design point for why those are handled completely
+  separately as of schema 19). On a successful migration,
   `store_load()` immediately writes the current `STORE_SCHEMA` back via
   `persist_write_int` so a later load doesn't re-check, even though the
   per-alarm blobs themselves stay physically old-sized on disk until the
@@ -351,6 +351,46 @@ in this app at all, so every message key is now just an ordinary scalar at
   throwaway build installed over an emulator instance with existing schema-7
   data, confirming the alarm survived instead of being wiped (see
   `TODO.md`).
+- **A schedule now survives ANY future signal-only hard break, and a
+  downgrade no longer wipes at all** (`STORE_SCHEMA` 19, `store_load()`,
+  `alarm_store.c`): this was a real, repeated problem during dev testing,
+  not a theoretical one — every hard break in this app's history (16→17's
+  `sound_pattern[]`/`vibe_pattern_custom[]` resize, and this very bump's own
+  removal of `sound_pattern_len`/`sound_pattern[]`/`sound_pattern_note[]`,
+  see the Custom-tone-adjacent design point below) has only ever been about
+  the EXTENSION blob's signal-pattern fields, never the MAIN blob's
+  schedule fields — yet the old `store_load()` wiped the *entire* alarm
+  (label, time, repeat, cron config, all of it) on any such break, because
+  a single schema mismatch check gated the whole load. Worse: `cron_dom_
+  mask`/`cron_month_mask`/`cron_week_mask` and their raw text are genuine
+  schedule data that happen to live in the EXTENSION blob (appended there
+  chronologically, not by design), so a signal-only break already put real
+  schedule data at risk too. Fixed by decoupling the two blobs' own
+  trust decisions entirely: `alarm_size_for_schema()` (above) now governs
+  MAIN alone, and is essentially permanent (every schema 7 onward has an
+  entry, since MAIN's layout has never changed). EXTENSION is read in full
+  ONLY when `stored_schema == STORE_SCHEMA` exactly; any other stored
+  schema — an older one, even a formerly-"recognized" one like 12-15, or a
+  *newer* one (a downgrade, which used to wipe unconditionally via its own
+  separate `stored_schema > STORE_SCHEMA` check — removed, folded into this
+  same path) — reads only a frozen leading prefix of the EXTENSION blob,
+  `ALARM_EXT_CORE_SIZE` (`alarm_store.c`): `cron_week_mask`/`cron_week`,
+  the first two fields ever appended into that blob (schema 10/11), never
+  moved since regardless of how many times the signal fields after them
+  have resized. Everything from `sound_pattern_kind` onward resets to its
+  safe zero default instead of being read at all. This works because
+  `persist_read_data`'s own `min(buffer_size, actual_stored_size)`
+  truncation is direction-agnostic — the same property that already makes
+  ordinary forward migration safe makes reading fewer bytes than a key
+  currently holds (in either the older-hard-break or newer-downgrade case)
+  equally safe. A small sanity check on Core fields (`hour<24`, `minute<
+  59`, `name` NUL-terminated, `repeat_days` in range) runs unconditionally
+  on every load, cheap insurance now that a downgrade can hand `store_load()`
+  bytes from a schema it's never seen. Net effect: a future signal-encoding
+  rework (near-certain, given how often this exact area has already
+  churned) can only ever reset "how the alarm rings," never "whether or
+  when it rings" — the alarm's schedule and its own on/off state are
+  completely unaffected either way.
 - **A field-append migration isn't always a free pass, though**: adding
   `cron_dom_mask`/`cron_month_mask` (schema 9, cron mode's day-of-month/month
   fields — see "Cron-syntax alarms" below) is the first bump where the
@@ -881,7 +921,7 @@ feature — see git history if curious):
     `vibration_enabled`/`sound_enabled` to false and pops straight back to
     the Signal menu, deliberately leaving every other field
     (`vibe_pattern_kind`/`vibe_pattern`/`vibe_pattern_custom`/
-    `sound_pattern_kind`/`sound_pattern`/`sound_pattern_note`) untouched —
+    `sound_pattern_kind`/`sound_preset`/`custom_tone_id`) untouched —
     so turning it back on later still remembers whichever pattern/tone was
     set before. `PATTERN_SELECT_VIBE_ROW_COUNT`/`PATTERN_SELECT_SOUND_ROW_COUNT`
     and the `_CUSTOM_ROW` constants all account for this extra leading row
@@ -898,21 +938,29 @@ feature — see git history if curious):
     still recognizes and displays by name). **Sound's presets are the one
     exception, on request**: selecting a Tone preset row (rows
     1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]` table, below) commits
-    immediately from `pattern_select_select` itself — `sound_pattern_kind=1`
-    with that preset's exact bytes, `sound_enabled=true`, straight back to
-    Signal — with no keyboard step at all; the audible preview already
+    immediately from `pattern_select_select` itself — `sound_pattern_kind=0`,
+    `sound_preset=<that row's index>`, `sound_enabled=true`, straight back
+    to Signal — with no keyboard step at all; the audible preview already
     happened as the row was navigated to (`pattern_select_preview_
     current_row`), so there's nothing left to review by the time Select is
-    pressed. A sound tone row and "+ Custom tone" are unaffected by this —
-    they still go through their own intermediate step (the Custom-tone
-    screen, the 2-step creation wizard respectively) same as before.
+    pressed. `sound_preset` is a plain index into `SOUND_PRESETS[]`
+    (`alarm_calc.h`, mirroring `vibe_pattern`'s own approach) — sound used
+    to instead copy the preset's parsed bytes verbatim into its own
+    `sound_pattern_kind=1` ("Custom") representation, but tracing every
+    call site that could reach that path found it could only ever be one
+    of these exact table entries, never genuinely freehand (see the
+    Custom-tone-adjacent design point below for the removal). A sound tone
+    row and "+ Custom tone" are unaffected by any of this — they still go
+    through their own intermediate step (the Custom-tone screen, the
+    2-step creation wizard respectively) same as before.
     Committing a pattern also sets `vibration_enabled`/`sound_enabled` back
     to `true` — picking a real pattern implies turning that channel back
     on, symmetric with "Off" leaving it alone rather than the other way
     around. `pattern_select_window_push()`'s preselect logic checks
     `vibration_enabled`/
     `sound_enabled` FIRST (landing on row 0 if either is false) before
-    falling through to the existing preset-match logic.
+    falling through to the existing preset-match logic (an `a->sound_preset`
+    index lookup for sound, `vibe_preset_match()`'s byte re-match for vibe).
   - **Each picker's trailing row is its own "Help"** —
     `PATTERN_SELECT_VIBE_HELP_ROW` (`VIBE_PRESET_COUNT + 2`, right after
     Custom) for Vibration, `pattern_select_sound_help_row()` (right after
@@ -962,21 +1010,26 @@ feature — see git history if curious):
     above the Signal-menu UI section so `alarm_play_audio()`/`alarm_
     vibrate()` can see them) are the Tone/Vibration preset libraries —
     `{ label, pattern }` pairs. Sound, currently: Triple (default)/Double/
-    Triple fast/Analog bell/Mary's Lamb/Happy Birthday/Imperial March (this
-    one leans on the multi-octave-marker support above — its low A/F/C
-    notes are each written 2-3 octaves down, e.g. `"4A,,,"`, to land in a
-    register that actually sounds like the tune's real bassline instead of
-    the base octave). Vibe, currently: Double/Short/Long.
-    `sound_preset_match()`/`vibe_preset_match()` re-parse each entry and
-    `memcmp` it against an alarm's stored pattern bytes to find which
-    preset (if any) the alarm's current Custom pattern is byte-identical
-    to — used both to preselect the right picker row on reopen and to show
-    the preset's NAME (not raw pattern) in the Signal menu's Vibration/Tone
+    Triple fast/Analog bell/Celebration/Lullaby/March (this last one leans
+    on the multi-octave-marker support above — its low A/F/C notes are
+    each written 2-3 octaves down, e.g. `"4A,,,"`, to land in a register
+    that actually sounds like a real bassline instead of the base octave).
+    Vibe, currently: Double/Short/Long.
+    Sound resolves which preset is active via a plain stored index
+    (`Alarm.sound_preset`, an index into this very table — see the Signal
+    submenu design point above for why this is an index rather than a
+    byte copy) — no re-matching needed, unlike vibe: `vibe_preset_match()`
+    re-parses each `VIBE_PRESETS[]` entry and `memcmp`s it against an
+    alarm's stored *custom* pattern bytes to find which preset (if any)
+    it's byte-identical to, since vibe's own Custom row can still hold
+    genuinely freehand content that only *coincidentally* matches a preset
+    — used both to preselect the right picker row on reopen and to show
+    the preset's NAME (not raw pattern) in the Signal menu's Vibration
     value and picker Custom-row fallback. `pattern_preset_preview()`
     renders at most the first 2 space-separated tokens of a preset's
-    pattern (plus "...") for either picker's per-row value column, since
-    full pattern text got cluttered once sound presets started running
-    past a handful of tokens.
+    pattern (plus "...") for the Vibration picker's own per-row value
+    column (sound's collapsed rows show no preview at all any more — see
+    the Custom-tone library design point below).
   - `alarm_vibrate()`'s `vibe_pattern_kind==0` fallback (a brand new,
     never-touched alarm, or one that committed a preset via the old
     instant-apply path before this rework) parses `VIBE_PRESETS[a->
@@ -1003,15 +1056,12 @@ feature — see git history if curious):
   (`alarm_store.c`) under their own `TONE_STORE_SCHEMA`/`PERSIST_KEY_TONE_*`
   keys (`alarm_store.h`) — a schema bump to `Alarm` doesn't force wiping the
   tone library, and vice versa. `Alarm.sound_pattern_kind` gained a third
-  value, `2` ("Library"): `Alarm.custom_tone_id` (appended at the very end
-  of the struct, `STORE_SCHEMA` 16) holds which tone, resolved via
-  `find_tone_by_id()` both at ring time (`alarm_play_audio()`) and in the
-  UI (`signal_draw_row`'s Tone value). Values `0`/`1` (Default/inline
-  Custom) keep their exact previous meaning — a pre-existing alarm with an
-  inline custom pattern from before this feature keeps ringing with it
-  unchanged; it's just not reachable through the new UI below any more
-  (picking anything from it supersedes the old inline data outright, no
-  migration attempted).
+  value, `2` ("Library"), alongside the original `0` ("Preset", now the
+  only other value it ever takes — see the "Custom sound/vibe patterns"
+  design point below for `1`'s later retirement): `Alarm.custom_tone_id`
+  (appended at the very end of the struct, `STORE_SCHEMA` 16) holds which
+  tone, resolved via `find_tone_by_id()` both at ring time
+  (`alarm_play_audio()`) and in the UI (`signal_draw_row`'s Tone value).
   - **Navigation**: tones are inlined directly into the Tone picker itself
     now, below the presets — there is no separate "Custom tones" list
     window any more (it existed briefly during this feature's development
@@ -1103,7 +1153,9 @@ feature — see git history if curious):
     push`, same shell `edit_window`'s own Delete uses) removes the tone
     from `s_tones` entirely and calls `revert_alarms_using_tone()` — every
     alarm with `sound_pattern_kind==2` pointing at this id reverts to
-    `sound_pattern_kind=0` (Default; `sound_enabled` is left untouched) —
+    `sound_pattern_kind=0` (Preset — whichever `sound_preset` index it last
+    had, or 0/"Triple (default)" if never set; `sound_enabled` is left
+    untouched) —
     then pops only **1** window, back to the **Tone picker** itself (not
     all the way to Signal like Apply: deleting is "keep managing the
     library", applying is "I'm done"); since the tone's own row just
@@ -1193,9 +1245,17 @@ feature — see git history if curious):
   `ac_vibe_pattern_format()`/`ac_sound_pattern_format()` deterministically
   reconstruct the canonical text (used for both display and re-editing)
   from the stored bytes, an exact round trip since there's no lossy
-  truncation step in this grammar. `Alarm.sound_pattern_kind`/
-  `vibe_pattern_kind` (0 = Default/Preset, 1 = Custom) gate which
-  representation is live. `STORE_SCHEMA` 15's migration resets
+  truncation step in this grammar. `Alarm.vibe_pattern_kind` (0 = Preset,
+  use `vibe_pattern`; 1 = Custom, use `vibe_pattern_len`/
+  `vibe_pattern_custom[]`) still gates which representation is live for
+  vibe. **Sound no longer has an inline-Custom representation at all** —
+  `Alarm.sound_pattern_kind` only ever takes `0` (Preset, use
+  `sound_preset`, an index) or `2` (Library, use `custom_tone_id`); this
+  whole packed-byte grammar survives on the sound side only through
+  `CustomTone.pattern[]`/`pattern_note[]` (the tone library) and
+  `Alarm.vibe_pattern_custom[]` now, not through anything on `Alarm`
+  itself for sound — see the schema-19 paragraph below for why/how that
+  representation was retired. `STORE_SCHEMA` 15's migration used to reset
   `sound_pattern_kind`/`sound_pattern_len` (not vibe's, this time — vibe's
   own grammar/encoding hasn't changed since schema 14) for any alarm
   migrating from schema < 15, rather than reinterpreting old
@@ -1218,14 +1278,30 @@ feature — see git history if curious):
   entry, so any schema-17 data wipes before this bump's logic would ever
   matter; worth checking, on every future bump, whether the prior schema is
   already a hard break before assuming a fixup is needed. Every other alarm field is untouched by this.
-  `sound_pattern_note[]` itself is unchanged in size/position (still
-  appended at the very end of the struct, since schema 13) — only its
-  byte *meaning* moved again. Selecting "Custom" and submitting an unparseable
-  pattern from the keyboard does NOT touch the alarm's persisted fields at
-  all — `pattern_custom_done()` just re-opens the pattern-select picker
-  with its Custom row reading "invalid" (a transient, unpersisted UI flag)
-  instead of a formatted pattern; a valid submission commits and exits
-  straight back to the Signal menu, skipping the picker. Applied at ring
+  **`STORE_SCHEMA` 19 removed `sound_pattern_len`/`sound_pattern[]`/
+  `sound_pattern_note[]` from `Alarm` entirely**, replacing them with the
+  plain `sound_preset` index described above — tracing every remaining
+  call site that could set `sound_pattern_kind==1` found exactly one
+  (the Tone-preset direct-commit path, which only ever copies a
+  `SOUND_PRESETS[]` entry's own bytes verbatim), so the byte arrays were
+  100% redundant with an index by this point, not just re-encoded again.
+  Unlike every earlier bump in this list (12 through 18, all pure
+  reinterpretations or resizes that kept the same fields in the same
+  relative order), this one removes fields from the *middle* of the
+  EXTENSION blob's tail (between `sound_pattern_kind` and
+  `vibe_pattern_kind`, and again between `vibe_pattern_custom[]` and
+  `custom_tone_id`), shifting every field after them — which is what
+  finally forced treating EXTENSION-blob trust as an exact-schema-match
+  question rather than an appendable-history one; see the "A schedule now
+  survives ANY future signal-only hard break" design point (near
+  `STORE_SCHEMA`'s own first appearance, above) for the resulting
+  mechanism. Selecting vibe's Custom row (sound no longer reaches the
+  keyboard at all — see above) and submitting an unparseable pattern does
+  NOT touch the alarm's persisted fields at all — `pattern_custom_done()`
+  just re-opens the pattern-select picker with its Custom row reading
+  "invalid" (a transient, unpersisted UI flag) instead of a formatted
+  pattern; a valid submission commits and exits straight back to the
+  Signal menu, skipping the picker. Applied at ring
   time by `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): sound builds
   one `SpeakerNote` per segment directly (each carries its own explicit
   duration/pitch, so consecutive on-beats need no special handling — they

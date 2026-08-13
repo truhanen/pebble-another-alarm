@@ -224,39 +224,49 @@ typedef struct {
   uint64_t cron_week_mask;   // bit i (1-53, AC_WEEK_BIT) set => ISO week i matches
   char cron_week[CRON_FIELD_LEN];   // raw text, e.g. "*/2" — parses into cron_week_mask
 
-  // Custom sound/vibe patterns (see AC_SOUND_PATTERN_MAX_SEGMENTS/
-  // AC_VIBE_PATTERN_MAX_SEGMENTS/AC_PATTERN_BREAK_BIT above and
-  // ac_sound_pattern_parse/ac_vibe_pattern_parse below), appended
-  // here per the same append-only rule. *_kind==0 ("Default"/"Preset") is
-  // already the correct migration default -- unlike cron_dom_mask/
-  // cron_week_mask, a zero-filled kind doesn't mean "matches nothing", it
-  // means "keep behaving exactly as before this feature existed" (sound:
-  // the fixed beep loop; vibe: whatever vibe_pattern already held) -- so no
-  // store_load() fixup is needed for the *_kind fields themselves. The
-  // *_len/pattern arrays DO need an explicit fixup on migration from before
-  // STORE_SCHEMA 13 though -- see alarm_store.c: the byte encoding changed
-  // (was a raw 1-100 duration; now bit 7 = break, bits 0-6 = duration
-  // digit), so an old *_kind==1 alarm's stored bytes would otherwise be
+  // Custom VIBE patterns only now (see AC_VIBE_PATTERN_MAX_SEGMENTS/
+  // AC_PATTERN_BREAK_BIT above and ac_vibe_pattern_parse below), appended
+  // here per the same append-only rule. `vibe_pattern_kind==0` ("Preset")
+  // is already the correct migration default -- a zero-filled kind means
+  // "keep behaving exactly as before this feature existed" (whatever
+  // vibe_pattern already held), so no store_load() fixup is needed for the
+  // kind field itself. `vibe_pattern_len`/`vibe_pattern_custom[]` DO need
+  // an explicit fixup on migration from before STORE_SCHEMA 13 (and again
+  // 14) though -- see alarm_store.c: the byte encoding has changed since
+  // then (was a raw 1-100 duration; now bit 7 = break, bits 0-6 = duration
+  // digit), so an old kind==1 alarm's stored bytes would otherwise be
   // silently reinterpreted as garbage under the new scheme.
-  uint8_t sound_pattern_kind;   // 0 = Default (existing fixed beep loop), 1 = Custom
-  uint8_t sound_pattern_len;    // number of segments in sound_pattern[]/sound_pattern_note[]; 0 = never set
-  uint8_t sound_pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];        // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
+  //
+  // `sound_pattern_kind` used to have an analogous inline-Custom
+  // representation (kind==1, backed by `sound_pattern[]`/
+  // `sound_pattern_note[]`) -- removed (not just relocated) once tracing
+  // every call site confirmed kind==1 could no longer be reached except by
+  // copying a SOUND_PRESETS[] entry's own bytes verbatim (the tone library,
+  // kind==2, is sound's only remaining path for genuinely custom content).
+  // `sound_pattern_kind` now only ever takes 0 ("Preset", use
+  // `sound_preset` below) or 2 ("Library", use `custom_tone_id` below).
+  uint8_t sound_pattern_kind;   // 0 = Preset (use sound_preset below), 2 = Library (use custom_tone_id below)
   uint8_t vibe_pattern_kind;    // 0 = Preset (use vibe_pattern above), 1 = Custom
   uint8_t vibe_pattern_len;     // number of segments in vibe_pattern_custom[]; 0 = never set
   uint8_t vibe_pattern_custom[AC_VIBE_PATTERN_MAX_SEGMENTS];  // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
-  // sound_pattern_note is a brand-new array (didn't exist before STORE_SCHEMA
-  // 13), appended here at the very end rather than next to sound_pattern
-  // above, per the append-only rule -- see alarm_store.c's migration fixup
-  // for why sound_pattern/vibe_pattern_custom's REINTERPRETED byte meaning
-  // (not just this new array) also needs an explicit reset on migration.
-  uint8_t sound_pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];   // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index; meaningless when is_break
 
   // Appended for the custom-tone library (see CustomTone below) -- valid
   // iff sound_pattern_kind == 2 ("Library"), a third value alongside the
-  // existing 0 (Default)/1 (inline Custom, unchanged). 0 = no reference.
-  // Zero-fills correctly on migration, same "already the safe default"
-  // category as vibe_pattern/increasing_volume's own past appends.
+  // existing 0 (Default/Preset). 0 = no reference. Zero-fills correctly on
+  // migration, same "already the safe default" category as vibe_pattern/
+  // increasing_volume's own past appends.
   uint32_t custom_tone_id;
+
+  // Sound's own preset index, mirroring vibe_pattern's own index-into-a-
+  // preset-table approach (an index into SOUND_PRESETS[], main.c) --
+  // appended last, after removing the old inline-Custom representation
+  // (sound_pattern_len/sound_pattern[]/sound_pattern_note[], a genuine
+  // struct resize/removal, not an append -- see STORE_SCHEMA's own
+  // history comment, alarm_store.h, for why this is a deliberate, accepted
+  // hard break rather than something store_load() tries to migrate
+  // through). 0 zero-fills correctly on migration (same "already the safe
+  // default" category as vibe_pattern's own index).
+  uint8_t sound_preset;
 } Alarm;
 
 // A named, separately-persisted sound pattern any alarm can reference by

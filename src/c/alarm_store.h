@@ -54,7 +54,49 @@
 // needed -- sizeof(CustomTone) is well under PERSIST_DATA_MAX_LENGTH).
 // Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
 #define PERSIST_KEY_TONE_BASE          300
-#define STORE_SCHEMA 18  // bumped: sound_pattern_note[]'s octave encoding widened from
+#define STORE_SCHEMA 19  // bumped: removed sound's inline-Custom representation
+                          // (sound_pattern_len/sound_pattern[]/sound_pattern_note[]) --
+                          // tracing every call site that could set sound_pattern_kind==1
+                          // found exactly one left (main.c's Tone-preset direct-commit
+                          // path), and it only ever copies a SOUND_PRESETS[] entry's own
+                          // bytes verbatim -- never genuinely freehand (sound's own
+                          // "type a custom pattern" path was already replaced by the tone
+                          // library, kind==2, earlier this dev cycle). So the byte arrays
+                          // were 100% redundant with an index; replaced with `sound_preset`
+                          // (alarm_calc.h), mirroring vibe_pattern's own index-into-a-
+                          // preset-table approach. `sound_pattern_kind` narrows to
+                          // {0 = Preset (sound_preset), 2 = Library (custom_tone_id)} --
+                          // 1 is retired.
+                          //
+                          // A genuine field removal, not an append -- the fields removed
+                          // sat in the MIDDLE of the EXTENSION blob's tail (between
+                          // sound_pattern_kind and vibe_pattern_kind, and again between
+                          // vibe_pattern_custom[] and custom_tone_id), so every field
+                          // after them shifts offset. This is a materially different kind
+                          // of hard break than 13/14/15/17/18 below, which only ever
+                          // reinterpreted or resized bytes without changing anyone ELSE's
+                          // offset: it invalidates a full-blob byte-copy from EVERY prior
+                          // schema's EXTENSION data, not just the ones already flagged as
+                          // hard breaks. store_load() (alarm_store.c) handles this by
+                          // decoupling EXTENSION blob trust from alarm_size_for_schema()
+                          // entirely: that table now only gates the MAIN blob (whose own
+                          // layout has never once changed across this whole history, so
+                          // it now has an entry for every schema 7 onward, including
+                          // 16/17/18 -- see its own updated comment). The EXTENSION blob
+                          // is instead read in full ONLY when the stored schema is an
+                          // EXACT match for STORE_SCHEMA; any other stored schema (older,
+                          // even a formerly-"recognized" one like 12-15, or newer --
+                          // a downgrade) reads only its trusted leading
+                          // `ALARM_EXT_CORE_SIZE` bytes (cron_week_mask/cron_week) and
+                          // defaults everything after. This is also what finally makes
+                          // this codebase's long-standing wipe-on-any-hard-break behavior
+                          // go away for good: a schedule (label/time/repeat/cron,
+                          // including the week-of-year restriction) now survives ANY
+                          // future signal-only hard break intact, and a downgrade no
+                          // longer wipes unconditionally either. See store_load()'s own
+                          // comment (alarm_store.c) for the full mechanism.
+                          //
+                          // Prior bump (18): sound_pattern_note[]'s octave encoding widened from
                           // 3 values (down 1/same/up 1) to 10 (down up to 8/same/up 1),
                           // to support stacking multiple "'"/"," markers -- see
                           // AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN's own doc comment
@@ -76,11 +118,13 @@
                           // vibe caps, on request. Unlike every append so far, this RESIZES
                           // three already-existing fields (not just appends a new one), which
                           // shifts every field's byte offset from vibe_pattern_custom onward --
-                          // a genuine hard break per rule #3 below, not an additive change, so
-                          // there's deliberately no alarm_size_for_schema(16) entry: migrating
-                          // from schema 16 wipes, same as any other unrecognized/hard-break
-                          // schema. (custom_tone_id itself, appended at schema 16, is
-                          // unaffected in shape -- only the three pattern-storage fields
+                          // a genuine hard break for the EXTENSION blob. At the time this
+                          // shipped, that meant the whole alarm wiped on migration (no
+                          // per-blob distinction existed yet) -- as of schema 19, the exact
+                          // same underlying fact (EXTENSION unreadable, MAIN unaffected) instead
+                          // means only the signal fields reset, never the schedule; see schema
+                          // 19's own comment above. (custom_tone_id itself, appended at schema
+                          // 16, is unaffected in shape -- only the three pattern-storage fields
                           // resize.)
                           //
                           // Prior bump (16): Alarm gained custom_tone_id (uint32_t), appended at the
@@ -220,20 +264,56 @@
                           //  1. Add the new field(s) at the very end of the struct. Never
                           //     insert, reorder, resize, or remove an existing field -- any
                           //     of those is a hard break (see #3).
-                          //  2. Before editing the struct, capture its current size (a
-                          //     throwaway `printf("%zu", sizeof(Alarm))` build is enough) and
-                          //     add it as a new `case <old schema>: return <that size>;` in
-                          //     alarm_size_for_schema() -- a frozen literal, NOT `sizeof
-                          //     (Alarm)` itself, which would silently track the wrong (new)
-                          //     struct once you've made the edit. Also check the new size
-                          //     against PERSIST_DATA_MAX_LENGTH (256) -- if the EXTENSION
-                          //     blob (not the frozen main one) would now exceed it, it needs
-                          //     splitting again the same way this bump did.
+                          //  2. If your new field lands in the EXTENSION blob (after
+                          //     cron_week_mask/cron_week -- true for any signal-pattern
+                          //     field, which is everywhere new fields have landed since
+                          //     schema 12), `alarm_size_for_schema()` (alarm_store.c) needs
+                          //     NO change at all -- it's a MAIN-blob-only range check now,
+                          //     and MAIN is untouched by definition. Just check the new
+                          //     EXTENSION size against PERSIST_DATA_MAX_LENGTH (256) -- if
+                          //     it would now exceed that, it needs splitting again the same
+                          //     way schema 10->11 did. If your new field somehow lands in
+                          //     MAIN instead, that's new territory (hasn't happened since
+                          //     schema 9) -- `alarm_size_for_schema()` would need a real new
+                          //     range boundary added, not just a bump.
                           //  3. If the change genuinely can't be additive (a field removed,
-                          //     reordered, or resized), just bump STORE_SCHEMA and don't add a
-                          //     case for the old version -- alarm_size_for_schema()'s default
-                          //     case wipes, exactly like every bump before this migration
-                          //     existed. Say so in this comment when it happens.
+                          //     reordered, or resized) but stays confined to the EXTENSION
+                          //     blob (i.e. after cron_week_mask/cron_week, which is where
+                          //     every signal-pattern field lives), you don't need to touch
+                          //     alarm_size_for_schema() at all -- MAIN is unaffected by
+                          //     definition, and the EXTENSION fallback (below) already
+                          //     activates for ANY stored_schema that isn't an exact match,
+                          //     with zero new code needed per bump. If a future change
+                          //     somehow needs to touch the MAIN blob itself non-additively
+                          //     (hasn't happened yet, and shouldn't need to for a long
+                          //     while, but say so here if it ever does), THAT'S the case
+                          //     that would need its own new handling, since MAIN currently
+                          //     has no fallback at all -- it's either fully trusted or the
+                          //     whole load returns 0.
+                          //
+                          // The EXTENSION fallback itself (store_load(), alarm_store.c),
+                          // active whenever stored_schema is anything other than an EXACT
+                          // match for STORE_SCHEMA (older -- even a schema that's otherwise
+                          // perfectly well-recognized for MAIN purposes -- or newer, a
+                          // downgrade): read the MAIN blob in full regardless (its own
+                          // layout is untouched by definition -- see alarm_size_for_schema()'s
+                          // own comment) plus just `ALARM_EXT_CORE_SIZE` bytes from the FRONT
+                          // of the EXTENSION blob -- `cron_week_mask`/`cron_week`, the first
+                          // two fields ever appended into that blob (schema 10/11), never
+                          // moved since. Every other EXTENSION field (`sound_pattern_kind`,
+                          // `vibe_pattern_kind`, `vibe_pattern_len`, `vibe_pattern_custom[]`,
+                          // `custom_tone_id`, `sound_preset`) resets to its safe zero default
+                          // instead of being read at all. `persist_read_data`'s own
+                          // `min(buffer_size, actual_stored_size)` truncation is what makes reading only
+                          // `ALARM_EXT_CORE_SIZE` bytes of a key that might currently hold
+                          // more (or differently-shaped) data safe -- the same property
+                          // that already makes ordinary forward migration safe elsewhere in
+                          // this file. This is what lets a schedule (label/time/repeat/cron,
+                          // including the week-of-year restriction) survive a signal-only
+                          // hard break intact, rather than the whole alarm disappearing --
+                          // see this file's own git history/CLAUDE.md for the incident that
+                          // prompted this (repeated alarm-list wipes purely from iterating
+                          // on the sound/vibe pattern encoding during dev testing).
 
 // Loads alarms into out (capacity MAX_ALARMS); returns count, or 0 if none/old schema.
 int store_load(Alarm *out);

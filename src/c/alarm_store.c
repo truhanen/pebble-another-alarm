@@ -3,62 +3,41 @@
 #include "alarm_store.h"
 #include <string.h>
 
-// Historical byte-size of `Alarm` at each schema version this migration can
-// forward-read from -- see STORE_SCHEMA's comment (alarm_store.h) for the
-// ground rules a future struct change needs to follow to add its own entry
-// here. Only defined from the version this migration first shipped in (7)
-// onward; schema <=6 predates it and still wipes (falls through to
-// `default: return 0`, same as a declared hard break does).
+// Historical byte-size of `Alarm`'s MAIN blob at each schema version this
+// migration can forward-read from -- see STORE_SCHEMA's comment
+// (alarm_store.h) for the ground rules a future struct change needs to
+// follow to add its own entry here. Only defined from the version this
+// migration first shipped in (7) onward; schema <=6 predates it and still
+// wipes (falls through to `default: return 0`).
 //
 // These are frozen literals captured by hand at the moment each becomes
 // historical -- deliberately NOT `sizeof(Alarm)`, which always reflects
 // whatever the CURRENT struct looks like and would silently return the
 // wrong (larger) size for every entry here once Alarm grows again.
+//
+// This table is now MAIN-blob-only -- it says nothing about the EXTENSION
+// blob's compatibility, which store_load() below decides separately (see
+// its own comment). That split matters because MAIN's own byte layout has
+// never once changed across this entire history (184 bytes at schema 7-8,
+// 248 from schema 9 onward), REGARDLESS of every signal-encoding rework
+// that's happened in the EXTENSION blob (schemas 12 through 19, including
+// two genuine hard breaks, 17 and 19) -- every one of those bumps left MAIN
+// completely untouched. Given that, this is a plain RANGE check rather than
+// a per-version switch/table: MAIN's size only ever depends on which of
+// the two eras a schema falls in (7-8 vs. 9+), not on the specific version
+// number, so there's no "did I remember to add a case for the new schema"
+// step for a future bump to get wrong -- unlike the old enumerated table
+// this replaced, which genuinely DID miss entries for 16/17/18 for exactly
+// that reason (harmless at the time, since any hard break anywhere still
+// wiped the whole alarm back then -- see STORE_SCHEMA's own comment,
+// alarm_store.h, for the incident that prompted fixing this for good).
+// A future change that DOES touch MAIN's own layout (hasn't happened yet)
+// would need to actually add a real version boundary here, at which point
+// this reverts to needing case-by-case entries again for schemas after it.
 static size_t alarm_size_for_schema(int schema) {
-  switch (schema) {
-    case 7: return 184;   // baseline this migration shipped in
-    case 8: return 184;   // + increasing_volume (bool) -- fits into existing
-                           // trailing struct padding, so the byte size is
-                           // unchanged from schema 7
-    case 9: return 248;   // + cron_dom_mask (uint32) + cron_month_mask (uint16)
-                           // + cron_dom/cron_month (CRON_FIELD_LEN each) --
-                           // frozen sizeof(Alarm) captured at the moment
-                           // schema became 9, for forward migration from it
-    case 10: return 248;  // NOT 288 -- see STORE_SCHEMA's comment
-                           // (alarm_store.h) for the full story: schema 10
-                           // was SUPPOSED to add cron_week_mask/cron_week (a
-                           // real 288-byte struct), but persist_write_data's
-                           // 256B/key cap silently rejected every attempt to
-                           // write that, so no schema-10 install's on-disk
-                           // main blob was ever actually bigger than
-                           // schema 9's. This entry reflects on-disk
-                           // reality, not the (never-achieved) struct size.
-    case 11: return 248;  // the schema-10 fix: cron_week_mask/cron_week moved
-                           // to their own extension key (see store_load/
-                           // store_save below), so the frozen MAIN blob size
-                           // is unchanged from schema 9/10.
-    case 12: return 248;  // + sound/vibe custom pattern fields (old raw
-                           // 1-100 duration encoding) -- all landed in the
-                           // EXTENSION blob, which store_load reads via
-                           // ALARM_EXT_SIZE regardless of this table, so the
-                           // MAIN blob size is unchanged.
-    case 13: return 248;  // + sound_pattern_note[] (note/break pattern
-                           // grammar rework) -- also EXTENSION-blob-only,
-                           // MAIN blob size unchanged.
-    case 14: return 248;  // duration digits 1/2/4/8 rework -- no new
-                           // fields, byte VALUES just mean something
-                           // different, so MAIN blob size unchanged. Also
-                           // the size to migrate FROM for schema 15 (the
-                           // octave-marker rework) -- see its migration
-                           // fixup below for why that bump needs more than
-                           // just this size-table entry.
-    case 15: return 248;  // octave-marker rework -- also EXTENSION-blob-only
-                           // (sound_pattern_note[]'s byte meaning changed, no
-                           // new field), MAIN blob size unchanged. Also the
-                           // size to migrate FROM for schema 16
-                           // (custom_tone_id, EXTENSION-blob-only again).
-    default: return 0;
-  }
+  if (schema >= 9) { return 248; }
+  if (schema >= 7) { return 184; }
+  return 0;   // predates schema 7, when this migration first shipped
 }
 
 // The per-alarm blob is split across two persist keys, not one -- see
@@ -72,30 +51,51 @@ static size_t alarm_size_for_schema(int schema) {
 // PERSIST_DATA_MAX_LENGTH.
 #define ALARM_MAIN_SIZE (offsetof(Alarm, cron_week_mask))
 #define ALARM_EXT_SIZE  (sizeof(Alarm) - offsetof(Alarm, cron_week_mask))
+// The EXTENSION blob's own trusted PREFIX -- cron_week_mask/cron_week are
+// the first two fields appended into this blob (schema 10/11) and have
+// never moved since, regardless of how many times the signal-pattern
+// fields AFTER them have resized/reinterpreted (12 through the current
+// schema). store_load() reads only this many bytes of the EXTENSION key
+// whenever the stored schema isn't an EXACT match for STORE_SCHEMA --
+// recovering the schedule-relevant week-of-year restriction even when the
+// rest of that key's stored bytes are under some encoding this binary
+// doesn't (or no longer) understands. See STORE_SCHEMA's own comment
+// (alarm_store.h) for why "isn't an exact match" is now the right
+// condition, not "isn't in alarm_size_for_schema()'s table" -- unlike every
+// earlier append, schema 19 removes fields from the MIDDLE of this blob's
+// tail, which shifts every field after them; that's not just a hard break
+// for schemas that lack a table entry, it invalidates a full-blob read for
+// EVERY schema other than the exact current one.
+#define ALARM_EXT_CORE_SIZE (offsetof(Alarm, sound_pattern_kind) - offsetof(Alarm, cron_week_mask))
 _Static_assert(ALARM_MAIN_SIZE <= PERSIST_DATA_MAX_LENGTH,
                "Alarm's main persisted blob exceeds persist_write_data's per-key cap");
 _Static_assert(ALARM_EXT_SIZE <= PERSIST_DATA_MAX_LENGTH,
                "Alarm's extension persisted blob exceeds persist_write_data's per-key cap");
 
-// A stored schema older than STORE_SCHEMA is only trusted if
-// alarm_size_for_schema() has an entry for it -- in that case,
-// persist_read_data's own "copies min(buffer_size, actual_stored_size),
-// leaves the rest of buffer untouched" behavior already does the right
-// thing: reading an old, shorter blob into a zeroed current-sized Alarm
-// (the memset below) naturally reproduces every field that existed back
-// then correctly, leaving only the new trailing field(s) at 0. A newer-
-// than-us stored schema (a downgrade) or one with no recorded size
-// (predates this table, or a declared hard break) wipes, exactly like
-// every schema mismatch did before this migration existed.
+// MAIN is trusted (read in full) for any stored_schema this codebase has
+// ever shipped (alarm_size_for_schema() nonzero) AND for any stored_schema
+// NEWER than STORE_SCHEMA (a downgrade) -- betting that MAIN's own layout
+// keeps being as stable going forward as it has been for its entire history
+// so far (see alarm_size_for_schema()'s own comment). Only a stored schema
+// OLDER than 7 (genuinely predating this migration system) wipes outright.
+//
+// EXTENSION is trusted in FULL only when stored_schema is an EXACT match
+// for STORE_SCHEMA -- any mismatch, in either direction, reads only the
+// trusted ALARM_EXT_CORE_SIZE prefix (cron_week_mask/cron_week) and leaves
+// every field after it (sound_pattern_kind onward) at its safe zero
+// default. persist_read_data's own "copies min(buffer_size,
+// actual_stored_size), leaves the rest of the buffer untouched" behavior is
+// what makes reading fewer bytes than a key might currently hold safe --
+// the same property that makes ordinary forward migration safe elsewhere in
+// this function.
 int store_load(Alarm *out) {
   if (!persist_exists(PERSIST_KEY_SCHEMA)) { return 0; }
   int stored_schema = persist_read_int(PERSIST_KEY_SCHEMA);
-  bool migrating = false;
-  if (stored_schema != STORE_SCHEMA) {
-    if (stored_schema > STORE_SCHEMA) { return 0; }
-    if (alarm_size_for_schema(stored_schema) == 0) { return 0; }
-    migrating = true;
+  bool migrating = (stored_schema != STORE_SCHEMA);
+  if (migrating && stored_schema < STORE_SCHEMA && alarm_size_for_schema(stored_schema) == 0) {
+    return 0;   // genuinely predates schema 7 -- MAIN's own layout is unknown
   }
+  bool ext_current = !migrating;
   int count = persist_exists(PERSIST_KEY_COUNT) ? persist_read_int(PERSIST_KEY_COUNT) : 0;
   if (count > MAX_ALARMS) { count = MAX_ALARMS; }
   if (count < 0) { count = 0; }
@@ -123,39 +123,31 @@ int store_load(Alarm *out) {
     // for why a schema-10 install's marker could say "up to date" while its
     // extension data was never actually written).
     if (persist_exists(PERSIST_KEY_ALARM_EXT_BASE + i)) {
-      persist_read_data(PERSIST_KEY_ALARM_EXT_BASE + i, &out[i].cron_week_mask, ALARM_EXT_SIZE);
+      persist_read_data(PERSIST_KEY_ALARM_EXT_BASE + i, &out[i].cron_week_mask,
+                         ext_current ? ALARM_EXT_SIZE : ALARM_EXT_CORE_SIZE);
     } else if (out[i].is_cron) {
       out[i].cron_week_mask = AC_WEEK_ALL;
       strcpy(out[i].cron_week, "*");
     }
-    // sound_pattern[]/vibe_pattern_custom[]'s byte meaning changed at
-    // schema 13 (raw duration -> bit7=break/bits0-6=duration-digit) and
-    // schema 14 (duration digit 1-4 index -> the sparse {1,2,4,8} set) --
-    // a stored *_kind==1 from an older schema means its pattern bytes are
-    // under one of those OLD encodings, which would otherwise be silently
-    // misread as garbage or a different duration under the current one
-    // (e.g. a schema-13 stored digit 4, meaning 800ms, would now read as
-    // digit 4 meaning 400ms). vibe's grammar/encoding hasn't changed since
-    // schema 14, so it only needs resetting for schemas older than that.
-    if (migrating && stored_schema < 14) {
-      out[i].vibe_pattern_kind = 0;
-      out[i].vibe_pattern_len = 0;
-    }
-    // sound_pattern_note[]'s encoding changed AGAIN at schema 15 (a plain
-    // 0-8 index into a 9-entry letter table incl. lowercase c/d -> an
-    // `octave*AC_NOTE_COUNT + index` value into a 7-entry table), so
-    // sound needs resetting for anything older than THAT, one schema
-    // later than vibe's own reset above.
-    if (migrating && stored_schema < 15) {
-      out[i].sound_pattern_kind = 0;
-      out[i].sound_pattern_len = 0;
-    }
+    // Defensive sanity check on Core fields -- cheap, always run, not
+    // gated on `migrating`: protects against ever trusting an out-of-range
+    // value, regardless of whether it came from a downgrade (a schema this
+    // binary has never seen) or plain corruption. sound_pattern_kind/
+    // vibe_pattern_kind/vibe_pattern_len/custom_tone_id/sound_preset need
+    // no equivalent check -- when `!ext_current` they're already at their
+    // safe zero default from the memset above and were never read past
+    // ALARM_EXT_CORE_SIZE to begin with.
+    if (out[i].hour > 23) { out[i].hour = 0; }
+    if (out[i].minute > 59) { out[i].minute = 0; }
+    out[i].name[NAME_LEN] = '\0';
+    if (out[i].repeat_days > AC_DAY_ALL) { out[i].repeat_days = 0; }
   }
   if (migrating) {
     // Mark the migration handled now, so a later load (before any real
     // mutation re-saves the alarms at full current size) doesn't re-check
     // or re-migrate -- persist_read_data above already tolerates the
-    // per-alarm blobs staying physically old-sized on disk until then.
+    // per-alarm blobs staying physically old-sized (or, now, differently-
+    // shaped past ALARM_EXT_CORE_SIZE) on disk until then.
     persist_write_int(PERSIST_KEY_SCHEMA, STORE_SCHEMA);
   }
   return count;
