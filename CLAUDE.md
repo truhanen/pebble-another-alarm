@@ -1264,29 +1264,16 @@ feature — see git history if curious):
   `CustomTone.pattern[]`/`pattern_note[]` (the tone library) and
   `Alarm.vibe_pattern_custom[]` now, not through anything on `Alarm`
   itself for sound — see the schema-19 paragraph below for why/how that
-  representation was retired. `STORE_SCHEMA` 15's migration used to reset
-  `sound_pattern_kind`/`sound_pattern_len` (not vibe's, this time — vibe's
-  own grammar/encoding hasn't changed since schema 14) for any alarm
-  migrating from schema < 15, rather than reinterpreting old
-  `sound_pattern_note[]` bytes under the new octave-aware encoding — this
-  same dev cycle went through a raw 1-100-duration-per-segment encoding
-  (schema 12), a bit7=break/bits0-6=contiguous-1-4-index encoding (schema
-  13), the `AC_NOTE_DURATION_DIGITS` sparse-digit scheme (schema 14), the
-  single-marker octave rework (schema 15), and now the stacked-marker
-  widening above (`STORE_SCHEMA` 18, `TONE_STORE_SCHEMA` 3 — widening the
-  encoded octave range means a previously-stored byte value now means a
-  *different* octave, e.g. old-encoding `0` meant "down 1 octave" but under
-  the new domain byte value `0` means "down 8 octaves," a silently wrong
-  reinterpretation rather than a safe zero-fill; `TONE_STORE_SCHEMA` already
-  wipes the whole tone table on any mismatch, so the bump alone suffices
-  there); each changed what the same
-  stored bits mean, so every bump needed a reset rather than
-  reinterpreting. Notably, schema 18 needed **no explicit `store_load()`
-  reset fixup** despite reinterpreting bytes — schema 17 (the version being
-  migrated from) was already a hard break with no `alarm_size_for_schema(17)`
-  entry, so any schema-17 data wipes before this bump's logic would ever
-  matter; worth checking, on every future bump, whether the prior schema is
-  already a hard break before assuming a fixup is needed. Every other alarm field is untouched by this.
+  representation was retired. Schemas 12 through 18 were a single,
+  never-published dev cycle iterating on this signal-pattern byte encoding
+  (a raw duration scheme, then a packed bit7=break scheme, then sparse
+  duration digits, then ABC-notation octave markers, then stacked octave
+  markers — each changed what the same stored bits mean, so `store_load()`
+  reset the affected `*_kind`/`*_len` fields to their safe defaults on every
+  one of these bumps rather than reinterpreting old bytes under a new
+  meaning) — no published version was ever on schema 12-18, so this detail
+  now lives only in `STORE_SCHEMA`'s own condensed history comment
+  (`alarm_store.h`), not here.
   **`STORE_SCHEMA` 19 removed `sound_pattern_len`/`sound_pattern[]`/
   `sound_pattern_note[]` from `Alarm` entirely**, replacing them with the
   plain `sound_preset` index described above — tracing every remaining
