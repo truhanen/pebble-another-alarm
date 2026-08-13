@@ -83,31 +83,36 @@ static const char *const PATTERN_SYMS[] = { "-", "'", "," };
 // Per-character-key (0-8) glyph lists for pattern mode, selected by
 // multitap_keyboard_set_pattern_mode's `notes_enabled` instead of by page --
 // this is a THIRD glyph source alongside PAGE_KEY/CRON_SYMS, not a variant
-// of PAGE_NUMBERS's plain 1-per-key digits. Every duration digit 1-8 (see
-// AC_NOTE_DURATION_DIGITS, alarm_calc.h -- each digit literally IS its
-// duration in hundreds of ms) now gets its own key, one number per key --
-// keys 0-7 show "1".."8" respectively, key 8 is spare (no glyph). With
-// notes: keys 0-6 additionally cycle into a note letter (C/D/E/F/G/A/B, the
-// same key-order convention this table used before this digit set widened
-// from a sparse {1,2,4,8} on 4 keys to this contiguous 1-8 range on 8) --
-// only 7 letters exist, so key 7 ("8") is digit-only. Octave shifts are
-// applied via the bottom-left key's "'"/"," markers instead of dedicated
-// duplicate keys, so there's nothing left to put on a letter-only slot
-// anyway. Without notes (vibe has no pitch): keys 0-7 are bare single-glyph
-// digit keys (no cycling at all), key 8 has no glyph (a press on it, or any
-// key's cycle past its last real glyph, is simply a no-op, same as the
-// widget already does for one-glyph/empty pending logic).
-static const char *const PK_SOUND_0[] = { "1", "C", NULL };
-static const char *const PK_SOUND_1[] = { "2", "D", NULL };
-static const char *const PK_SOUND_2[] = { "3", "E", NULL };
-static const char *const PK_SOUND_3[] = { "4", "F", NULL };
-static const char *const PK_SOUND_4[] = { "5", "G", NULL };
-static const char *const PK_SOUND_5[] = { "6", "A", NULL };
-static const char *const PK_SOUND_6[] = { "7", "B", NULL };
-static const char *const PK_SOUND_7[] = { "8", NULL };
-static const char *const PK_SOUND_EMPTY[] = { NULL };
+// of PAGE_NUMBERS's plain 1-per-key digits. The 3x3 character grid (keys
+// 0-8, row-major: 0,1,2 / 3,4,5 / 6,7,8) splits into a left duration column
+// and a right two-column note grid, rather than sharing each key between a
+// digit and a letter -- so typing a note never needs multi-tapping past a
+// digit to reach it. Left column (keys 0/3/6) holds every duration digit
+// 1-8 (see AC_NOTE_DURATION_DIGITS, alarm_calc.h -- each digit literally IS
+// its duration in hundreds of ms), grouped top-to-bottom like a phone
+// dialpad's own 1/4/7 column ("123"/"456"/"789" per key) -- key 6 only
+// cycles "7"/"8" since 9 isn't a valid duration digit. The right two
+// columns (keys 1/2/4/5/7/8) hold the 7 note letters C/D/E/F/G/A/B, one per
+// key except the last (key 8), which cycles A then B since 6 keys can't
+// hold 7 letters one-each. Octave shifts are applied via the bottom-left
+// key's "'"/"," markers instead of dedicated duplicate keys, so there's no
+// need to fit octave variants into this grid too. Without notes (vibe has
+// no pitch): keys 0-7 are bare single-glyph digit keys (no cycling at all),
+// key 8 has no glyph (a press on it, or any key's cycle past its last real
+// glyph, is simply a no-op, same as the widget already does for
+// one-glyph/empty pending logic) -- vibe's own layout is unaffected by this
+// duration/note-column split, which only applies to PATTERN_KEY_SOUND.
+static const char *const PK_SOUND_0[] = { "1", "2", "3", NULL };
+static const char *const PK_SOUND_1[] = { "C", NULL };
+static const char *const PK_SOUND_2[] = { "D", NULL };
+static const char *const PK_SOUND_3[] = { "4", "5", "6", NULL };
+static const char *const PK_SOUND_4[] = { "E", NULL };
+static const char *const PK_SOUND_5[] = { "F", NULL };
+static const char *const PK_SOUND_6[] = { "7", "8", NULL };
+static const char *const PK_SOUND_7[] = { "G", NULL };
+static const char *const PK_SOUND_8[] = { "A", "B", NULL };
 static const char *const *const PATTERN_KEY_SOUND[9] = {
-  PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_EMPTY,
+  PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_8,
 };
 static const char *const PK_VIBE_0[] = { "1", NULL };
 static const char *const PK_VIBE_1[] = { "2", NULL };

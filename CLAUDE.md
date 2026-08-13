@@ -1383,13 +1383,16 @@ feature — see git history if curious):
   and its bottom-left key cycles `*`/`-`/`/`/`,`/repurposes space as `0`;
   pattern mode's character keys instead pull from one of two small,
   purpose-built tables selected by a second flag,
-  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (keys 0-7 each show one
-  duration digit "1".."8", one per key, matching the full 1-8 digit range
-  above; keys 0-6 additionally cycle into that key's note letter
-  C/D/E/F/G/A/B after the digit, same key-order convention this table used
-  before the digit set widened from a sparse `{1,2,4,8}` on 4 keys; key 7
-  ("8") is digit-only since only 7 letters exist; key 8 is spare/no-op, see
-  the note-table description above for why) for sound, or `PATTERN_KEY_VIBE[9]`
+  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (the 3x3 character grid,
+  keys 0-8 row-major, split into a left duration column and a right
+  two-column note grid rather than sharing each key between a digit and a
+  letter: keys 0/3/6 (the left column) cycle duration digits grouped
+  top-to-bottom like a phone dialpad's own 1/4/7 column — "1"/"2"/"3",
+  "4"/"5"/"6", "7"/"8" (no "9", not a valid duration digit) — and keys
+  1/2/4/5/7/8 (the right two columns) hold the 7 note letters one per key
+  in reading order, C/D/E/F/G/A/B, except the last key (8), which cycles A
+  then B since 6 keys can't hold 7 letters one-each) for sound, or
+  `PATTERN_KEY_VIBE[9]`
   (keys 0-7 each a bare duration digit "1".."8", no cycling; key 8
   empty/no-op) for vibe, since vibe has no pitch to put on any key — and
   its bottom-left key cycles `-`/`'`/`,`
