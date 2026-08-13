@@ -83,18 +83,27 @@
                           // layout has never once changed across this whole history, so
                           // it now has an entry for every schema 7 onward, including
                           // 16/17/18 -- see its own updated comment). The EXTENSION blob
-                          // is instead read in full ONLY when the stored schema is an
-                          // EXACT match for STORE_SCHEMA; any other stored schema (older,
-                          // even a formerly-"recognized" one like 12-15, or newer --
-                          // a downgrade) reads only its trusted leading
+                          // instead gets its OWN independent range check
+                          // (ext_schema_is_appendable(), alarm_store.c), starting at 19 --
+                          // any stored schema from 19 onward (not a downgrade) is read in
+                          // FULL up to the current ALARM_EXT_SIZE, so a future pure append
+                          // to this blob (a new trailing field, nothing resized/reordered/
+                          // removed) survives migration completely, the same free ride
+                          // MAIN's own forward migration has always had. Only a stored
+                          // schema OLDER than 19 (a formerly-"recognized" one like 12-15,
+                          // or anything that predates this tracking) or a downgrade this
+                          // binary has never seen reads only its trusted leading
                           // `ALARM_EXT_CORE_SIZE` bytes (cron_week_mask/cron_week) and
                           // defaults everything after. This is also what finally makes
                           // this codebase's long-standing wipe-on-any-hard-break behavior
                           // go away for good: a schedule (label/time/repeat/cron,
                           // including the week-of-year restriction) now survives ANY
-                          // future signal-only hard break intact, and a downgrade no
-                          // longer wipes unconditionally either. See store_load()'s own
-                          // comment (alarm_store.c) for the full mechanism.
+                          // future signal-only hard break intact, a downgrade no longer
+                          // wipes unconditionally either, and an ordinary signal-only
+                          // APPEND no longer costs users their Tone/Vibration settings the
+                          // way this schema's own hard break necessarily does, once. See
+                          // store_load()'s own comment (alarm_store.c) for the full
+                          // mechanism.
                           //
                           // Prior bump (18): sound_pattern_note[]'s octave encoding widened from
                           // 3 values (down 1/same/up 1) to 10 (down up to 8/same/up 1),
@@ -267,53 +276,77 @@
                           //  2. If your new field lands in the EXTENSION blob (after
                           //     cron_week_mask/cron_week -- true for any signal-pattern
                           //     field, which is everywhere new fields have landed since
-                          //     schema 12), `alarm_size_for_schema()` (alarm_store.c) needs
-                          //     NO change at all -- it's a MAIN-blob-only range check now,
-                          //     and MAIN is untouched by definition. Just check the new
-                          //     EXTENSION size against PERSIST_DATA_MAX_LENGTH (256) -- if
-                          //     it would now exceed that, it needs splitting again the same
-                          //     way schema 10->11 did. If your new field somehow lands in
-                          //     MAIN instead, that's new territory (hasn't happened since
-                          //     schema 9) -- `alarm_size_for_schema()` would need a real new
-                          //     range boundary added, not just a bump.
+                          //     schema 12) and is a genuine APPEND (nothing existing
+                          //     resized/reordered/removed), neither `alarm_size_for_schema()`
+                          //     NOR `ext_schema_is_appendable()` (both alarm_store.c) need
+                          //     any change at all -- MAIN is untouched by definition, and
+                          //     ext_schema_is_appendable()'s existing `>= 19` already covers
+                          //     this new bump too, so store_load() reads the new field in
+                          //     full for free via the same truncation trick MAIN has always
+                          //     used. Just check the new EXTENSION size against
+                          //     PERSIST_DATA_MAX_LENGTH (256) -- if it would now exceed that,
+                          //     it needs splitting again the same way schema 10->11 did. If
+                          //     your new field somehow lands in MAIN instead, that's new
+                          //     territory (hasn't happened since schema 9) --
+                          //     `alarm_size_for_schema()` would need a real new range
+                          //     boundary added, not just a bump.
                           //  3. If the change genuinely can't be additive (a field removed,
                           //     reordered, or resized) but stays confined to the EXTENSION
                           //     blob (i.e. after cron_week_mask/cron_week, which is where
-                          //     every signal-pattern field lives), you don't need to touch
-                          //     alarm_size_for_schema() at all -- MAIN is unaffected by
-                          //     definition, and the EXTENSION fallback (below) already
-                          //     activates for ANY stored_schema that isn't an exact match,
-                          //     with zero new code needed per bump. If a future change
-                          //     somehow needs to touch the MAIN blob itself non-additively
-                          //     (hasn't happened yet, and shouldn't need to for a long
-                          //     while, but say so here if it ever does), THAT'S the case
-                          //     that would need its own new handling, since MAIN currently
-                          //     has no fallback at all -- it's either fully trusted or the
-                          //     whole load returns 0.
+                          //     every signal-pattern field lives), `alarm_size_for_schema()`
+                          //     still needs no change (MAIN is unaffected by definition), but
+                          //     `ext_schema_is_appendable()`'s threshold DOES need bumping to
+                          //     your new schema number -- otherwise the next release would
+                          //     wrongly treat your broken layout as a safe append and
+                          //     misread it. Once bumped, the EXTENSION fallback (below)
+                          //     automatically activates for anything older than your new
+                          //     threshold, with no other code change needed. If a future
+                          //     change somehow needs to touch the MAIN blob itself
+                          //     non-additively (hasn't happened yet, and shouldn't need to
+                          //     for a long while, but say so here if it ever does), THAT'S
+                          //     the case that would need its own new handling, since MAIN
+                          //     currently has no fallback at all -- it's either fully
+                          //     trusted or the whole load returns 0.
                           //
-                          // The EXTENSION fallback itself (store_load(), alarm_store.c),
-                          // active whenever stored_schema is anything other than an EXACT
-                          // match for STORE_SCHEMA (older -- even a schema that's otherwise
-                          // perfectly well-recognized for MAIN purposes -- or newer, a
-                          // downgrade): read the MAIN blob in full regardless (its own
-                          // layout is untouched by definition -- see alarm_size_for_schema()'s
-                          // own comment) plus just `ALARM_EXT_CORE_SIZE` bytes from the FRONT
-                          // of the EXTENSION blob -- `cron_week_mask`/`cron_week`, the first
-                          // two fields ever appended into that blob (schema 10/11), never
-                          // moved since. Every other EXTENSION field (`sound_pattern_kind`,
+                          // The EXTENSION mechanism itself (store_load(), alarm_store.c) is
+                          // now a range check, same shape as alarm_size_for_schema() but
+                          // independent of it: `ext_schema_is_appendable(stored_schema)`
+                          // (currently `>= 19`) decides, and a downgrade (stored_schema >
+                          // STORE_SCHEMA) always counts as "no" regardless of that check,
+                          // since a newer binary's own EXTENSION layout is unknown to us.
+                          //
+                          // When it says yes: read the EXTENSION blob in full, up to the
+                          // CURRENT `ALARM_EXT_SIZE` -- an older-but-appendable blob simply
+                          // doesn't have that many bytes stored yet, and
+                          // `persist_read_data`'s own `min(buffer_size, actual_stored_size)`
+                          // truncation means only however many bytes it actually holds get
+                          // copied, leaving any newer trailing field(s) at their safe zero
+                          // default from the memset above -- the exact same free ride
+                          // MAIN's own forward migration has always had. A genuine future
+                          // EXTENSION-only append (ground rule #2 above) costs nothing: no
+                          // new code, and no signal-setting reset for existing users either.
+                          //
+                          // When it says no (a genuine EXTENSION-layout hard break, or a
+                          // downgrade this binary has never seen): read the MAIN blob in
+                          // full regardless (its own layout is untouched by definition --
+                          // see alarm_size_for_schema()'s own comment) plus just
+                          // `ALARM_EXT_CORE_SIZE` bytes from the FRONT of the EXTENSION blob
+                          // -- `cron_week_mask`/`cron_week`, the first two fields ever
+                          // appended into that blob (schema 10/11), never moved since.
+                          // Every other EXTENSION field (`sound_pattern_kind`,
                           // `vibe_pattern_kind`, `vibe_pattern_len`, `vibe_pattern_custom[]`,
-                          // `custom_tone_id`, `sound_preset`) resets to its safe zero default
-                          // instead of being read at all. `persist_read_data`'s own
-                          // `min(buffer_size, actual_stored_size)` truncation is what makes reading only
-                          // `ALARM_EXT_CORE_SIZE` bytes of a key that might currently hold
-                          // more (or differently-shaped) data safe -- the same property
-                          // that already makes ordinary forward migration safe elsewhere in
-                          // this file. This is what lets a schedule (label/time/repeat/cron,
-                          // including the week-of-year restriction) survive a signal-only
-                          // hard break intact, rather than the whole alarm disappearing --
-                          // see this file's own git history/CLAUDE.md for the incident that
-                          // prompted this (repeated alarm-list wipes purely from iterating
-                          // on the sound/vibe pattern encoding during dev testing).
+                          // `custom_tone_id`, `sound_preset`) resets to its safe zero
+                          // default instead of being read at all -- the same truncation
+                          // property, just applied to a smaller requested size this time.
+                          //
+                          // This is what lets a schedule (label/time/repeat/cron, including
+                          // the week-of-year restriction) survive a signal-only hard break
+                          // intact, rather than the whole alarm disappearing, AND lets an
+                          // ordinary signal-only append no longer cost existing users their
+                          // Tone/Vibration settings at all -- see this file's own git
+                          // history/CLAUDE.md for the incident that prompted the first half
+                          // of this (repeated alarm-list wipes purely from iterating on the
+                          // sound/vibe pattern encoding during dev testing).
 
 // Loads alarms into out (capacity MAX_ALARMS); returns count, or 0 if none/old schema.
 int store_load(Alarm *out);

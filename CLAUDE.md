@@ -368,29 +368,38 @@ in this app at all, so every message key is now just an ordinary scalar at
   schedule data at risk too. Fixed by decoupling the two blobs' own
   trust decisions entirely: `alarm_size_for_schema()` (above) now governs
   MAIN alone, and is essentially permanent (every schema 7 onward has an
-  entry, since MAIN's layout has never changed). EXTENSION is read in full
-  ONLY when `stored_schema == STORE_SCHEMA` exactly; any other stored
-  schema — an older one, even a formerly-"recognized" one like 12-15, or a
-  *newer* one (a downgrade, which used to wipe unconditionally via its own
-  separate `stored_schema > STORE_SCHEMA` check — removed, folded into this
-  same path) — reads only a frozen leading prefix of the EXTENSION blob,
-  `ALARM_EXT_CORE_SIZE` (`alarm_store.c`): `cron_week_mask`/`cron_week`,
-  the first two fields ever appended into that blob (schema 10/11), never
-  moved since regardless of how many times the signal fields after them
-  have resized. Everything from `sound_pattern_kind` onward resets to its
-  safe zero default instead of being read at all. This works because
-  `persist_read_data`'s own `min(buffer_size, actual_stored_size)`
-  truncation is direction-agnostic — the same property that already makes
-  ordinary forward migration safe makes reading fewer bytes than a key
-  currently holds (in either the older-hard-break or newer-downgrade case)
-  equally safe. A small sanity check on Core fields (`hour<24`, `minute<
-  59`, `name` NUL-terminated, `repeat_days` in range) runs unconditionally
-  on every load, cheap insurance now that a downgrade can hand `store_load()`
-  bytes from a schema it's never seen. Net effect: a future signal-encoding
-  rework (near-certain, given how often this exact area has already
-  churned) can only ever reset "how the alarm rings," never "whether or
-  when it rings" — the alarm's schedule and its own on/off state are
-  completely unaffected either way.
+  entry, since MAIN's layout has never changed). EXTENSION gets its own
+  independent range check, `ext_schema_is_appendable()` (`alarm_store.c`,
+  currently `stored_schema >= 19` — 19 is the schema that introduced this
+  tracking, the same bump that removed `sound_pattern_len`/`sound_pattern[]`/
+  `sound_pattern_note[]`, see the Custom-tone-adjacent design point below):
+  when it says yes (and it's not a downgrade), EXTENSION is read in full up
+  to the *current* `ALARM_EXT_SIZE` — an older-but-appendable blob simply
+  doesn't have that many bytes stored yet, and `persist_read_data`'s own
+  `min(buffer_size, actual_stored_size)` truncation means only however many
+  bytes it actually holds get copied, leaving any newer trailing field(s) at
+  their safe zero default — the same free ride MAIN's own forward migration
+  has always had, so an ordinary future signal-only APPEND (a new trailing
+  field, nothing resized/reordered/removed) no longer costs existing users
+  their Tone/Vibration settings at all. When it says no — a genuine
+  EXTENSION-layout hard break, or a *newer* stored schema (a downgrade,
+  which used to wipe unconditionally via its own separate `stored_schema >
+  STORE_SCHEMA` check — removed, folded into this same path) — EXTENSION
+  instead reads only a frozen leading prefix, `ALARM_EXT_CORE_SIZE`
+  (`alarm_store.c`): `cron_week_mask`/`cron_week`, the first two fields ever
+  appended into that blob (schema 10/11), never moved since regardless of
+  how many times the signal fields after them have resized. Everything from
+  `sound_pattern_kind` onward resets to its safe zero default instead of
+  being read at all — the same truncation property, just applied to a
+  smaller requested size this time. A small sanity check on Core fields
+  (`hour<24`, `minute<59`, `name` NUL-terminated, `repeat_days` in range)
+  runs unconditionally on every load, cheap insurance now that a downgrade
+  can hand `store_load()` bytes from a schema it's never seen. Net effect: a
+  future signal-encoding rework (near-certain, given how often this exact
+  area has already churned) can only ever reset "how the alarm rings," never
+  "whether or when it rings" — the alarm's schedule and its own on/off state
+  are completely unaffected either way — AND a future signal-only change
+  that's a pure append doesn't even reset that.
 - **A field-append migration isn't always a free pass, though**: adding
   `cron_dom_mask`/`cron_month_mask` (schema 9, cron mode's day-of-month/month
   fields — see "Cron-syntax alarms" below) is the first bump where the
