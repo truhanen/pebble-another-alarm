@@ -778,6 +778,27 @@ static void test_sound_pattern_parse_rejects_too_many_segments(void) {
   assert(len == 4);
 }
 
+// Exercises the REAL production cap (AC_SOUND_PATTERN_MAX_SEGMENTS == 32),
+// not just the artificial max_segments=4 above -- and confirms the text
+// needed to reach it (95 chars for 32 plain "<digit><letter>" tokens
+// space-separated) comfortably fits under the pattern keyboard's own
+// PATTERN_KEYBOARD_MAX_LEN (128, main.c) cap, so the on-watch keyboard's
+// character limit is never what stops a tone from reaching its full 32
+// notes -- the segment cap always binds first.
+static void test_sound_pattern_parse_max_segments_boundary(void) {
+  const char *p32 =
+    "1C 2D 3E 4F 5G 6A 7B 8C 1D 2E 3F 4G 5A 6B 7C 8D "
+    "1E 2F 3G 4A 5B 6C 7D 8E 1F 2G 3A 4B 5C 6D 7E 8F";
+  assert(strlen(p32) == 95);   // well under the 128-char keyboard cap
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse(p32, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 32);
+
+  char p33[128];
+  snprintf(p33, sizeof(p33), "%s 1G", p32);   // one more than the cap
+  assert(!ac_sound_pattern_parse(p33, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+}
+
 static void test_sound_pattern_format_round_trip(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   char buf[64];
@@ -881,6 +902,7 @@ int main(void) {
   test_sound_pattern_parse_rejects_bad_note();
   test_sound_pattern_parse_rejects_malformed();
   test_sound_pattern_parse_rejects_too_many_segments();
+  test_sound_pattern_parse_max_segments_boundary();
   test_sound_pattern_format_round_trip();
   test_sound_pattern_format_empty();
   printf("all alarm_calc tests passed\n");
