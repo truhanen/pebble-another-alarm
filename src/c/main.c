@@ -3527,6 +3527,16 @@ static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, siz
 static void pattern_select_preview_current_row(void) {
   if (!s_pattern_select_menu) { return; }
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
+#if PBL_SPEAKER
+  // Cuts off whatever tone the PREVIOUS row's preview was still playing --
+  // without this, navigating away mid-playback let it keep sounding right
+  // through the newly-selected row's own preview (or through "Off", which
+  // has no preview of its own to mask it). Sound-only: vibe's own
+  // alarm_play_vibe_pattern one-shots are short enough (and vibes_cancel()
+  // has no audible "still playing" artifact) that this was never reported
+  // there.
+  if (s_pattern_select_kind == PATTERN_SELECT_SOUND) { speaker_stop(); }
+#endif
   MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
   if (idx.row == 0) { return; }
   char text[PATTERN_KEYBOARD_MAX_LEN + 1];
@@ -3550,6 +3560,13 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
   if (s_edit_idx < 0 || s_edit_idx >= s_count) { return; }
   Alarm *a = &s_alarms[s_edit_idx];
   int row = cell_index->row;
+#if PBL_SPEAKER
+  // Selecting always moves on -- applies a preset/tone, opens the keyboard,
+  // or opens the Custom-tone screen -- so whatever the highlighted row's own
+  // preview was still playing needs cutting off here too, same as
+  // navigating with UP/DOWN (pattern_select_preview_current_row).
+  if (s_pattern_select_kind == PATTERN_SELECT_SOUND) { speaker_stop(); }
+#endif
 
   // Row 0 ("Off") is the merged Vibration/Sound on/off toggle -- the only
   // instant-apply row in either picker. It deliberately leaves the
@@ -3701,6 +3718,9 @@ static void pattern_select_down_click(ClickRecognizerRef r, void *ctx) {
 // so there's no snapshot to revert (unlike repeat/cron/snooze's on_cancel
 // convention, which exists because those DO stage changes before Apply).
 static void pattern_select_back(ClickRecognizerRef r, void *ctx) {
+#if PBL_SPEAKER
+  if (s_pattern_select_kind == PATTERN_SELECT_SOUND) { speaker_stop(); }
+#endif
   window_stack_pop(true);
 }
 static void pattern_select_click_config(void *ctx) {
