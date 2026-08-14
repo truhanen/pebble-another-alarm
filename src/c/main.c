@@ -4056,6 +4056,13 @@ static void custom_tone_tone_done(const char *text, void *ctx) {
   if (s_custom_tone_menu) { menu_layer_reload_data(s_custom_tone_menu); }
   if (s_pattern_select_menu) { menu_layer_reload_data(s_pattern_select_menu); }
   if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
+#if PBL_SPEAKER
+  // Unlike the Tone picker's own rows (previewed on navigate, before Select
+  // is even pressed), this is the tone's own edit screen -- there's no
+  // browsing-past-other-rows moment to preview during, so the only
+  // opportunity to let the user hear the edit is right after they commit it.
+  alarm_preview_sound_pattern(text);
+#endif
 }
 
 static void custom_tone_name_done(const char *text, void *ctx) {
