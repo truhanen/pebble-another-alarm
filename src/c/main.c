@@ -787,7 +787,7 @@ static const SoundPreset SOUND_PRESETS[] = {
   { "Triple fast", "1C 1- 1C 1- 1C" },
   { "Analog bell", "1C 1G 1C 1G 1C 1G 1C 1G" },
   { "Celebration", "3C 1- 2C 6D 6C 6F 6E" },
-  { "Lullaby", "8D 4F 2E 2D 4E 4A 6A," },
+  { "Lullaby", "8G, 4B, 2A, 2G, 4A, 4D 6D," },
   { "March", "4A,,, 2- 4A,,, 2- 4A,,, 2- 3F,,, 2- 1C,, 4A,,, 2- 3F,,, 2- 1C,, 6A,,," },
 };
 #define SOUND_PRESET_COUNT (int)(sizeof(SOUND_PRESETS) / sizeof(SOUND_PRESETS[0]))
