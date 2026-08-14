@@ -783,7 +783,7 @@ static void test_sound_pattern_parse_rejects_too_many_segments(void) {
 // needed to reach it (95 chars for 32 plain "<digit><letter>" tokens
 // space-separated) comfortably fits under the pattern keyboard's own
 // PATTERN_KEYBOARD_MAX_LEN (128, main.c) cap, so the on-watch keyboard's
-// character limit is never what stops a tone from reaching its full 32
+// character limit is never what stops a tune from reaching its full 32
 // notes -- the segment cap always binds first.
 static void test_sound_pattern_parse_max_segments_boundary(void) {
   const char *p32 =

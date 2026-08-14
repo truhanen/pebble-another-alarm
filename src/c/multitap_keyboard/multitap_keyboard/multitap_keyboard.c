@@ -8,7 +8,7 @@
 #define GRID_COLS    3
 #define GRID_ROWS    4
 #define KEY_COUNT    (GRID_COLS * GRID_ROWS)
-// Bumped from 96 for pebble-another-alarm's pattern mode: a Tone (sound)
+// Bumped from 96 for pebble-another-alarm's pattern mode: a Tune (sound)
 // pattern can now run up to AC_SOUND_PATTERN_MAX_SEGMENTS (32, alarm_calc.h)
 // segments of up to 3 chars each plus separating spaces, needing up to 128
 // bytes -- BUFFER_CAP must exceed the caller's own PATTERN_KEYBOARD_MAX_LEN

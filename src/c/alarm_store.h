@@ -16,32 +16,32 @@
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
-// Custom-tone library -- a separate persisted table from Alarm/STORE_SCHEMA
-// below, with its own schema counter (TONE_STORE_SCHEMA) since it's a
+// Custom-tune library -- a separate persisted table from Alarm/STORE_SCHEMA
+// below, with its own schema counter (TUNE_STORE_SCHEMA) since it's a
 // logically independent concern: a future Alarm-only schema bump shouldn't
-// force wiping the tone library, and vice versa. See store_load_tones()/
-// store_save_tones() in alarm_store.c.
-#define PERSIST_KEY_TONE_SCHEMA          14
-#define PERSIST_KEY_TONE_COUNT           15
-#define PERSIST_KEY_NEXT_TONE_ID         16
-#define TONE_STORE_SCHEMA 3
+// force wiping the tune library, and vice versa. See store_load_tunes()/
+// store_save_tunes() in alarm_store.c.
+#define PERSIST_KEY_TUNE_SCHEMA          14
+#define PERSIST_KEY_TUNE_COUNT           15
+#define PERSIST_KEY_NEXT_TUNE_ID         16
+#define TUNE_STORE_SCHEMA 3
 // Bumped from 2: pattern_note[]'s octave encoding widened from 3 values
 // (down 1/same/up 1) to 10 (down up to 8/same/up 1), to support stacking
 // multiple "'"/"," markers -- see AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN's own doc
 // comment (alarm_calc.h). Same "byte VALUE means something different now"
-// category as Alarm's own schema-18 bump below; store_load_tones() wipes on
+// category as Alarm's own schema-18 bump below; store_load_tunes() wipes on
 // any mismatch anyway, so this needed nothing beyond the bump itself.
 //
 // Bumped from 1 to 2: pattern[]/pattern_note[] grew from AC_PATTERN_MAX_SEGMENTS
 // (16) to AC_SOUND_PATTERN_MAX_SEGMENTS (32) -- a resize, not an append, so
-// (per the ground rules below) this is a hard break; store_load_tones()
+// (per the ground rules below) this is a hard break; store_load_tunes()
 // wipes on any schema mismatch anyway, so this needed nothing beyond the
 // bump itself.
 //
-// Ground rules for growing CustomTone (alarm_calc.h), mirroring STORE_SCHEMA's
+// Ground rules for growing CustomTune (alarm_calc.h), mirroring STORE_SCHEMA's
 // own rules below: append new fields at the very end only, never insert/
 // reorder/resize/remove; if a change genuinely isn't additive, just bump
-// TONE_STORE_SCHEMA (store_load_tones() wipes on any mismatch -- there's no
+// TUNE_STORE_SCHEMA (store_load_tunes() wipes on any mismatch -- there's no
 // per-version size table for this table at all, unlike Alarm's own
 // alarm_size_for_schema(), since every mismatch here wipes regardless).
 #define PERSIST_KEY_ALARM_BASE         100   // alarm i -> key 100+i (one Alarm per key)
@@ -50,28 +50,28 @@
 // PERSIST_KEY_ALARM_BASE's own 100..115 range (MAX_ALARMS=16) with room to
 // grow.
 #define PERSIST_KEY_ALARM_EXT_BASE     200
-// Tone i -> key 300+i (one CustomTone per key, no main/extension split
-// needed -- sizeof(CustomTone) is well under PERSIST_DATA_MAX_LENGTH).
+// Tune i -> key 300+i (one CustomTune per key, no main/extension split
+// needed -- sizeof(CustomTune) is well under PERSIST_DATA_MAX_LENGTH).
 // Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
-#define PERSIST_KEY_TONE_BASE          300
+#define PERSIST_KEY_TUNE_BASE          300
 #define STORE_SCHEMA 19  // bumped: removed sound's inline-Custom representation
                           // (sound_pattern_len/sound_pattern[]/sound_pattern_note[]) --
                           // tracing every call site that could set sound_pattern_kind==1
-                          // found exactly one left (main.c's Tone-preset direct-commit
+                          // found exactly one left (main.c's Tune-preset direct-commit
                           // path), and it only ever copies a SOUND_PRESETS[] entry's own
                           // bytes verbatim -- never genuinely freehand (sound's own
-                          // "type a custom pattern" path was already replaced by the tone
+                          // "type a custom pattern" path was already replaced by the tune
                           // library, kind==2, earlier this dev cycle). So the byte arrays
                           // were 100% redundant with an index; replaced with `sound_preset`
                           // (alarm_calc.h), mirroring vibe_pattern's own index-into-a-
                           // preset-table approach. `sound_pattern_kind` narrows to
-                          // {0 = Preset (sound_preset), 2 = Library (custom_tone_id)} --
+                          // {0 = Preset (sound_preset), 2 = Library (custom_tune_id)} --
                           // 1 is retired.
                           //
                           // A genuine field removal, not an append -- the fields removed
                           // sat in the MIDDLE of the EXTENSION blob's tail (between
                           // sound_pattern_kind and vibe_pattern_kind, and again between
-                          // vibe_pattern_custom[] and custom_tone_id), so every field
+                          // vibe_pattern_custom[] and custom_tune_id), so every field
                           // after them shifts offset. This is a materially different kind
                           // of hard break than 13/14/15/17/18 below, which only ever
                           // reinterpreted or resized bytes without changing anyone ELSE's
@@ -100,7 +100,7 @@
                           // including the week-of-year restriction) now survives ANY
                           // future signal-only hard break intact, a downgrade no longer
                           // wipes unconditionally either, and an ordinary signal-only
-                          // APPEND no longer costs users their Tone/Vibration settings the
+                          // APPEND no longer costs users their Tune/Vibration settings the
                           // way this schema's own hard break necessarily does, once. See
                           // store_load()'s own comment (alarm_store.c) for the full
                           // mechanism.
@@ -113,7 +113,7 @@
                           // as the note/break/octave grammar evolved (a packed
                           // bit7=break/bits0-6=duration scheme at 13, sparse duration digits
                           // at 14, real ABC-notation octave markers at 15, the
-                          // custom-tone-library's custom_tone_id appended cleanly at 16,
+                          // custom-tune-library's custom_tune_id appended cleanly at 16,
                           // sound/vibe pattern caps split into separate sizes -- a genuine
                           // resize, not just an append -- at 17, and stacked octave markers
                           // widening the note encoding again at 18). No published version was
@@ -135,7 +135,7 @@
                           //    weight by the time schema 19 shipped: every remaining call
                           //    site that could still set sound_pattern_kind==1 only ever
                           //    copied a SOUND_PRESETS[] entry's own bytes verbatim, never
-                          //    anything genuinely freehand, once the tone library replaced
+                          //    anything genuinely freehand, once the tune library replaced
                           //    sound's own "type a custom pattern" path. Worth remembering
                           //    next time a field looks load-bearing: trace every call site
                           //    before assuming it still needs its own storage.
@@ -274,7 +274,7 @@
                           // appended into that blob (schema 10/11), never moved since.
                           // Every other EXTENSION field (`sound_pattern_kind`,
                           // `vibe_pattern_kind`, `vibe_pattern_len`, `vibe_pattern_custom[]`,
-                          // `custom_tone_id`, `sound_preset`) resets to its safe zero
+                          // `custom_tune_id`, `sound_preset`) resets to its safe zero
                           // default instead of being read at all -- the same truncation
                           // property, just applied to a smaller requested size this time.
                           //
@@ -282,7 +282,7 @@
                           // the week-of-year restriction) survive a signal-only hard break
                           // intact, rather than the whole alarm disappearing, AND lets an
                           // ordinary signal-only append no longer cost existing users their
-                          // Tone/Vibration settings at all -- see this file's own git
+                          // Tune/Vibration settings at all -- see this file's own git
                           // history/CLAUDE.md for the incident that prompted the first half
                           // of this (repeated alarm-list wipes purely from iterating on the
                           // sound/vibe pattern encoding during dev testing).
@@ -292,15 +292,15 @@ int store_load(Alarm *out);
 // Persists `count` alarms (one per key) + schema + count.
 void store_save(const Alarm *a, int count);
 
-// Loads custom tones into out (capacity MAX_CUSTOM_TONES); returns count, or
-// 0 if none/schema mismatch (wipes on any mismatch -- see TONE_STORE_SCHEMA).
-int store_load_tones(CustomTone *out);
-// Persists `count` tones (one per key) + schema + count.
-void store_save_tones(const CustomTone *tones, int count);
-// Allocates and persists the next tone id (starts at 1; 0 is reserved for
+// Loads custom tunes into out (capacity MAX_CUSTOM_TUNES); returns count, or
+// 0 if none/schema mismatch (wipes on any mismatch -- see TUNE_STORE_SCHEMA).
+int store_load_tunes(CustomTune *out);
+// Persists `count` tunes (one per key) + schema + count.
+void store_save_tunes(const CustomTune *tunes, int count);
+// Allocates and persists the next tune id (starts at 1; 0 is reserved for
 // "none"), mirroring store_load_next_local_id/store_save_next_local_id's
 // shape for Alarm.id.
-uint32_t store_alloc_tone_id(void);
+uint32_t store_alloc_tune_id(void);
 
 // Wakeup id (-1 when none).
 int32_t store_load_wakeup_id(void);

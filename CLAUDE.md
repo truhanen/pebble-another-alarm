@@ -115,21 +115,21 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
-| `TestAlarmSoundPatternKind` | 10036 | int 0/2 | 0=Preset (use `sound_preset`), 2=Library (use `custom_tone_id`) — 1 ("inline Custom") is retired, see "Signal submenu / custom sound &amp; vibe patterns" below. Sets `sound_pattern_kind` directly; no test hook sets `sound_preset` itself, since main.c's own Tone picker already exercises that path directly. |
+| `TestAlarmSoundPatternKind` | 10036 | int 0/2 | 0=Preset (use `sound_preset`), 2=Library (use `custom_tune_id`) — 1 ("inline Custom") is retired, see "Signal submenu / custom sound &amp; vibe patterns" below. Sets `sound_pattern_kind` directly; no test hook sets `sound_preset` itself, since main.c's own Tune picker already exercises that path directly. |
 | `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
 | `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/break pattern (e.g. `"2 1- 2 1- 2"`), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. |
-| `TestClearTones` | 10040 | int, nonzero | Wipes the entire custom-tone library (`s_tone_count = 0`), independent of `TestClearAlarms`. See "Custom-tone library" below. |
-| `TestToneIndex` | 10041 | int | **Required** to touch tone fields, mirroring `TestAlarmIndex`'s own convention: `== s_tone_count` appends a new (empty-named) tone with a freshly allocated id; `< s_tone_count` edits that existing tone in place. |
-| `TestToneName` | 10042 | string | |
-| `TestToneCustomPattern` | 10043 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into the tone's own `pattern`/`pattern_note`/`pattern_len` (`CustomTone`, unaffected by sound's own `kind==1` retirement — the tone library was always a separate representation). Logs a warning (left unchanged) if unparseable. `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
-| `TestAlarmToneId` | 10044 | int | Links an alarm directly to a tone by id — sets `custom_tone_id` and forces `sound_pattern_kind = 2`, skipping the Tone picker → Custom tones → Custom tone → Apply chain for test setup. |
+| `TestClearTunes` | 10040 | int, nonzero | Wipes the entire custom-tune library (`s_tune_count = 0`), independent of `TestClearAlarms`. See "Custom-tune library" below. |
+| `TestTuneIndex` | 10041 | int | **Required** to touch tune fields, mirroring `TestAlarmIndex`'s own convention: `== s_tune_count` appends a new (empty-named) tune with a freshly allocated id; `< s_tune_count` edits that existing tune in place. |
+| `TestTuneName` | 10042 | string | |
+| `TestTuneCustomPattern` | 10043 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into the tune's own `pattern`/`pattern_note`/`pattern_len` (`CustomTune`, unaffected by sound's own `kind==1` retirement — the tune library was always a separate representation). Logs a warning (left unchanged) if unparseable. `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
+| `TestAlarmTuneId` | 10044 | int | Links an alarm directly to a tune by id — sets `custom_tune_id` and forces `sound_pattern_kind = 2`, skipping the Tune picker → Custom tunes → Custom tune → Apply chain for test setup. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
 Applying any field calls `persist_all(); rearm_wakeup(); reload_ui();`, same
-as every other alarm-mutating code path. The `Test*Tone*` keys are the one
-exception — they call `persist_tones()` (not `persist_all()`), since the
-tone library is a separate persisted table from `s_alarms`; see "Custom-tone
+as every other alarm-mutating code path. The `Test*Tune*` keys are the one
+exception — they call `persist_tunes()` (not `persist_all()`), since the
+tune library is a separate persisted table from `s_alarms`; see "Custom-tune
 library" below.
 
 ## Architecture
@@ -357,7 +357,7 @@ in this app at all, so every message key is now just an ordinary scalar at
   not a theoretical one — every hard break in this app's history (16→17's
   `sound_pattern[]`/`vibe_pattern_custom[]` resize, and this very bump's own
   removal of `sound_pattern_len`/`sound_pattern[]`/`sound_pattern_note[]`,
-  see the Custom-tone-adjacent design point below) has only ever been about
+  see the Custom-tune-adjacent design point below) has only ever been about
   the EXTENSION blob's signal-pattern fields, never the MAIN blob's
   schedule fields — yet the old `store_load()` wiped the *entire* alarm
   (label, time, repeat, cron config, all of it) on any such break, because
@@ -372,7 +372,7 @@ in this app at all, so every message key is now just an ordinary scalar at
   independent range check, `ext_schema_is_appendable()` (`alarm_store.c`,
   currently `stored_schema >= 19` — 19 is the schema that introduced this
   tracking, the same bump that removed `sound_pattern_len`/`sound_pattern[]`/
-  `sound_pattern_note[]`, see the Custom-tone-adjacent design point below):
+  `sound_pattern_note[]`, see the Custom-tune-adjacent design point below):
   when it says yes (and it's not a downgrade), EXTENSION is read in full up
   to the *current* `ALARM_EXT_SIZE` — an older-but-appendable blob simply
   doesn't have that many bytes stored yet, and `persist_read_data`'s own
@@ -381,7 +381,7 @@ in this app at all, so every message key is now just an ordinary scalar at
   their safe zero default — the same free ride MAIN's own forward migration
   has always had, so an ordinary future signal-only APPEND (a new trailing
   field, nothing resized/reordered/removed) no longer costs existing users
-  their Tone/Vibration settings at all. When it says no — a genuine
+  their Tune/Vibration settings at all. When it says no — a genuine
   EXTENSION-layout hard break, or a *newer* stored schema (a downgrade,
   which used to wipe unconditionally via its own separate `stored_schema >
   STORE_SCHEMA` check — removed, folded into this same path) — EXTENSION
@@ -906,32 +906,32 @@ feature — see git history if curious):
   itself, plus its own "Signal" header, `signal_header_update_proc`)
   operating on the same `s_edit_idx` alarm. The submenu itself has only
   **3** rows now — `SIGNAL_ROW_VIBE_PATTERN` ("Vibration"),
-  `SIGNAL_ROW_SOUND_PATTERN` ("Tone"), `SIGNAL_ROW_INCREASING_VOLUME` (a
+  `SIGNAL_ROW_SOUND_PATTERN` ("Tune"), `SIGNAL_ROW_INCREASING_VOLUME` (a
   4th, `SIGNAL_ROW_PATTERN_HELP`, used to live here too — a single combined
-  "Pattern/Tone help" row; removed in favor of each picker having its own
+  "Pattern/Tune help" row; removed in favor of each picker having its own
   trailing "Help" row instead, see `pattern_select_window_push()` below).
   The standalone Vibration and Sound on/off toggles were **merged into**
-  the Vibration/Tone rows respectively
+  the Vibration/Tune rows respectively
   (removed as separate rows entirely, each row taking over its toggle's old
-  slot: Vibration sits where the old Vibration toggle used to, Tone sits
+  slot: Vibration sits where the old Vibration toggle used to, Tune sits
   where Sound used to) rather than living alongside them;
-  `signal_draw_row`'s Vibration/Tone value reads "Off" outright whenever
+  `signal_draw_row`'s Vibration/Tune value reads "Off" outright whenever
   `vibration_enabled`/`sound_enabled` is false, without even looking at the
-  underlying pattern/tone fields. `Increasing volume` still toggles in
+  underlying pattern/tune fields. `Increasing volume` still toggles in
   place on SELECT, moved verbatim from the old top-level row. (The row's
   internal constant/enum names still say `VIBE_PATTERN`/`PATTERN_SELECT_
   VIBE` throughout `main.c` — only the user-facing label changed to
   "Vibration", the same way `SIGNAL_ROW_SOUND_PATTERN` has always displayed
-  as "Tone".)
+  as "Tune".)
   - **`pattern_select_window_push()`** is the one shared picker window
-    (differing only in row count/labels) both Vibration and Tone open.
+    (differing only in row count/labels) both Vibration and Tune open.
     Row 0 of either is **"Off"** — the merged on/off toggle, the ONLY
     instant-apply row in either picker: selecting it just flips
     `vibration_enabled`/`sound_enabled` to false and pops straight back to
     the Signal menu, deliberately leaving every other field
     (`vibe_pattern_kind`/`vibe_pattern`/`vibe_pattern_custom`/
-    `sound_pattern_kind`/`sound_preset`/`custom_tone_id`) untouched —
-    so turning it back on later still remembers whichever pattern/tone was
+    `sound_pattern_kind`/`sound_preset`/`custom_tune_id`) untouched —
+    so turning it back on later still remembers whichever pattern/tune was
     set before. `PATTERN_SELECT_VIBE_ROW_COUNT`/`PATTERN_SELECT_SOUND_ROW_COUNT`
     and the `_CUSTOM_ROW` constants all account for this extra leading row
     (every preset/Custom row index is its old index + 1).
@@ -945,7 +945,7 @@ feature — see git history if curious):
     special case is gone — selecting it now commits like any other preset,
     as `_kind=1` with that preset's exact bytes, which `vibe_preset_match()`
     still recognizes and displays by name). **Sound's presets are the one
-    exception, on request**: selecting a Tone preset row (rows
+    exception, on request**: selecting a Tune preset row (rows
     1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]` table, below) commits
     immediately from `pattern_select_select` itself — `sound_pattern_kind=0`,
     `sound_preset=<that row's index>`, `sound_enabled=true`, straight back
@@ -958,9 +958,9 @@ feature — see git history if curious):
     `sound_pattern_kind=1` ("Custom") representation, but tracing every
     call site that could reach that path found it could only ever be one
     of these exact table entries, never genuinely freehand (see the
-    Custom-tone-adjacent design point below for the removal). A sound tone
-    row and "+ Custom tone" are unaffected by any of this — they still go
-    through their own intermediate step (the Custom-tone screen, the
+    Custom-tune-adjacent design point below for the removal). A sound tune
+    row and "+ Custom tune" are unaffected by any of this — they still go
+    through their own intermediate step (the Custom-tune screen, the
     2-step creation wizard respectively) same as before.
     Committing a pattern also sets `vibration_enabled`/`sound_enabled` back
     to `true` — picking a real pattern implies turning that channel back
@@ -973,15 +973,15 @@ feature — see git history if curious):
   - **Each picker's trailing row is its own "Help"** —
     `PATTERN_SELECT_VIBE_HELP_ROW` (`VIBE_PRESET_COUNT + 2`, right after
     Custom) for Vibration, `pattern_select_sound_help_row()` (right after
-    "+ Custom tone", dynamic like every other SOUND row index since it
-    depends on `s_tone_count`) for Tone — replacing the single combined
-    "Pattern/Tone help" row that used to live in the Signal submenu itself
+    "+ Custom tune", dynamic like every other SOUND row index since it
+    depends on `s_tune_count`) for Tune — replacing the single combined
+    "Pattern/Tune help" row that used to live in the Signal submenu itself
     (see that design point above). Selecting it pushes `pattern_help_
     window_push(kind)` ON TOP of the picker (same push-not-pop convention
-    a tone row/"+ Custom tone" already use), so BACK returns to the picker
+    a tune row/"+ Custom tune" already use), so BACK returns to the picker
     rather than all the way to Signal. `pattern_help_window` is one shared
     window instance for both (`s_pattern_help_kind`, set right before push,
-    picks the header title — "Vibration help"/"Tone help" — and which of
+    picks the header title — "Vibration help"/"Tune help" — and which of
     `PATTERN_HELP_TEXT_VIBE`/`PATTERN_HELP_TEXT_SOUND` to show), split into
     two texts rather than one combined one now that each has its own
     screen: vibe's grammar has no pitch, so its text drops sound-only
@@ -991,7 +991,7 @@ feature — see git history if curious):
   - Both pickers' Help row is excluded from `pattern_select_preview_
     current_row`/expand-on-navigate/pattern-lookup — `pattern_select_sound_
     row_pattern()` already returns `false` for any row past "+ Custom
-    tone" (Help sits one further index past it) with no code change
+    tune" (Help sits one further index past it) with no code change
     needed, but `pattern_select_vibe_row_text()` needed an explicit guard
     (`row == PATTERN_SELECT_VIBE_HELP_ROW` → empty string) — without it,
     the row's index would fall through to `VIBE_PRESETS[row - 1]`, reading
@@ -1001,15 +1001,15 @@ feature — see git history if curious):
     is currently highlighted and, if it's not "Off", builds its text
     (`pattern_select_vibe_row_text()` for vibe, `pattern_select_sound_row_
     pattern()` for sound — a preset's fixed text, or (sound only, since
-    tones are inlined into the picker — see the Custom-tone library design
-    point below) a tone row's own formatted pattern) and plays it via
+    tunes are inlined into the picker — see the Custom-tune library design
+    point below) a tune row's own formatted pattern) and plays it via
     `alarm_preview_vibe_pattern()`/
     `alarm_preview_sound_pattern()` (parses on the fly, calls the same
     `alarm_play_vibe_pattern()`/`alarm_play_sound_pattern()` ring-time
     uses). Called from `pattern_select_up_click`/`pattern_select_down_click`
     (after moving the selection) and once right after the picker first
     opens on its preselected row, so browsing either picker previews every
-    tone/vibe as you land on it — not on Select, which just proceeds
+    tune/vibe as you land on it — not on Select, which just proceeds
     straight to the keyboard without playing anything itself (an earlier
     version previewed sound-only, and only on Select; both were moved/
     extended on request, since scrolling through a list to audition
@@ -1017,7 +1017,7 @@ feature — see git history if curious):
     vibration shouldn't get the same treatment sound does).
   - **`SOUND_PRESETS[]`/`VIBE_PRESETS[]`** (`main.c`, both declared well
     above the Signal-menu UI section so `alarm_play_audio()`/`alarm_
-    vibrate()` can see them) are the Tone/Vibration preset libraries —
+    vibrate()` can see them) are the Tune/Vibration preset libraries —
     `{ label, pattern }` pairs. Sound, currently: Triple (default)/Double/
     Triple fast/Analog bell/Celebration/Lullaby/March (this last one leans
     on the multi-octave-marker support above — its low A/F/C notes are
@@ -1038,7 +1038,7 @@ feature — see git history if curious):
     renders at most the first 2 space-separated tokens of a preset's
     pattern (plus "...") for the Vibration picker's own per-row value
     column (sound's collapsed rows show no preview at all any more — see
-    the Custom-tone library design point below).
+    the Custom-tune library design point below).
   - `alarm_vibrate()`'s `vibe_pattern_kind==0` fallback (a brand new,
     never-touched alarm, or one that committed a preset via the old
     instant-apply path before this rework) parses `VIBE_PRESETS[a->
@@ -1054,139 +1054,139 @@ feature — see git history if curious):
     exactly one call site for each, and nothing is mutated by BACK/cancel
     alone (except the instant-apply "Off" row, which needs no revert since
     it doesn't touch anything BACK would need to restore).
-- **Custom-tone library**: named, reusable sound patterns any alarm can
+- **Custom-tune library**: named, reusable sound patterns any alarm can
   reference by id instead of storing its own copy — a *live* reference, not
-  a copy: renaming/editing/deleting a tone affects every alarm currently
+  a copy: renaming/editing/deleting a tune affects every alarm currently
   pointing at it. Persisted entirely separately from `s_alarms`/
-  `STORE_SCHEMA` — `CustomTone` (`alarm_calc.h`: `id`/`name`/`pattern_len`/
+  `STORE_SCHEMA` — `CustomTune` (`alarm_calc.h`: `id`/`name`/`pattern_len`/
   `pattern`/`pattern_note`, the same shape `Alarm`'s own inline custom sound
-  already has) lives in `s_tones[MAX_CUSTOM_TONES]`/`s_tone_count`
-  (`main.c`), loaded/saved via `store_load_tones()`/`store_save_tones()`
-  (`alarm_store.c`) under their own `TONE_STORE_SCHEMA`/`PERSIST_KEY_TONE_*`
+  already has) lives in `s_tunes[MAX_CUSTOM_TUNES]`/`s_tune_count`
+  (`main.c`), loaded/saved via `store_load_tunes()`/`store_save_tunes()`
+  (`alarm_store.c`) under their own `TUNE_STORE_SCHEMA`/`PERSIST_KEY_TUNE_*`
   keys (`alarm_store.h`) — a schema bump to `Alarm` doesn't force wiping the
-  tone library, and vice versa. `Alarm.sound_pattern_kind` gained a third
+  tune library, and vice versa. `Alarm.sound_pattern_kind` gained a third
   value, `2` ("Library"), alongside the original `0` ("Preset", now the
   only other value it ever takes — see the "Custom sound/vibe patterns"
-  design point below for `1`'s later retirement): `Alarm.custom_tone_id`
+  design point below for `1`'s later retirement): `Alarm.custom_tune_id`
   (appended at the very end of the struct, `STORE_SCHEMA` 16) holds which
-  tone, resolved via `find_tone_by_id()` both at ring time
-  (`alarm_play_audio()`) and in the UI (`signal_draw_row`'s Tone value).
-  - **Navigation**: tones are inlined directly into the Tone picker itself
-    now, below the presets — there is no separate "Custom tones" list
+  tune, resolved via `find_tune_by_id()` both at ring time
+  (`alarm_play_audio()`) and in the UI (`signal_draw_row`'s Tune value).
+  - **Navigation**: tunes are inlined directly into the Tune picker itself
+    now, below the presets — there is no separate "Custom tunes" list
     window any more (it existed briefly during this feature's development
     and was removed on request as one screen too deep). The SOUND picker's
-    row layout is `Off, presets..., <one row per saved tone>, "+ Custom
-    tone"` — row count is dynamic
-    (`pattern_select_sound_row_count()` = `PATTERN_SELECT_SOUND_TONES_BASE`
-    (`SOUND_PRESET_COUNT + 1`) `+ s_tone_count + 1`), replacing the old
+    row layout is `Off, presets..., <one row per saved tune>, "+ Custom
+    tune"` — row count is dynamic
+    (`pattern_select_sound_row_count()` = `PATTERN_SELECT_SOUND_TUNES_BASE`
+    (`SOUND_PRESET_COUNT + 1`) `+ s_tune_count + 1`), replacing the old
     fixed `PATTERN_SELECT_SOUND_ROW_COUNT`/`_CUSTOM_ROW` constants (vibe's
     own `PATTERN_SELECT_VIBE_ROW_COUNT`/`_CUSTOM_ROW` are untouched — this
-    whole redesign is sound-only). Selecting a tone row calls
-    `custom_tone_window_push(s_tones[i].id)` directly, pushed on top of the
+    whole redesign is sound-only). Selecting a tune row calls
+    `custom_tune_window_push(s_tunes[i].id)` directly, pushed on top of the
     picker (see the singular screen below) — no intermediate list to pass
-    through. Selecting **"+ Custom tone"** (the trailing row, at
+    through. Selecting **"+ Custom tune"** (the trailing row, at
     `pattern_select_sound_new_row()`) runs the same 2-step creation wizard
     described below.
   - **Collapsed rows show no pattern preview at all** — neither presets nor
-    tones — a deliberate change from the picker's earlier behavior (which
+    tunes — a deliberate change from the picker's earlier behavior (which
     showed every preset's first 2 tokens as a value column): the only
-    thing a collapsed sound row shows besides its label is, for a tone row
+    thing a collapsed sound row shows besides its label is, for a tune row
     specifically, a literal **`"(custom)"`** right-aligned
-    (`pattern_select_draw_row`) — a plain marker distinguishing a user tone
+    (`pattern_select_draw_row`) — a plain marker distinguishing a user tune
     from a built-in preset, not an abbreviation of anything else on the
     row (lowercase and parenthesized deliberately, to read as a quiet tag
-    rather than a second label competing with the tone's own name). `Off`/
-    "+ Custom tone" show nothing in that column either.
-  - **Expand-on-navigate**: whichever preset or tone row is the *currently
+    rather than a second label competing with the tune's own name). `Off`/
+    "+ Custom tune" show nothing in that column either.
+  - **Expand-on-navigate**: whichever preset or tune row is the *currently
     selected* row (checked via `pattern_select_row_is_selected()`, wrapping
     `menu_layer_get_selected_index`) expands to two lines instead of one —
     label on line 1, that row's full pattern text word-wrapped in
     `GOTHIC_14_BOLD` on line 2 (`draw_label_and_notes_row()`). This is where
     a pattern's actual notes become visible at all now, since the collapsed
-    view no longer shows them. `Off`/"+ Custom tone" never expand (no
+    view no longer shows them. `Off`/"+ Custom tune" never expand (no
     pattern to show). `pattern_select_cell_height` returns a taller height
     for exactly this case, computed via `graphics_text_layout_get_content_
     size` on the wrapped notes text at `GOTHIC_14_BOLD` plus the label
     line's own height; every other row (including every non-selected
-    preset/tone row) keeps the fixed 34px. This expand/collapse behavior is
+    preset/tune row) keeps the fixed 34px. This expand/collapse behavior is
     SOUND-only — vibe's picker keeps its old always-visible 2-token preview
     on every preset/Custom row, unchanged.
   - `pattern_select_sound_row_pattern(row, out, out_size)` is the one helper
-    behind all of this — returns `false` for "Off"/"+ Custom tone" (nothing
+    behind all of this — returns `false` for "Off"/"+ Custom tune" (nothing
     to preview/expand/play), else fills `out` with a preset's fixed text or
-    a tone's `ac_sound_pattern_format()`-reconstructed text and returns
+    a tune's `ac_sound_pattern_format()`-reconstructed text and returns
     `true`. `pattern_select_preview_current_row`'s SOUND branch now just
     calls this and previews unconditionally when it returns `true` — the
-    old `sound_pattern_kind == 2`-only gate (needed back when tones lived
-    one level deeper with no per-tone row here) is gone; every tone row
+    old `sound_pattern_kind == 2`-only gate (needed back when tunes lived
+    one level deeper with no per-tune row here) is gone; every tune row
     previews on navigate, same as a preset row always did.
     `pattern_select_window_push`'s preselect logic: `sound_pattern_kind ==
-    2` now resolves `find_tone_by_id(a->custom_tone_id)` and preselects
-    `PATTERN_SELECT_SOUND_TONES_BASE + <that index>` directly (falling back
-    to the "+ Custom tone" row if the id is somehow stale/not found), rather
+    2` now resolves `find_tune_by_id(a->custom_tune_id)` and preselects
+    `PATTERN_SELECT_SOUND_TUNES_BASE + <that index>` directly (falling back
+    to the "+ Custom tune" row if the id is somehow stale/not found), rather
     than landing on a shared "Custom" row the way it used to.
-  - **"+ Custom tone"** runs the same 2-step wizard as before
-    (`new_tone_pattern_done`/`new_tone_name_done`, staged in a transient
-    `s_new_tone_draft` — relocated next to `s_tones`/`s_tone_count` since a
+  - **"+ Custom tune"** runs the same 2-step wizard as before
+    (`new_tune_pattern_done`/`new_tune_name_done`, staged in a transient
+    `s_new_tune_draft` — relocated next to `s_tunes`/`s_tune_count` since a
     forward reference from `pattern_select_select`, which now triggers it
     directly, needs the variable defined before that point in the file):
     the pattern keyboard first, then the name keyboard. Cancelling (`text ==
     NULL`) at *either* step aborts the whole thing outright — same "any
     BACK aborts the flow" convention the "+ New alarm" wizard already
     uses — nothing is created. An unparseable pattern or an empty name
-    (a saved tone always has one) re-shows the *same* keyboard with
+    (a saved tune always has one) re-shows the *same* keyboard with
     whatever was typed still in it, rather than a separate error screen,
     since the user is looking straight at what they typed. Finishing both
-    steps allocates an id (`store_alloc_tone_id()`, mirroring
+    steps allocates an id (`store_alloc_tune_id()`, mirroring
     `store_load_next_local_id`/`store_save_next_local_id`'s shape for
-    `Alarm.id`), appends to `s_tones`, persists, and pushes straight to the
-    same singular screen below — selecting an existing tone and finishing
+    `Alarm.id`), appends to `s_tunes`, persists, and pushes straight to the
+    same singular screen below — selecting an existing tune and finishing
     this wizard both land in exactly the same place.
-  - **Selecting an existing tone** (or finishing the wizard) opens the
-    **"Custom tone"** singular screen: `Apply` / `Tone <value>` / `Name
-    <value>` / `Delete`, operating directly on `s_tones[s_custom_tone_idx]`
-    (resolved by id at push time via `find_tone_by_id`) — there's no
+  - **Selecting an existing tune** (or finishing the wizard) opens the
+    **"Custom tune"** singular screen: `Apply` / `Tune <value>` / `Name
+    <value>` / `Delete`, operating directly on `s_tunes[s_custom_tune_idx]`
+    (resolved by id at push time via `find_tune_by_id`) — there's no
     separate staging struct here, since by the time this screen exists the
-    tone is always already a saved record. `Tone`/`Name` write straight
-    through to the shared record immediately (`persist_tones()` +
+    tune is always already a saved record. `Tune`/`Name` write straight
+    through to the shared record immediately (`persist_tunes()` +
     `menu_layer_reload_data`, no "confirm" step) — the live-reference model
     means every other alarm referencing this id sees the change too, and
     BACK needs no snapshot-revert since nothing here is ever staged.
     `Apply` is the one action that actually links the *current* alarm
-    (`s_edit_idx`, unchanged throughout this whole Signal → Tone picker →
-    Custom tone chain) to the tone —
-    `sound_pattern_kind=2`/`custom_tone_id=<id>`/`sound_enabled=true`, then
-    pops **2** windows (this screen, the Tone picker itself) to land back
+    (`s_edit_idx`, unchanged throughout this whole Signal → Tune picker →
+    Custom tune chain) to the tune —
+    `sound_pattern_kind=2`/`custom_tune_id=<id>`/`sound_enabled=true`, then
+    pops **2** windows (this screen, the Tune picker itself) to land back
     on Signal — one fewer than before this redesign, since there's no
     intermediate list to pop through any more. `Delete` (`confirm_window_
-    push`, same shell `edit_window`'s own Delete uses) removes the tone
-    from `s_tones` entirely and calls `revert_alarms_using_tone()` — every
+    push`, same shell `edit_window`'s own Delete uses) removes the tune
+    from `s_tunes` entirely and calls `revert_alarms_using_tune()` — every
     alarm with `sound_pattern_kind==2` pointing at this id reverts to
     `sound_pattern_kind=0` (Preset — whichever `sound_preset` index it last
     had, or 0/"Triple (default)" if never set; `sound_enabled` is left
     untouched) —
-    then pops only **1** window, back to the **Tone picker** itself (not
+    then pops only **1** window, back to the **Tune picker** itself (not
     all the way to Signal like Apply: deleting is "keep managing the
-    library", applying is "I'm done"); since the tone's own row just
+    library", applying is "I'm done"); since the tune's own row just
     disappeared from the picker, its selection is also reset to row 0
     ("Off") rather than risk pointing past the now-shorter row count.
 - **Custom sound/vibe patterns**: a pattern is a space-separated list of
-  on-beats and (optional) breaks. Sound (Tone) and vibe (Vibration) have
+  on-beats and (optional) breaks. Sound (Tune) and vibe (Vibration) have
   DIFFERENT segment caps, on request — `AC_SOUND_PATTERN_MAX_SEGMENTS`
   (32) and `AC_VIBE_PATTERN_MAX_SEGMENTS` (8), `alarm_calc.h` — where both
   used to share one `AC_PATTERN_MAX_SEGMENTS` (16). Every buffer/parse call
   sized off the old shared constant had to move to whichever of the two
   actually applies at that call site (sound-only call sites — including
-  the custom-tone library, which is sound-only — use the 32 cap; vibe-only
+  the custom-tune library, which is sound-only — use the 32 cap; vibe-only
   call sites use the 8 cap); this also grew `Alarm.sound_pattern[]`/
-  `sound_pattern_note[]` and `CustomTone.pattern[]`/`pattern_note[]` while
+  `sound_pattern_note[]` and `CustomTune.pattern[]`/`pattern_note[]` while
   shrinking `Alarm.vibe_pattern_custom[]`, which is a genuine **resize** of
   already-existing fields (not an append) — see `STORE_SCHEMA`
-  17/`TONE_STORE_SCHEMA` 2's own bump comments (`alarm_store.h`) for why
+  17/`TUNE_STORE_SCHEMA` 2's own bump comments (`alarm_store.h`) for why
   that's a hard break (wipes on migration) rather than the usual additive
   case. `multitap_keyboard.c`'s own `BUFFER_CAP` (the vendored widget's
   internal text-entry limit) also had to grow from 96 to 136 to actually
-  fit a 32-segment Tone pattern's worst case — `multitap_keyboard_set_max_
+  fit a 32-segment Tune pattern's worst case — `multitap_keyboard_set_max_
   len()` silently ignores any caller-requested cap that isn't strictly less
   than `BUFFER_CAP`, so `PATTERN_KEYBOARD_MAX_LEN` (`main.c`, bumped to
   128 — shared by both keyboards, so sized for the larger of the two)
@@ -1259,9 +1259,9 @@ feature — see git history if curious):
   `vibe_pattern_custom[]`) still gates which representation is live for
   vibe. **Sound no longer has an inline-Custom representation at all** —
   `Alarm.sound_pattern_kind` only ever takes `0` (Preset, use
-  `sound_preset`, an index) or `2` (Library, use `custom_tone_id`); this
+  `sound_preset`, an index) or `2` (Library, use `custom_tune_id`); this
   whole packed-byte grammar survives on the sound side only through
-  `CustomTone.pattern[]`/`pattern_note[]` (the tone library) and
+  `CustomTune.pattern[]`/`pattern_note[]` (the tune library) and
   `Alarm.vibe_pattern_custom[]` now, not through anything on `Alarm`
   itself for sound — see the schema-19 paragraph below for why/how that
   representation was retired. Schemas 12 through 18 were a single,
@@ -1278,7 +1278,7 @@ feature — see git history if curious):
   `sound_pattern_note[]` from `Alarm` entirely**, replacing them with the
   plain `sound_preset` index described above — tracing every remaining
   call site that could set `sound_pattern_kind==1` found exactly one
-  (the Tone-preset direct-commit path, which only ever copies a
+  (the Tune-preset direct-commit path, which only ever copies a
   `SOUND_PRESETS[]` entry's own bytes verbatim), so the byte arrays were
   100% redundant with an index by this point, not just re-encoded again.
   Unlike every earlier bump in this list (12 through 18, all pure
@@ -1286,7 +1286,7 @@ feature — see git history if curious):
   relative order), this one removes fields from the *middle* of the
   EXTENSION blob's tail (between `sound_pattern_kind` and
   `vibe_pattern_kind`, and again between `vibe_pattern_custom[]` and
-  `custom_tone_id`), shifting every field after them — which is what
+  `custom_tune_id`), shifting every field after them — which is what
   finally forced treating EXTENSION-blob trust as an exact-schema-match
   question rather than an appendable-history one; see the "A schedule now
   survives ANY future signal-only hard break" design point (near
@@ -1320,7 +1320,7 @@ feature — see git history if curious):
     one function, so "what Default sounds like" and "what a byte-identical
     Custom pattern sounds like" can never drift apart even with this
     workaround layered on top) and `alarm_preview_sound_pattern()`
-    (Tone-picker preview-on-select, above). `alarm_play_vibe_pattern()`
+    (Tune-picker preview-on-select, above). `alarm_play_vibe_pattern()`
     is vibe's equivalent, called from `alarm_vibrate()`'s custom-pattern
     branch only (not the plain preset one-shots
     `vibes_short_pulse()`/`_long_pulse()`/`_double_pulse()`, which are
@@ -1335,7 +1335,7 @@ feature — see git history if curious):
     theoretical one: `alarm_buzz_cb()` (`main.c`) used to always schedule
     the next cycle at a flat `ALARM_BUZZ_INTERVAL_MS` (4s) regardless of
     how long the currently-playing vibe/sound pattern actually takes. A
-    custom Tone/Vibration pattern can easily run longer than 4s (e.g. the
+    custom Tune/Vibration pattern can easily run longer than 4s (e.g. the
     "Imperial March" preset) — when it does, the fixed interval either let
     the next cycle's playback call queue up behind/overlap the still-
     running previous one (drifting vibration and sound out of sync with
@@ -1347,7 +1347,7 @@ feature — see git history if curious):
     and force-stopped it before it naturally finished. `alarm_vibe_
     duration_ms()`/`alarm_sound_duration_ms()` (`main.c`) compute a
     pattern's real total playback time (mirroring `alarm_vibrate()`/
-    `alarm_play_audio()`'s own default/custom/tone-library branching
+    `alarm_play_audio()`'s own default/custom/tune-library branching
     exactly via the shared `pattern_duration_ms()` helper, plus each
     channel's own fixed ~100ms lead-in from the workaround above, so "what
     plays" and "how long it takes" can never disagree) — `alarm_buzz_cb()`
@@ -1366,7 +1366,7 @@ feature — see git history if curious):
       all** — `alarm_current_volume()` returns 0 for the first couple of
       buzz cycles (see its own doc comment above), and
       `alarm_play_sound_pattern()` itself no-ops outright when `volume ==
-      0`. Counting the tone's full duration toward the gap on one of those
+      0`. Counting the tune's full duration toward the gap on one of those
       silent cycles would pad the wait for a sound that was never going to
       play anyway, slowing down the ramp-up for no reason. `alarm_buzz_cb()`
       computes THIS cycle's volume once (`sound_volume`, also gating on

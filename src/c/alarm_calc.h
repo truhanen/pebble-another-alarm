@@ -13,10 +13,10 @@
 // -- e.g. "1C 2D 1- 1C 2D" (sound) or "2 1- 2 1- 2" (vibe). Breaks are
 // optional between on-beats (two on-beats with no break between them play
 // back to back with no gap); a break is written as the duration digit
-// followed by '-'. Sound (Tone) and vibe (Vibration) have DIFFERENT caps,
+// followed by '-'. Sound (Tune) and vibe (Vibration) have DIFFERENT caps,
 // on request: vibe halved to 8 (short buzz patterns rarely need more, and
-// it keeps VibePattern's own run-length-encoded array small), sound/tone
-// doubled to 32 (tones -- including the custom-tone library, sound-only --
+// it keeps VibePattern's own run-length-encoded array small), sound/tune
+// doubled to 32 (tunes -- including the custom-tune library, sound-only --
 // benefit from more headroom for longer musical phrases like Imperial
 // March). Each was 16 (a single shared constant) before this split.
 #define AC_VIBE_PATTERN_MAX_SEGMENTS 8
@@ -241,21 +241,21 @@ typedef struct {
   // representation (kind==1, backed by `sound_pattern[]`/
   // `sound_pattern_note[]`) -- removed (not just relocated) once tracing
   // every call site confirmed kind==1 could no longer be reached except by
-  // copying a SOUND_PRESETS[] entry's own bytes verbatim (the tone library,
+  // copying a SOUND_PRESETS[] entry's own bytes verbatim (the tune library,
   // kind==2, is sound's only remaining path for genuinely custom content).
   // `sound_pattern_kind` now only ever takes 0 ("Preset", use
-  // `sound_preset` below) or 2 ("Library", use `custom_tone_id` below).
-  uint8_t sound_pattern_kind;   // 0 = Preset (use sound_preset below), 2 = Library (use custom_tone_id below)
+  // `sound_preset` below) or 2 ("Library", use `custom_tune_id` below).
+  uint8_t sound_pattern_kind;   // 0 = Preset (use sound_preset below), 2 = Library (use custom_tune_id below)
   uint8_t vibe_pattern_kind;    // 0 = Preset (use vibe_pattern above), 1 = Custom
   uint8_t vibe_pattern_len;     // number of segments in vibe_pattern_custom[]; 0 = never set
   uint8_t vibe_pattern_custom[AC_VIBE_PATTERN_MAX_SEGMENTS];  // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
 
-  // Appended for the custom-tone library (see CustomTone below) -- valid
+  // Appended for the custom-tune library (see CustomTune below) -- valid
   // iff sound_pattern_kind == 2 ("Library"), a third value alongside the
   // existing 0 (Default/Preset). 0 = no reference. Zero-fills correctly on
   // migration, same "already the safe default" category as vibe_pattern/
   // increasing_volume's own past appends.
-  uint32_t custom_tone_id;
+  uint32_t custom_tune_id;
 
   // Sound's own preset index, mirroring vibe_pattern's own index-into-a-
   // preset-table approach (an index into SOUND_PRESETS[], main.c) --
@@ -270,22 +270,22 @@ typedef struct {
 } Alarm;
 
 // A named, separately-persisted sound pattern any alarm can reference by
-// id (Alarm.custom_tone_id, when Alarm.sound_pattern_kind == 2) instead of
+// id (Alarm.custom_tune_id, when Alarm.sound_pattern_kind == 2) instead of
 // storing its own copy -- edits/deletes are a live reference, so every
 // alarm pointing at the same id sees them. Mirrors the exact
 // (kind-less)/len/pattern/pattern_note shape Alarm already uses for its
 // own inline custom sound, so ac_sound_pattern_parse/ac_sound_pattern_
 // format work on it unchanged. Persisted independently of Alarm/
-// STORE_SCHEMA -- see TONE_STORE_SCHEMA, alarm_store.h.
-#define MAX_CUSTOM_TONES 20
+// STORE_SCHEMA -- see TUNE_STORE_SCHEMA, alarm_store.h.
+#define MAX_CUSTOM_TUNES 20
 
 typedef struct {
-  uint32_t id;              // stable, allocated once (store_alloc_tone_id), never reused; 0 = unused slot
-  char name[NAME_LEN + 1];  // always non-empty for a saved tone (enforced by main.c's UI, not here)
+  uint32_t id;              // stable, allocated once (store_alloc_tune_id), never reused; 0 = unused slot
+  char name[NAME_LEN + 1];  // always non-empty for a saved tune (enforced by main.c's UI, not here)
   uint8_t pattern_len;
   uint8_t pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];       // bit7=is_break, bits0-6=duration digit
   uint8_t pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];  // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index
-} CustomTone;
+} CustomTune;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
 // hour:minute. Returns -1 if `a` is disabled. Not repeating: offset 0 (today,
