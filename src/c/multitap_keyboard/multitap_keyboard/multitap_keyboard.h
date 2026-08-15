@@ -46,7 +46,9 @@ MultitapKeyboard *multitap_keyboard_create(GRect frame, MultitapKeyboardDoneHand
 void  multitap_keyboard_destroy(MultitapKeyboard *kb);
 Layer *multitap_keyboard_get_layer(MultitapKeyboard *kb);
 
-// Single entry point for touch input (layer-local coordinates).
+// Single entry point for touch input (layer-local coordinates). A tap on the
+// text field itself places the text cursor at the tapped character instead
+// of typing one -- see multitap_keyboard.c's own prv_text_field_hit for how.
 void multitap_keyboard_handle_tap(MultitapKeyboard *kb, GPoint point);
 
 // Press feedback while a finger is down, independent of the tap/hold action that
@@ -63,14 +65,23 @@ int multitap_keyboard_key_at_point(MultitapKeyboard *kb, GPoint point);
 
 // Long-press at a point: char keys / space insert their keypad digit
 // (key 0..8 -> 1..9, space -> 0); the bottom-left key cycles the layout.
-// DEL is the exception: the touch driver should NOT route a DEL hold here (that
-// would erase just once). Use multitap_keyboard_point_is_delete() to detect it and
-// drive a repeating multitap_keyboard_backspace() instead — see multitap_keyboard_window.c.
+// DEL and the navigation page's own move-cursor keys (3/5) are both
+// exceptions: the touch driver should NOT route a hold on either of those
+// here (that would act just once). Use multitap_keyboard_point_is_delete()/
+// multitap_keyboard_point_is_nav_key() to detect them and drive a repeating
+// multitap_keyboard_backspace()/multitap_keyboard_move_cursor() instead —
+// see multitap_keyboard_window.c.
 void multitap_keyboard_handle_hold(MultitapKeyboard *kb, GPoint point);
 
 // True when `point` lands on the DEL key, so the touch driver can give it
 // hold-to-repeat erase (like the Down button) rather than a one-shot hold.
 bool multitap_keyboard_point_is_delete(MultitapKeyboard *kb, GPoint point);
+
+// 0 if `point` isn't one of the navigation page's move-cursor keys, -1 for
+// the left key, +1 for the right key -- so the touch driver can give these
+// two keys the same hold-to-repeat treatment as the DEL key, via repeated
+// multitap_keyboard_move_cursor() calls, instead of a one-shot hold.
+int multitap_keyboard_point_is_nav_key(MultitapKeyboard *kb, GPoint point);
 
 // Programmatic actions — handy for wiring physical buttons.
 void multitap_keyboard_backspace(MultitapKeyboard *kb);
@@ -78,8 +89,14 @@ void multitap_keyboard_submit(MultitapKeyboard *kb);
 void multitap_keyboard_cycle_page(MultitapKeyboard *kb);
 void multitap_keyboard_newline(MultitapKeyboard *kb);   // insert a '\n' (e.g. hold Select)
 
-// Current hold-to-repeat delete interval (ms) for the active delete mode —
-// wire this to the Down button's repeating-click subscription.
+// Moves the cursor one UTF-8 glyph left (dir<0) or right (dir>0); the
+// programmatic equivalent of tapping/holding the navigation page's own
+// move-cursor keys (see multitap_keyboard_point_is_nav_key).
+void multitap_keyboard_move_cursor(MultitapKeyboard *kb, int dir);
+
+// Current hold-to-repeat interval (ms) for the active delete mode -- also
+// reused for the navigation page's move-cursor keys, for the same cadence.
+// Wire this to the Down button's repeating-click subscription.
 int multitap_keyboard_delete_repeat_ms(MultitapKeyboard *kb);
 
 const char *multitap_keyboard_get_text(MultitapKeyboard *kb);
@@ -93,9 +110,13 @@ void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes);
 
 // Restricts entry to the fixed digits layout (PAGE_NUMBERS) for structured
 // numeric/symbol fields (e.g. cron syntax): no ABC/symbols page reachable via
-// Down or the bottom-left key, which is instead repurposed to multi-tap-cycle
-// "*"/"-"/"/"/"," the same way any other key cycles its glyphs. Call once,
-// right after creating the keyboard (or via
+// the usual Shift-key cycle -- the bottom-left key is instead repurposed to
+// multi-tap-cycle "*"/"-"/"/"/"," the same way any other key cycles its
+// glyphs. The DOWN button instead cycles a small locked sub-page range of its
+// own (digits -> a "navigation" page, whose keys 3/5 move the text cursor
+// left/right -- see multitap_keyboard_set_pattern_mode's own doc comment
+// below for the same navigation page, shared machinery). Call once, right
+// after creating the keyboard (or via
 // multitap_keyboard_window_push_numeric() for the full-screen wrapper).
 void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled);
 
@@ -107,23 +128,26 @@ void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled);
 // PATTERN_KEY_VIBE in multitap_keyboard.c. `notes_enabled` selects which
 // table (sound patterns carry a pitch per on-beat; vibe patterns don't).
 //
-// SOUND's own character keys additionally cycle between TWO pages via the
-// DOWN button (unlike every other locked mode, including VIBE): a "note
-// layout" (note letters C-B, plus the rest marker 'z') and a "numbers
-// layout" (plain duration digits 1-8) -- see PATTERN_KEY_SOUND_NUMBERS and
-// prv_cycle_page. Duration digits are also always reachable by long-pressing
-// ANY character key regardless of which page is showing (the widget's own
+// The DOWN button cycles a small locked sub-page range: SOUND has THREE --
+// a "note layout" (note letters C-B, plus the rest marker 'z'), a "numbers
+// layout" (plain duration digits 1-8, see PATTERN_KEY_SOUND_NUMBERS), and a
+// "navigation" layout (keys 3/5 move the text cursor left/right instead of
+// typing anything); VIBE has just the digits layout plus the same navigation
+// layout. Duration digits are also always reachable by long-pressing ANY
+// character key regardless of which page is showing (the widget's own
 // generic long-press-inserts-a-keypad-digit behavior, unaffected by pattern
 // mode). The bottom-left key cycles a small fixed symbol set (octave
 // markers, sharp/flat accidentals, and for SOUND a fraction slash) instead
-// of the usual multi-tap ABC/symbols cycle, identically on both of SOUND's
-// pages; the space key types a literal space instead of being repurposed as
-// "0" (numeric mode's own special case, which pattern mode needs to NOT
+// of the usual multi-tap ABC/symbols cycle, identically across every
+// sub-page; the space key types a literal space instead of being repurposed
+// as "0" (numeric mode's own special case, which pattern mode needs to NOT
 // inherit, since patterns are space-separated). The text field itself
 // renders through the same shared prv_draw_text_fitted() every other mode
-// uses -- on-beat/rest tokens don't need distinct styling. Call once, right
-// after creating the keyboard (or via multitap_keyboard_window_push_pattern()
-// for the full-screen wrapper, which always starts on the note layout).
+// uses -- on-beat/rest tokens don't need distinct styling, and the cursor
+// can be moved with the navigation sub-page above or by tapping the field
+// directly (see multitap_keyboard_handle_tap). Call once, right after
+// creating the keyboard (or via multitap_keyboard_window_push_pattern() for
+// the full-screen wrapper, which always starts on the primary sub-page).
 void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool notes_enabled);
 
 // Behavior settings.

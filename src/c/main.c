@@ -240,6 +240,67 @@ static void new_tune_name_done(const char *text, void *ctx);
 static int16_t bottom_bar_top_for_bounds(GRect bounds);
 static Layer *bottom_bar_attach(Layer *root);
 static void bottom_bar_compact_ampm(char *buf);
+static void draw_key_value_row(GContext *ctx, GRect b, const char *key, const char *value);
+
+// ---- shared itemized-menu-window helpers ------------------------------------
+//
+// Every itemized MenuLayer window in this app (repeat/repeat_preset/cron/
+// signal/pattern_select/custom_tune, plus confirm and edit) shares the same
+// two pieces of boilerplate: a plain white header strip with a centered bold
+// title above the menu, and the menu's own white/black (occasionally
+// overridden) color scheme. Factored out here instead of duplicated per
+// window -- several of these windows used to each carry their own
+// byte-for-byte identical *_header_update_proc, differing only in the title
+// string (confirmed directly in the compiled binary: the linker's own
+// identical-code-folding had already collapsed two of them, whose titles
+// happened to coincide, into one 4-byte stub -- the other titles differ, so
+// the linker couldn't fold those, but a shared function can).
+
+// menu_header_create's title is carried as PER-LAYER data (layer_get_data),
+// not a shared static -- several of these windows can be simultaneously
+// stacked (e.g. edit -> signal -> pattern_select -> custom_tune, all loaded
+// at once, just obscured beneath whichever is topmost), and BACK popping the
+// topmost one forces the newly-exposed window's layers to redraw. A single
+// shared "current title" variable would already have been overwritten by
+// whichever window was on top, mis-rendering the one beneath once exposed
+// again -- per-layer data has no such staleness window, since each header
+// layer instance owns its own title.
+static void menu_header_update_proc(Layer *l, GContext *ctx) {
+  const char *title = *(const char *const *)layer_get_data(l);
+  GRect b = layer_get_bounds(l);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
+                     GRect(4, 2, b.size.w - 8, 26),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
+static Layer *menu_header_create(Layer *root, int width, int height, const char *title) {
+  Layer *header = layer_create_with_data(GRect(0, 0, width, height), sizeof(const char *));
+  *(const char **)layer_get_data(header) = title;
+  layer_set_update_proc(header, menu_header_update_proc);
+  layer_add_child(root, header);
+  return header;
+}
+
+// Folds in the menu_layer_create + set_callbacks + set_normal/highlight_colors
+// + add_child quartet every itemized menu window repeats -- callers still own
+// click-config wiring (some use the plain default via
+// menu_layer_set_click_config_onto_window, several instead use their own
+// window_set_click_config_provider for extra behavior like continuous-scroll
+// or long-press) and whatever header/bottom-bar chrome surrounds the menu,
+// since those genuinely differ per window.
+static MenuLayer *itemized_menu_create(Layer *root, GRect bounds, MenuLayerCallbacks callbacks,
+                                       GColor normal_bg, GColor normal_fg,
+                                       GColor highlight_bg, GColor highlight_fg) {
+  MenuLayer *ml = menu_layer_create(bounds);
+  menu_layer_set_callbacks(ml, NULL, callbacks);
+  menu_layer_set_normal_colors(ml, normal_bg, normal_fg);
+  menu_layer_set_highlight_colors(ml, highlight_bg, highlight_fg);
+  layer_add_child(root, menu_layer_get_layer(ml));
+  return ml;
+}
 
 // ================================= main list =================================
 
@@ -1525,14 +1586,11 @@ static void confirm_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
 }
 static void confirm_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_confirm_menu = menu_layer_create(layer_get_bounds(root));
-  menu_layer_set_callbacks(s_confirm_menu, NULL, (MenuLayerCallbacks){
+  s_confirm_menu = itemized_menu_create(root, layer_get_bounds(root), (MenuLayerCallbacks){
     .get_num_rows = confirm_num_rows, .get_cell_height = confirm_cell_height,
-    .draw_row = confirm_draw_row, .select_click = confirm_select });
-  menu_layer_set_normal_colors(s_confirm_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_confirm_menu, GColorBlack, GColorWhite);
+    .draw_row = confirm_draw_row, .select_click = confirm_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   menu_layer_set_click_config_onto_window(s_confirm_menu, w);
-  layer_add_child(root, menu_layer_get_layer(s_confirm_menu));
 }
 static void confirm_window_unload(Window *w) {
   menu_layer_destroy(s_confirm_menu); s_confirm_menu = NULL;
@@ -1791,58 +1849,33 @@ static Layer *s_cron_help_header;
 
 #define CRON_HELP_HEADER_H 30
 
+// The on-watch help screens (cron / pattern-vibe / pattern-sound) used to
+// each hold their own text as a compiled-in `static const char *const`
+// string constant -- together the three of them were ~2KB of permanently-
+// resident .rodata for screens opened rarely, on request (see CLAUDE.md's
+// own note on this app's virtual_size ceiling). They're shipped as raw app
+// resources instead now (declared in package.json, plain text files under
+// resources/text/ -- regenerated from the original C constants once via
+// scripts/extract_help_text_resources.py; those .txt files are the source
+// of truth for this text going forward, edit them directly), loaded into
+// this one shared buffer only while the relevant help window is actually
+// open. One buffer, not three, because only one of these help screens is
+// ever open at a time in practice (each is reached from a different,
+// mutually-exclusive edit flow) -- sized for the largest of the three
+// texts (cron help, 873 bytes) with a little headroom for future edits.
 // Same GOTHIC_24 (not bold) used by the time editor's own cron-mode hint --
 // see the "secret long-press-SELECT" comment below.
-static const char *const CRON_HELP_TEXT =
-  "Alarm fires every minute "
-  "that matches every cron "
-  "item configured for the "
-  "alarm. This applies also "
-  "to weekday & day-of-month: "
-  "*both* must match for an "
-  "alarm to fire.\n"
-  "\n"
-  "Note that if you configure "
-  "an alarm for the last days "
-  "of month, the firing of the "
-  "alarm may be less regular "
-  "due to leap days & half of "
-  "months missing the 31st day. "
-  "The same applies to week 53, "
-  "which not every year has.\n"
-  "\n"
-  "Example patterns:\n"
-  "\n"
-  "Wildcard:\n"
-  "\"*\" in weekday\n"
-  "fires every weekday\n"
-  "\n"
-  "Range:\n"
-  "\"8-16\" in hour\n"
-  "fires between 8-16 o'clock\n"
-  "\n"
-  "List:\n"
-  "\"1,7\" in month\n"
-  "fires in Jan and Jul\n"
-  "\n"
-  "Wildcard & step:\n"
-  "\"*/20\" in minute\n"
-  "fires every 20 minutes\n"
-  "\n"
-  "Range & step:\n"
-  "\"1-25/2\" in week\n"
-  "fires every other week\n"
-  "between ISO weeks 1-25\n"
-  "\n"
-  "Day of month + weekday:\n"
-  "\"1-7\" in day, \"1\" in\n"
-  "weekday fires on the first\n"
-  "Monday of every month.\n"
-  "\n"
-  "Week (ISO week-of-year):\n"
-  "\"*/2\" in week fires every\n"
-  "other week -- lets you set\n"
-  "up biweekly alarms.";
+#define HELP_TEXT_BUF_LEN 900
+static char s_help_text_buf[HELP_TEXT_BUF_LEN];
+
+static const char *load_help_text(uint32_t resource_id) {
+  ResHandle h = resource_get_handle(resource_id);
+  size_t sz = resource_size(h);
+  if (sz >= sizeof(s_help_text_buf)) sz = sizeof(s_help_text_buf) - 1;
+  resource_load_byte_range(h, 0, (uint8_t *)s_help_text_buf, sz);
+  s_help_text_buf[sz] = '\0';
+  return s_help_text_buf;
+}
 
 static void cron_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
@@ -1868,13 +1901,14 @@ static void cron_help_window_load(Window *w) {
 
   GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
   int text_w = scroll_bounds.size.w - 8;
+  const char *text = load_help_text(RESOURCE_ID_TEXT_CRON_HELP);
   GSize sz = graphics_text_layout_get_content_size(
-      CRON_HELP_TEXT, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
+      text, f, GRect(0, 0, text_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
 
   s_cron_help_text = text_layer_create(GRect(4, 4, text_w, sz.h + 8));
   text_layer_set_font(s_cron_help_text, f);
   text_layer_set_overflow_mode(s_cron_help_text, GTextOverflowModeWordWrap);
-  text_layer_set_text(s_cron_help_text, CRON_HELP_TEXT);
+  text_layer_set_text(s_cron_help_text, text);
   scroll_layer_add_child(s_cron_help_scroll, text_layer_get_layer(s_cron_help_text));
   scroll_layer_set_content_size(s_cron_help_scroll, GSize(scroll_bounds.size.w, sz.h + 16));
 
@@ -2150,30 +2184,16 @@ static void cron_click_config(void *ctx) {
 // Centered title, same style as the "Time"/"Repeat" editor headers.
 static Layer *s_cron_header;
 #define CRON_HEADER_H 30
-static void cron_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Cron", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void cron_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_cron_header = layer_create(GRect(0, 0, bounds.size.w, CRON_HEADER_H));
-  layer_set_update_proc(s_cron_header, cron_header_update_proc);
-  layer_add_child(root, s_cron_header);
+  s_cron_header = menu_header_create(root, bounds.size.w, CRON_HEADER_H, "Cron");
   GRect menu_bounds = GRect(0, CRON_HEADER_H, bounds.size.w,
                             bottom_bar_top_for_bounds(bounds) - CRON_HEADER_H);
-  s_cron_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_cron_menu, NULL, (MenuLayerCallbacks){
+  s_cron_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = cron_num_rows, .get_cell_height = cron_cell_height,
-    .draw_row = cron_draw_row, .select_click = cron_select });
-  menu_layer_set_normal_colors(s_cron_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_cron_menu, GColorBlack, GColorWhite);
-  layer_add_child(root, menu_layer_get_layer(s_cron_menu));
+    .draw_row = cron_draw_row, .select_click = cron_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   window_set_click_config_provider(w, cron_click_config);
   s_cron_bottom_bar = bottom_bar_attach(root);
 }
@@ -2269,10 +2289,7 @@ static uint16_t repeat_preset_num_rows(MenuLayer *ml, uint16_t section, void *ct
 static int16_t repeat_preset_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
 
 static void repeat_preset_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
-  GRect b = layer_get_bounds(cell_layer);
-  graphics_draw_text(ctx, REPEAT_PRESET_LABEL[cell_index->row], fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  draw_key_value_row(ctx, layer_get_bounds(cell_layer), REPEAT_PRESET_LABEL[cell_index->row], NULL);
 }
 
 static void repeat_preset_finish(bool repeats, uint8_t days) {
@@ -2341,29 +2358,15 @@ static void repeat_preset_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_BACK, repeat_preset_back);
 }
 static Layer *s_repeat_preset_header;
-static void repeat_preset_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Repeat", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void repeat_preset_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_repeat_preset_header = layer_create(GRect(0, 0, bounds.size.w, REPEAT_HEADER_H));
-  layer_set_update_proc(s_repeat_preset_header, repeat_preset_header_update_proc);
-  layer_add_child(root, s_repeat_preset_header);
+  s_repeat_preset_header = menu_header_create(root, bounds.size.w, REPEAT_HEADER_H, "Repeat");
   GRect menu_bounds = GRect(0, REPEAT_HEADER_H, bounds.size.w, bounds.size.h - REPEAT_HEADER_H);
-  s_repeat_preset_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_repeat_preset_menu, NULL, (MenuLayerCallbacks){
+  s_repeat_preset_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = repeat_preset_num_rows, .get_cell_height = repeat_preset_cell_height,
-    .draw_row = repeat_preset_draw_row, .select_click = repeat_preset_select });
-  menu_layer_set_normal_colors(s_repeat_preset_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_repeat_preset_menu, GColorBlack, GColorWhite);
-  layer_add_child(root, menu_layer_get_layer(s_repeat_preset_menu));
+    .draw_row = repeat_preset_draw_row, .select_click = repeat_preset_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   window_set_click_config_provider(w, repeat_preset_click_config);
 }
 static void repeat_preset_window_unload(Window *w) {
@@ -2418,18 +2421,14 @@ static int16_t repeat_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { re
 static void repeat_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
   GRect b = layer_get_bounds(cell_layer);
   if (cell_index->row == REPEAT_ROW_SUBMIT) {
-    graphics_draw_text(ctx, "Apply", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                       GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    draw_key_value_row(ctx, b, "Apply", NULL);
     return;
   }
   int wday = (s_first_day_of_week + (cell_index->row - 1)) % 7;
   bool on = (s_repeat_days & AC_DAY_BIT(wday)) != 0;
   char text[24];
   snprintf(text, sizeof(text), "[%s] %s", on ? "X" : "  ", DAY_NAME[wday]);
-  graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  draw_key_value_row(ctx, b, text, NULL);
 }
 
 // repeats is derived, never stored independently of repeat_days.
@@ -2492,29 +2491,15 @@ static void repeat_click_config(void *ctx) {
 }
 // Centered title, same style as the cron editor's "Cron" header.
 static Layer *s_repeat_header;
-static void repeat_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Repeat", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void repeat_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_repeat_header = layer_create(GRect(0, 0, bounds.size.w, REPEAT_HEADER_H));
-  layer_set_update_proc(s_repeat_header, repeat_header_update_proc);
-  layer_add_child(root, s_repeat_header);
+  s_repeat_header = menu_header_create(root, bounds.size.w, REPEAT_HEADER_H, "Repeat");
   GRect menu_bounds = GRect(0, REPEAT_HEADER_H, bounds.size.w, bounds.size.h - REPEAT_HEADER_H);
-  s_repeat_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_repeat_menu, NULL, (MenuLayerCallbacks){
+  s_repeat_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = repeat_num_rows, .get_cell_height = repeat_cell_height,
-    .draw_row = repeat_draw_row, .select_click = repeat_select });
-  menu_layer_set_normal_colors(s_repeat_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_repeat_menu, GColorBlack, GColorWhite);
-  layer_add_child(root, menu_layer_get_layer(s_repeat_menu));
+    .draw_row = repeat_draw_row, .select_click = repeat_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   window_set_click_config_provider(w, repeat_click_config);
 }
 static void repeat_window_unload(Window *w) {
@@ -2828,12 +2813,7 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       break;
     default: break;
   }
-  GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  GRect row = GRect(6, (b.size.h - 26) / 2, b.size.w - 12, 26);
-  graphics_draw_text(ctx, key, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  if (value[0]) {
-    graphics_draw_text(ctx, value, f, row, GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
-  }
+  draw_key_value_row(ctx, b, key, value);
 }
 
 static void edit_close(void) {
@@ -3014,14 +2994,11 @@ static void edit_window_load(Window *w) {
   GRect bounds = layer_get_bounds(root);
   GRect menu_bounds = bounds;
   menu_bounds.size.h = bottom_bar_top_for_bounds(bounds);
-  s_edit_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_edit_menu, NULL, (MenuLayerCallbacks){
+  s_edit_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = edit_num_rows, .get_cell_height = edit_cell_height,
-    .draw_row = edit_draw_row, .select_click = edit_select });
-  menu_layer_set_normal_colors(s_edit_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_edit_menu, GColorBlack, GColorWhite);
+    .draw_row = edit_draw_row, .select_click = edit_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   menu_layer_set_click_config_onto_window(s_edit_menu, w);
-  layer_add_child(root, menu_layer_get_layer(s_edit_menu));
   s_edit_bottom_bar = bottom_bar_attach(root);
 }
 static void edit_window_unload(Window *w) {
@@ -3113,71 +3090,9 @@ static PatternSelectKind s_pattern_help_kind;
 
 #define PATTERN_HELP_HEADER_H 30
 
-static const char *const PATTERN_HELP_TEXT_VIBE =
-  "A vibration pattern is a list "
-  "of on-beats and rests, "
-  "separated by spaces.\n"
-  "\n"
-  "Each on-beat is a duration "
-  "ratio: \"1\" means the "
-  "default 100ms; \"N\" means "
-  "N times that (e.g. \"2\" = "
-  "200ms); \"/D\" means 1/D of "
-  "it (e.g. \"/2\" = 50ms); "
-  "\"N/D\" combines both.\n"
-  "\n"
-  "A rest is \"z\" followed by "
-  "the same optional ratio "
-  "(e.g. \"z\", \"z/2\").\n"
-  "\n"
-  "Rests are optional -- two "
-  "on-beats with nothing "
-  "between them play back to "
-  "back with no gap.\n"
-  "\n"
-  "Example pattern:\n"
-  "\n"
-  "\"1 z/2 1\"";
-
-static const char *const PATTERN_HELP_TEXT_SOUND =
-  "A tune is a list "
-  "of notes and rests, "
-  "separated by spaces.\n"
-  "\n"
-  "Each note is an optional "
-  "sharp (\"^\") or flat (\"_\") "
-  "before a letter (C D E F G "
-  "A B), e.g. \"^C\", \"_D\". No "
-  "prefix means natural.\n"
-  "\n"
-  "A note letter can have "
-  "octave marks right after "
-  "it: \"'\" for up, \",\" for "
-  "down (e.g. \"C'\", \"C,\"). "
-  "No mark means the base "
-  "octave. \",\" can repeat up "
-  "to 8 times for deeper "
-  "octaves down (e.g. "
-  "\"C,,,\"); \"'\" only once, "
-  "up.\n"
-  "\n"
-  "A duration ratio can follow: "
-  "\"N\" for N times the default "
-  "100ms, \"/D\" for 1/D of it, "
-  "\"N/D\" for both -- no ratio "
-  "means the default itself "
-  "(e.g. \"C2\" = 200ms, \"C/2\" "
-  "= 50ms, bare \"C\" = 100ms).\n"
-  "\n"
-  "A rest is \"z\" followed by "
-  "the same optional ratio "
-  "(e.g. \"z\", \"z/2\") -- rests "
-  "are optional between notes, "
-  "same as vibration.\n"
-  "\n"
-  "Example pattern:\n"
-  "\n"
-  "\"^C' z/2 _D,\"";
+// Text loaded on demand via load_help_text() -- see that shared function's
+// own doc comment for why these two are resources now instead of
+// compiled-in string constants.
 
 static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);
@@ -3193,7 +3108,9 @@ static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
 static void pattern_help_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  const char *text = (s_pattern_help_kind == PATTERN_SELECT_VIBE) ? PATTERN_HELP_TEXT_VIBE : PATTERN_HELP_TEXT_SOUND;
+  const char *text = load_help_text((s_pattern_help_kind == PATTERN_SELECT_VIBE)
+                                       ? RESOURCE_ID_TEXT_PATTERN_HELP_VIBE
+                                       : RESOURCE_ID_TEXT_PATTERN_HELP_SOUND);
 
   s_pattern_help_header = layer_create(GRect(0, 0, bounds.size.w, PATTERN_HELP_HEADER_H));
   layer_set_update_proc(s_pattern_help_header, pattern_help_header_update_proc);
@@ -3354,31 +3271,17 @@ static void signal_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   }
 }
 
-static void signal_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Signal", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void signal_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_signal_header = layer_create(GRect(0, 0, bounds.size.w, SIGNAL_HEADER_H));
-  layer_set_update_proc(s_signal_header, signal_header_update_proc);
-  layer_add_child(root, s_signal_header);
+  s_signal_header = menu_header_create(root, bounds.size.w, SIGNAL_HEADER_H, "Signal");
   GRect menu_bounds = GRect(0, SIGNAL_HEADER_H, bounds.size.w,
                             bottom_bar_top_for_bounds(bounds) - SIGNAL_HEADER_H);
-  s_signal_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_signal_menu, NULL, (MenuLayerCallbacks){
+  s_signal_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = signal_num_rows, .get_cell_height = signal_cell_height,
-    .draw_row = signal_draw_row, .select_click = signal_select });
-  menu_layer_set_normal_colors(s_signal_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_signal_menu, GColorBlack, GColorWhite);
+    .draw_row = signal_draw_row, .select_click = signal_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   menu_layer_set_click_config_onto_window(s_signal_menu, w);
-  layer_add_child(root, menu_layer_get_layer(s_signal_menu));
   s_signal_bottom_bar = bottom_bar_attach(root);
 }
 static void signal_window_unload(Window *w) {
@@ -3882,36 +3785,22 @@ static void pattern_select_click_config(void *ctx) {
 
 #define PATTERN_SELECT_HEADER_H 30
 static Layer *s_pattern_select_header;
-static void pattern_select_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibration" : "Tune";
-  graphics_draw_text(ctx, title, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void pattern_select_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_pattern_select_header = layer_create(GRect(0, 0, bounds.size.w, PATTERN_SELECT_HEADER_H));
-  layer_set_update_proc(s_pattern_select_header, pattern_select_header_update_proc);
-  layer_add_child(root, s_pattern_select_header);
+  const char *title = (s_pattern_select_kind == PATTERN_SELECT_VIBE) ? "Vibration" : "Tune";
+  s_pattern_select_header = menu_header_create(root, bounds.size.w, PATTERN_SELECT_HEADER_H, title);
   GRect menu_bounds = GRect(0, PATTERN_SELECT_HEADER_H, bounds.size.w, bounds.size.h - PATTERN_SELECT_HEADER_H);
-  s_pattern_select_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_pattern_select_menu, NULL, (MenuLayerCallbacks){
-    .get_num_rows = pattern_select_num_rows, .get_cell_height = pattern_select_cell_height,
-    .draw_row = pattern_select_draw_row, .select_click = pattern_select_select });
-  menu_layer_set_normal_colors(s_pattern_select_menu, GColorWhite, GColorBlack);
   // Highlight colors deliberately match normal colors here (a no-op
   // overlay) -- pattern_select_draw_row now paints every row's selected
   // state itself (see pattern_select_paint_highlight_if_selected and
   // draw_label_and_notes_row), since MenuLayer's own automatic highlight
   // fill runs before draw_row using a fixed row height, not whatever
   // pattern_select_cell_height computed for that row.
-  menu_layer_set_highlight_colors(s_pattern_select_menu, GColorWhite, GColorBlack);
-  layer_add_child(root, menu_layer_get_layer(s_pattern_select_menu));
+  s_pattern_select_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
+    .get_num_rows = pattern_select_num_rows, .get_cell_height = pattern_select_cell_height,
+    .draw_row = pattern_select_draw_row, .select_click = pattern_select_select },
+    GColorWhite, GColorBlack, GColorWhite, GColorBlack);
   window_set_click_config_provider(w, pattern_select_click_config);
 }
 static void pattern_select_window_unload(Window *w) {
@@ -4287,29 +4176,15 @@ static void custom_tune_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_BACK, custom_tune_back);
 }
 
-static void custom_tune_header_update_proc(Layer *l, GContext *ctx) {
-  GRect b = layer_get_bounds(l);
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, "Custom tune", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, 2, b.size.w - 8, 26),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
-}
 static void custom_tune_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect bounds = layer_get_bounds(root);
-  s_custom_tune_header = layer_create(GRect(0, 0, bounds.size.w, CUSTOM_TUNE_HEADER_H));
-  layer_set_update_proc(s_custom_tune_header, custom_tune_header_update_proc);
-  layer_add_child(root, s_custom_tune_header);
+  s_custom_tune_header = menu_header_create(root, bounds.size.w, CUSTOM_TUNE_HEADER_H, "Custom tune");
   GRect menu_bounds = GRect(0, CUSTOM_TUNE_HEADER_H, bounds.size.w, bounds.size.h - CUSTOM_TUNE_HEADER_H);
-  s_custom_tune_menu = menu_layer_create(menu_bounds);
-  menu_layer_set_callbacks(s_custom_tune_menu, NULL, (MenuLayerCallbacks){
+  s_custom_tune_menu = itemized_menu_create(root, menu_bounds, (MenuLayerCallbacks){
     .get_num_rows = custom_tune_num_rows, .get_cell_height = custom_tune_cell_height,
-    .draw_row = custom_tune_draw_row, .select_click = custom_tune_select });
-  menu_layer_set_normal_colors(s_custom_tune_menu, GColorWhite, GColorBlack);
-  menu_layer_set_highlight_colors(s_custom_tune_menu, GColorBlack, GColorWhite);
-  layer_add_child(root, menu_layer_get_layer(s_custom_tune_menu));
+    .draw_row = custom_tune_draw_row, .select_click = custom_tune_select },
+    GColorWhite, GColorBlack, GColorBlack, GColorWhite);
   window_set_click_config_provider(w, custom_tune_click_config);
 }
 static void custom_tune_window_unload(Window *w) {

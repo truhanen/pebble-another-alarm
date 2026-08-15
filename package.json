@@ -92,6 +92,21 @@
           "type": "bitmap",
           "name": "IMAGE_SHIFT_LOCK",
           "file": "images/shift-lock.png"
+        },
+        {
+          "type": "raw",
+          "name": "TEXT_CRON_HELP",
+          "file": "text/cron_help.txt"
+        },
+        {
+          "type": "raw",
+          "name": "TEXT_PATTERN_HELP_VIBE",
+          "file": "text/pattern_help_vibe.txt"
+        },
+        {
+          "type": "raw",
+          "name": "TEXT_PATTERN_HELP_SOUND",
+          "file": "text/pattern_help_sound.txt"
         }
       ]
     }

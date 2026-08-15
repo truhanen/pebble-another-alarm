@@ -1,0 +1,13 @@
+A tune is a list of notes and rests, separated by spaces.
+
+Each note is an optional sharp ("^") or flat ("_") before a letter (C D E F G A B), e.g. "^C", "_D". No prefix means natural.
+
+A note letter can have octave marks right after it: "'" for up, "," for down (e.g. "C'", "C,"). No mark means the base octave. "," can repeat up to 8 times for deeper octaves down (e.g. "C,,,"); "'" only once, up.
+
+A duration ratio can follow: "N" for N times the default 100ms, "/D" for 1/D of it, "N/D" for both -- no ratio means the default itself (e.g. "C2" = 200ms, "C/2" = 50ms, bare "C" = 100ms).
+
+A rest is "z" followed by the same optional ratio (e.g. "z", "z/2") -- rests are optional between notes, same as vibration.
+
+Example pattern:
+
+"^C' z/2 _D,"

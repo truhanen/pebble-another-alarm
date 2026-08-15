@@ -1,0 +1,36 @@
+Alarm fires every minute that matches every cron item configured for the alarm. This applies also to weekday & day-of-month: *both* must match for an alarm to fire.
+
+Note that if you configure an alarm for the last days of month, the firing of the alarm may be less regular due to leap days & half of months missing the 31st day. The same applies to week 53, which not every year has.
+
+Example patterns:
+
+Wildcard:
+"*" in weekday
+fires every weekday
+
+Range:
+"8-16" in hour
+fires between 8-16 o'clock
+
+List:
+"1,7" in month
+fires in Jan and Jul
+
+Wildcard & step:
+"*/20" in minute
+fires every 20 minutes
+
+Range & step:
+"1-25/2" in week
+fires every other week
+between ISO weeks 1-25
+
+Day of month + weekday:
+"1-7" in day, "1" in
+weekday fires on the first
+Monday of every month.
+
+Week (ISO week-of-year):
+"*/2" in week fires every
+other week -- lets you set
+up biweekly alarms.

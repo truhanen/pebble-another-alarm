@@ -686,13 +686,51 @@ in this app at all, so every message key is now just an ordinary scalar at
     given one either — neither was asked for, and the help screen's
     scrollable text content makes a fixed-height reduction less obviously
     correct there.
-  - Itemized menus (`confirm_window`, `repeat_window`, `edit_window`) use
+  - Itemized menus (`confirm_window`, `repeat_window`, `edit_window`, and
+    every other `*_window` built the same way — `repeat_preset`, `cron`,
+    `signal`, `pattern_select`, `custom_tune`) use
     `menu_layer_set_normal_colors`/`menu_layer_set_highlight_colors`
     (white/black, black/white) instead of manually painting each row —
     exactly timer's simpler "detail window" pattern (`dl_draw_row`), not the
     main list's per-row tinting. `edit_window` has no header — the label is
     its own "Label: <name>" row (opens the multitap keyboard) alongside
     State/Time/Repeat/Snooze/Vibration/Sound/Auto-dismiss/Delete.
+    `pattern_select` is the one exception to the black/white highlight
+    convention (its highlight colors deliberately match its normal colors —
+    a no-op overlay — since `pattern_select_draw_row` paints each row's
+    selected state itself, at whatever height that row actually needs
+    rather than MenuLayer's own fixed-height automatic highlight fill).
+    **Every one of these windows shares two small helpers** instead of each
+    repeating its own copy: `itemized_menu_create()` folds in
+    `menu_layer_create`/`set_callbacks`/`set_normal_colors`/
+    `set_highlight_colors`/`layer_add_child` (callers still own click-config
+    wiring — some use the plain `menu_layer_set_click_config_onto_window`,
+    several instead use their own `window_set_click_config_provider` for
+    continuous-scroll or long-press — and whatever header/bottom-bar chrome
+    surrounds the menu, since those genuinely differ per window); and
+    `menu_header_create()` replaces what used to be a separate
+    `*_header_update_proc` per window (a plain white strip with a centered
+    bold title) — these were **byte-for-byte identical except the title
+    string**, confirmed directly in the compiled binary: the linker's own
+    identical-code-folding had already collapsed `repeat_header_update_proc`
+    into a 4-byte stub of `repeat_preset_header_update_proc`, since both
+    happened to draw the literal string `"Repeat"`; the other titles differ,
+    so the linker couldn't fold those, but a shared function could.
+    `menu_header_create`'s title is carried as **per-layer data**
+    (`layer_get_data`), not a shared static — several of these windows can be
+    simultaneously stacked (e.g. edit → signal → pattern_select →
+    custom_tune, all loaded at once, just obscured), and BACK popping the
+    topmost one forces the newly-exposed window's layers to redraw; a single
+    shared "current title" variable would already have been overwritten by
+    whichever window was on top, mis-rendering the one beneath once exposed
+    again. Consolidating this (plus reusing the existing `draw_key_value_row`
+    helper, defined alongside `signal_draw_row` below, in `edit_draw_row`/
+    `repeat_preset_draw_row`/`repeat_draw_row`, which used to each duplicate
+    its font/`GRect`/draw-call boilerplate inline instead) recovered just
+    over 1KB in the `APP_TEST_HOOKS=1` build — meaningful given this app
+    sits close to its own `virtual_size` ceiling (a hard `uint16_t` limit;
+    see the cursor-navigation feature's own history further down for that
+    whole story).
   - The time and snooze editors both render through the shared
     `dial_draw_number_boxes`/`dial_box_area` helpers, a direct port of
     timer's non-touch box-type duration dial (`dial_update_proc`,
@@ -1457,12 +1495,62 @@ feature — see git history if curious):
   doesn't conflict with the "treat it as upstream" note above: it's gated by
   one `bool numeric_mode` field defaulting to `false` (zero effect on every
   other call site), which locks the keyboard to its existing `PAGE_NUMBERS`
-  layout (page-cycling via Down or the bottom-left key becomes a no-op —
-  `prv_cycle_page`'s single choke point just early-returns) and repurposes
-  the bottom-left key (normally Shift) to multi-tap-cycle `*`/`-`/`/`/`,`
-  through the same `prv_eff_glyphs`/pending-key/commit machinery every other
-  key already uses, rather than a parallel code path — so it inherits the
-  usual multi-tap highlight/underline/commit-on-timeout behavior for free.
+  layout for its digits and repurposes the bottom-left key (normally Shift)
+  to multi-tap-cycle `*`/`-`/`/`/`,` through the same `prv_eff_glyphs`/
+  pending-key/commit machinery every other key already uses, rather than a
+  parallel code path — so it inherits the usual multi-tap highlight/
+  underline/commit-on-timeout behavior for free. Down no longer early-returns
+  here — it cycles a small locked sub-page range shared with pattern mode
+  (`locked_sub_page`, `prv_locked_page_count`/`prv_on_nav`, both in
+  `multitap_keyboard.c`): a "navigation" sub-page whose keys 3/5 (middle-row
+  left/right) move the text cursor left/right instead of typing anything,
+  drawn as small arrow icons (`prv_draw_nav_arrow`, a stroked shaft+chevron,
+  not a filled `GPath` asset — kept deliberately cheap; see the flash-size
+  note below for why that specific choice mattered). The same navigation
+  sub-page exists for the plain/label keyboard too (a real 4th `Page` value,
+  `PAGE_NAV`, appended after Symbols) and for pattern mode's own SOUND/VIBE
+  sub-pages — see `multitap_keyboard.c`'s own doc comments (`cursor_pos`,
+  `prv_append`/`prv_utf8_backspace`) for the full cursor-position model.
+  Tapping the text field directly (`multitap_keyboard_handle_tap` ->
+  `prv_text_field_hit`) also places the cursor, byte-precisely: exact
+  boundary-snapping in the single-line display (`prv_snap_offset`), a small
+  greedy word-wrap pass of its own to find the line break in the wrapped
+  display, and a geometric (nearest-end) fallback only in the front-
+  truncated display, which has no real position to snap to for its hidden
+  leading text. Holding either navigation key repeats the move, the same
+  hold-to-repeat treatment the on-screen DEL key already gets: the touch
+  driver (`multitap_keyboard_window.c`) checks
+  `multitap_keyboard_point_is_nav_key()` (mirroring
+  `multitap_keyboard_point_is_delete()`) right alongside its existing DEL
+  check, and if the held point is one of these two keys, calls
+  `multitap_keyboard_move_cursor()` once immediately and then keeps calling
+  it on the same `multitap_keyboard_delete_repeat_ms()` cadence until
+  liftoff — reusing the exact `s_del_repeat_timer` pattern (its own
+  `s_nav_repeat_timer` twin) rather than inventing a new mechanism.
+  `multitap_keyboard_handle_hold()` itself also refuses keys 3/5 while
+  `prv_on_nav()`, even though the touch driver never actually reaches it for
+  those two keys anymore — belt-and-suspenders, since that function's
+  generic long-press-inserts-a-keypad-digit behavior (unmodified for every
+  other key) would otherwise type "4"/"6" there, which never had a glyph to
+  begin with.
+- **This app sits close to its `PebbleProcessInfo.virtual_size` ceiling
+  (65535 bytes, a hard `uint16_t` limit — `.text+.data+.bss` combined,
+  checked at build time by `inject_metadata.py`)**: adding the navigation
+  feature above initially pushed the `APP_TEST_HOOKS=1` build (which is
+  larger than a plain build — the test-hook handling in `main.c` adds its
+  own code) to within single-digit bytes of this ceiling, forcing several
+  individually-reasonable implementation choices (a filled `GPath` icon for
+  the nav arrows, byte-precise tap-to-position hit-testing, splitting the
+  caret/tail into two draw colors for an interior cursor) to be traded for
+  cheaper equivalents just to fit. Moving the three on-watch help texts
+  (cron / pattern-vibe / pattern-sound — ~2KB combined) out of compiled-in
+  `main.c` string constants into raw app resources (loaded on demand via
+  `load_help_text()`, see that function's own doc comment) freed enough
+  margin (~1KB) to restore the byte-precise tap-to-position and the split
+  caret/tail coloring; the `GPath` arrow icon was the one cut left in place,
+  since the cheaper stroked version already looks and works fine. Any future
+  addition to this file (or bigger features elsewhere) should check
+  `APP_TEST_HOOKS=1 pebble build` specifically, not just a plain build.
 
 ## Tests
 

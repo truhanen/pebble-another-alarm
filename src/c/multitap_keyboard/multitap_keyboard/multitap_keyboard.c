@@ -27,7 +27,7 @@
 #define KEY_SPACE 10
 #define KEY_DEL   11
 
-typedef enum { PAGE_ALPHA = 0, PAGE_NUMBERS, PAGE_SYMBOLS, PAGE_COUNT } Page;
+typedef enum { PAGE_ALPHA = 0, PAGE_NUMBERS, PAGE_SYMBOLS, PAGE_NAV, PAGE_COUNT } Page;
 typedef enum { SHIFT_OFF = 0, SHIFT_ONCE, SHIFT_LOCK } ShiftState;
 
 // Each character key (0..8) cycles through a NULL-terminated glyph list (UTF-8).
@@ -57,12 +57,18 @@ static const char *const S6[] = { "(", ")", "[", "]", NULL };
 static const char *const S7[] = { "{", "}", "<", ">", NULL };
 static const char *const S8[] = { "|", "^", "~", "`", NULL };
 
-static const char *const *const PAGE_KEY[PAGE_COUNT][9] = {
+// PAGE_NAV (the 4th Page value) has no tap-cycling glyphs at all -- every key
+// is empty except 3/5 (cursor left/right), which are drawn as arrow icons and
+// dispatched directly in prv_press_char_key. Deliberately NOT given its own
+// row in PAGE_KEY below (which stays sized for the original 3 real pages) --
+// prv_eff_glyphs special-cases `page == PAGE_NAV` directly instead, avoiding
+// a whole extra 9-pointer row of nothing but repeated NULL-glyph tables.
+static const char *const *const PAGE_KEY[3][9] = {
   { A0, A1, A2, A3, A4, A5, A6, A7, A8 },
   { N0, N1, N2, N3, N4, N5, N6, N7, N8 },
   { S0, S1, S2, S3, S4, S5, S6, S7, S8 },
 };
-static const char *const PAGE_IND[PAGE_COUNT] = { "ABC", "123", "#+=" };
+static const char *const PAGE_IND[PAGE_COUNT] = { "ABC", "123", "#+=", "NAV" };
 
 // Fixed 4-symbol cycle for the bottom-left key in numeric_mode (see
 // multitap_keyboard_set_numeric_mode) — covers every token
@@ -102,26 +108,28 @@ static const char *const PATTERN_SYMS[] = { "/" };
 // above), for both SOUND and VIBE alike.
 //
 // Duration digits are deliberately NOT on this grid at all -- they don't
-// need a dedicated key, since they're already reachable two other ways that
-// both predate this rework: long-pressing ANY key (including key 7) inserts
-// its keypad digit (multitap_keyboard_handle_hold, unchanged, pure key+1
-// arithmetic regardless of a key's tap-time glyph list), and pressing DOWN
-// cycles to a second, SOUND-only "numbers" page (PATTERN_KEY_SOUND_NUMBERS
-// below) -- restoring the widget's own original page-cycling behavior for
-// this one case, which pattern mode otherwise still locks out (see
-// multitap_keyboard_set_pattern_mode). 'z' stays on key 8 to match VIBE's
-// own grid below, so it never moves depending on which mode is active. Key
-// 7's octave/accidental cycle is note-layout-only -- the numbers page keeps
-// its own key 7 as a plain "8" (see PATTERN_KEY_SOUND_NUMBERS below), since
-// that page already has real digit content there.
+// need a dedicated key, since they're already reachable two other ways: long-
+// pressing ANY key (including key 7) inserts its keypad digit
+// (multitap_keyboard_handle_hold, unchanged, pure key+1 arithmetic regardless
+// of a key's tap-time glyph list), and pressing DOWN cycles to a second,
+// SOUND-only "numbers" page (PATTERN_KEY_SOUND_NUMBERS below). 'z' stays on
+// key 8 to match VIBE's own grid below, so it never moves depending on which
+// mode is active. Key 7's octave/accidental cycle is note-layout-only -- the
+// numbers page keeps its own key 7 as a plain "8" (see
+// PATTERN_KEY_SOUND_NUMBERS below), since that page already has real digit
+// content there.
 //
 // VIBE's grid is a deliberately different shape, not a smaller version of
 // SOUND's -- vibe has no letters to make room for, so every one of the 9
 // keys gets exactly one glyph, no cycling at all: digits 1-8 in row-major
 // order, then 'z' last on key 8 (matching SOUND's own 'z' position above).
-// A plain tap always types the intended character directly. Unlike SOUND,
-// VIBE has no second page to cycle to (DOWN stays a no-op here, same as
-// before this rework) -- its one page already IS the digits.
+// A plain tap always types the intended character directly.
+//
+// Both SOUND and VIBE also cycle to a "navigation" sub-page via DOWN
+// (SOUND: notes -> numbers -> nav; VIBE: digits -> nav), whose keys 3/5 move
+// the text cursor left/right instead of typing anything -- see
+// prv_locked_page_count/prv_on_nav (the plain/label keyboard's own
+// equivalent, a real 4th Page value, PAGE_NAV).
 static const char *const PATTERN_KEY_EMPTY[] = { NULL };   // the numbers page's own empty key 8 below
 static const char *const PK_SOUND_0[] = { "C", NULL };
 static const char *const PK_SOUND_1[] = { "D", NULL };
@@ -160,6 +168,17 @@ static const char *const PK_VIBE_8[] = { "z", NULL };
 static const char *const *const PATTERN_KEY_VIBE[9] = {
   PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3, PK_VIBE_4, PK_VIBE_5, PK_VIBE_6, PK_VIBE_7, PK_VIBE_8,
 };
+
+// Font ladder used by prv_draw_text_fitted to pick the loosest font/line
+// count that fits the text field. See that function's own doc comment for
+// what each level means.
+static const struct { const char *key; int16_t rise; } LADDER[] = {
+  { FONT_KEY_GOTHIC_28_BOLD, 5 },
+  { FONT_KEY_GOTHIC_24_BOLD, 4 },
+  { FONT_KEY_GOTHIC_18_BOLD, 3 },
+  { FONT_KEY_GOTHIC_14_BOLD, 2 },
+};
+#define LADDER_N (int)(sizeof(LADDER) / sizeof(LADDER[0]))
 
 // Toggleable extended (non-ASCII) characters. Each is appended to a base key's
 // cycle when enabled, and hidden from the key labels. All enabled by default.
@@ -215,6 +234,14 @@ struct MultitapKeyboard {
 
   char buffer[BUFFER_CAP];
   int  max_len;             // byte cap on buffer (0 = only BUFFER_CAP limits)
+  int  cursor_pos;          // byte offset into buffer, always in [0, strlen(buffer)];
+                            // where the NEXT typed character lands / what DEL
+                            // removes. Moved by the "navigation" page's left/
+                            // right keys (see prv_move_cursor) -- every other
+                            // mutating path (typing, backspace, autocap) now
+                            // operates relative to this instead of always the
+                            // tail, degenerating to today's append-only
+                            // behavior whenever it equals strlen(buffer).
   int  page;
   int  shift;               // ShiftState (explicit, user-driven)
   bool numeric_mode;        // fixed to PAGE_NUMBERS; bottom-left key cycles
@@ -229,17 +256,19 @@ struct MultitapKeyboard {
                             // of PATTERN_KEY_VIBE (duration digit only, no
                             // pitch) -- set alongside pattern_mode,
                             // meaningless otherwise.
-  bool pattern_show_numbers; // SOUND pattern mode only (meaningless for VIBE
-                            // or outside pattern_mode): false = the note
-                            // layout (PATTERN_KEY_SOUND) is showing, true =
-                            // the numbers layout (PATTERN_KEY_SOUND_NUMBERS)
-                            // is, toggled by DOWN (see prv_cycle_page).
-                            // Deliberately a separate field rather than
-                            // reusing `page` itself for this -- toggling
+  int  locked_sub_page;     // numeric_mode/pattern_mode only (mutually
+                            // exclusive per keyboard instance, so they safely
+                            // share this one field): which sub-page of that
+                            // locked mode's own DOWN-driven cycle is showing.
+                            // numeric_mode: 0=digits, 1=nav. pattern_mode+VIBE:
+                            // 0=digits, 1=nav. pattern_mode+SOUND: 0=notes,
+                            // 1=numbers, 2=nav -- see prv_locked_page_count/
+                            // prv_on_nav. Deliberately a separate field rather
+                            // than reusing `page` itself for this -- toggling
                             // `page` between PAGE_NUMBERS/PAGE_ALPHA would
                             // reawaken prv_eff_glyphs's extended-character
                             // block (page==PAGE_ALPHA), which has no
-                            // business firing in pattern mode.
+                            // business firing in a locked mode.
 
   bool pending_active;
   int  pending_key;
@@ -260,6 +289,11 @@ struct MultitapKeyboard {
   // text shrinks (a delete), tracked via last_text_len.
   int  wrap_floor;
   int  last_text_len;
+  int  last_display_level;  // ladder level prv_draw_text_fitted last drew at
+                            // (single-line/wrap/front-truncate) -- a dedicated
+                            // fact for the tap-to-position hit-test to consult
+                            // without re-running layout, decoupled from
+                            // wrap_floor's own hysteresis contract.
 
   bool caret_on;            // blinking caret visibility
   int  caret_idle;          // ms since last edit; blink rests on past CARET_IDLE_MS
@@ -330,6 +364,26 @@ static int prv_next_shift(MultitapKeyboard *kb) {
   return (kb->shift == SHIFT_LOCK) ? SHIFT_LOCK : SHIFT_OFF;
 }
 
+// numeric_mode/pattern_mode are mutually exclusive per keyboard instance, so
+// they safely share locked_sub_page for their own DOWN-driven sub-page cycle
+// (see that field's own doc comment). Returns how many sub-pages the CURRENT
+// locked mode has, or 0 if not in a locked mode at all (the plain/label
+// keyboard instead cycles a real PAGE_NAV via the ordinary Page enum).
+static int prv_locked_page_count(MultitapKeyboard *kb) {
+  if (kb->numeric_mode) return 2;                                 // digits, nav
+  if (kb->pattern_mode) return kb->pattern_notes_enabled ? 3 : 2;  // notes(+numbers), nav
+  return 0;
+}
+
+// True when the keyboard is currently showing the navigation sub-page/page --
+// nav is always the LAST sub-page of whichever cycle applies above, or
+// PAGE_NAV itself for the plain/label keyboard.
+static bool prv_on_nav(MultitapKeyboard *kb) {
+  int count = prv_locked_page_count(kb);
+  if (count > 0) return kb->locked_sub_page == count - 1;
+  return kb->page == PAGE_NAV;
+}
+
 // Effective glyph list for (page,key): base glyphs plus any enabled extended
 // characters assigned to this key (ALPHA only). Writes pointers into `out`.
 static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
@@ -346,18 +400,28 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
   // Pattern mode's character keys (0-8) pull from their own glyph tables
   // instead of PAGE_KEY -- `key` is guaranteed 0-8 here: KEY_SHIFT already
   // returned above, and callers never pass KEY_SPACE/KEY_DEL to this
-  // function. SOUND additionally picks between its two pages via
-  // pattern_show_numbers (see that field's own doc comment) -- deliberately
-  // NOT via the `page` param itself, which stays pinned to PAGE_NUMBERS for
+  // function. SOUND additionally picks between its two real pages via
+  // locked_sub_page (see that field's own doc comment) -- deliberately NOT
+  // via the `page` param itself, which stays pinned to PAGE_NUMBERS for
   // pattern mode's whole lifetime (see multitap_keyboard_set_pattern_mode),
   // so the `page == PAGE_ALPHA` extended-character check below can never
-  // fire during pattern mode regardless of which of SOUND's two pages is
-  // showing.
-  const char *const *base = (kb->pattern_mode)
-    ? (kb->pattern_notes_enabled
-         ? (kb->pattern_show_numbers ? PATTERN_KEY_SOUND_NUMBERS[key] : PATTERN_KEY_SOUND[key])
-         : PATTERN_KEY_VIBE[key])
-    : PAGE_KEY[page][key];
+  // fire during pattern mode regardless of which sub-page is showing. Both
+  // pattern_mode and numeric_mode's own nav sub-page (prv_on_nav) return no
+  // glyphs at all here -- keys 3/5 are special-cased directly in
+  // prv_press_char_key/the draw loop instead of through this table.
+  bool on_nav = prv_on_nav(kb);
+  const char *const *base;
+  if (on_nav && (kb->pattern_mode || kb->numeric_mode)) {
+    base = PATTERN_KEY_EMPTY;
+  } else if (kb->pattern_mode) {
+    base = kb->pattern_notes_enabled
+             ? (kb->locked_sub_page == 1 ? PATTERN_KEY_SOUND_NUMBERS[key] : PATTERN_KEY_SOUND[key])
+             : PATTERN_KEY_VIBE[key];
+  } else if (page == PAGE_NAV) {
+    base = PATTERN_KEY_EMPTY;
+  } else {
+    base = PAGE_KEY[page][key];
+  }
   for (int j = 0; base[j] && n < cap; j++) out[n++] = base[j];
   if (page == PAGE_ALPHA) {
     for (int e = 0; e < EXT_COUNT && n < cap; e++) {
@@ -371,19 +435,31 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
 
 static void prv_recompute_autocap(MultitapKeyboard *kb);   // defined below
 
+// Inserts at kb->cursor_pos (not always the tail) -- degenerates to today's
+// exact append-only behavior whenever cursor_pos == strlen(buffer), true for
+// every keyboard that never visits the navigation page/taps the text field.
 static void prv_append(MultitapKeyboard *kb, const char *s) {
   size_t l = strlen(kb->buffer), sl = strlen(s);
   if (l + sl >= BUFFER_CAP) return;
   if (kb->max_len > 0 && l + sl > (size_t)kb->max_len) return;  // would overflow cap
-  memcpy(kb->buffer + l, s, sl + 1);
+  int pos = kb->cursor_pos;
+  if (pos < 0) pos = 0;
+  if (pos > (int)l) pos = (int)l;
+  memmove(kb->buffer + pos + sl, kb->buffer + pos, l - (size_t)pos + 1);  // shift tail right, incl NUL
+  memcpy(kb->buffer + pos, s, sl);
+  kb->cursor_pos = pos + (int)sl;
 }
 
+// Deletes the UTF-8 glyph immediately BEFORE cursor_pos (not always the last
+// glyph in the buffer) and moves cursor_pos back to the deleted glyph's start.
 static void prv_utf8_backspace(MultitapKeyboard *kb) {
+  int pos = kb->cursor_pos;
+  if (pos <= 0) return;
+  int start = pos - 1;
+  while (start > 0 && ((unsigned char)kb->buffer[start] & 0xC0) == 0x80) start--;
   size_t len = strlen(kb->buffer);
-  if (len == 0) return;
-  size_t i = len - 1;
-  while (i > 0 && ((unsigned char)kb->buffer[i] & 0xC0) == 0x80) i--;
-  kb->buffer[i] = '\0';
+  memmove(kb->buffer + start, kb->buffer + pos, len - (size_t)pos + 1);
+  kb->cursor_pos = start;
 }
 
 static void prv_do_delete(MultitapKeyboard *kb) {
@@ -392,10 +468,33 @@ static void prv_do_delete(MultitapKeyboard *kb) {
   prv_recompute_autocap(kb);
 }
 
-// True when the cursor sits at the start of a new sentence.
-static bool prv_at_sentence_start(const char *buf) {
-  int len = (int)strlen(buf);
-  if (len == 0) return true;
+// Moves cursor_pos one UTF-8 glyph left/right, clamped to the buffer -- the
+// navigation page's key 3/5 action (see prv_press_char_key) and a tap on the
+// text field both funnel through this.
+static void prv_move_cursor(MultitapKeyboard *kb, int dir) {
+  int len = (int)strlen(kb->buffer);
+  int pos = kb->cursor_pos;
+  if (dir < 0) {
+    if (pos <= 0) return;
+    pos--;
+    while (pos > 0 && ((unsigned char)kb->buffer[pos] & 0xC0) == 0x80) pos--;
+  } else {
+    if (pos >= len) return;
+    pos++;
+    while (pos < len && ((unsigned char)kb->buffer[pos] & 0xC0) == 0x80) pos++;
+  }
+  kb->cursor_pos = pos;
+  prv_recompute_autocap(kb);
+}
+
+// True when `cursor_pos` sits at the start of a new sentence -- looks only at
+// buf[0..cursor_pos), i.e. what's actually before the cursor, not always the
+// buffer's last byte (that generalization matters once the cursor can sit
+// mid-string: typing after moving left should react to what precedes THAT
+// position, not stale content further along the buffer).
+static bool prv_at_sentence_start(const char *buf, int cursor_pos) {
+  int len = cursor_pos;
+  if (len <= 0) return true;
   if (buf[len - 1] == '\n') return true;        // start of a fresh line
   if (buf[len - 1] != ' ') return false;        // mid-word, not a fresh start
   int i = len - 1;
@@ -407,7 +506,7 @@ static bool prv_at_sentence_start(const char *buf) {
 
 // Recompute auto-cap arming from the buffer; clear any one-letter suppression.
 static void prv_recompute_autocap(MultitapKeyboard *kb) {
-  kb->autocap_armed = prv_at_sentence_start(kb->buffer);
+  kb->autocap_armed = prv_at_sentence_start(kb->buffer, kb->cursor_pos);
   kb->autocap_suppressed = false;
 }
 
@@ -448,16 +547,15 @@ static void prv_arm_commit_timer(MultitapKeyboard *kb) {
   kb->commit_timer = app_timer_register(ms, prv_commit_timer_cb, kb);
 }
 
-// numeric_mode stays locked to its one page. pattern_mode's VIBE side also
-// stays locked (its one page already IS the digits, nothing to cycle to);
-// SOUND side toggles pattern_show_numbers instead of `page` itself -- see
-// that field's own doc comment for why `page` isn't reused for this.
+// numeric_mode and pattern_mode both cycle their own small locked_sub_page
+// range (digits/notes(+numbers) -> nav -> back), via prv_locked_page_count;
+// the plain/label keyboard instead cycles the real Page enum, now 4-deep
+// (ALPHA/NUMBERS/SYMBOLS/NAV).
 static void prv_cycle_page(MultitapKeyboard *kb) {
-  if (kb->numeric_mode) return;
-  if (kb->pattern_mode) {
-    if (!kb->pattern_notes_enabled) return;
+  int count = prv_locked_page_count(kb);
+  if (count > 0) {
     prv_commit_pending(kb);
-    kb->pattern_show_numbers = !kb->pattern_show_numbers;
+    kb->locked_sub_page = (kb->locked_sub_page + 1) % count;
     layer_mark_dirty(kb->layer);
     return;
   }
@@ -481,14 +579,23 @@ static void prv_caret_timer_cb(void *data) {
   layer_mark_dirty(kb->layer);
 }
 
-// Any edit wakes the caret: solid-on, idle counter reset, blink restarted if it
-// had gone to sleep. The cursor stays steady while typing, then blinks during a
-// brief pause, then stops redrawing the grid entirely once the user walks away.
+// Any edit wakes the caret: solid-on, idle counter reset, blink restarted from
+// scratch. The cursor stays steady while typing (or while a navigation-page
+// key repeats on hold), then blinks during a brief pause, then stops
+// redrawing the grid entirely once the user walks away. The blink timer is
+// unconditionally canceled and re-armed here (not just started `if` none was
+// running) -- a wake that left an already-ticking timer on its OLD schedule
+// could still fire soon after (toggling the caret back off) despite
+// continuous activity, since that timer's own next-fire time was set before
+// this wake happened at all; confirmed as a real, reported bug during
+// continuous nav-key hold-to-repeat (each repeat tick is ~100ms, well under
+// CARET_BLINK_MS's 500ms, so the caret should never actually reach a toggle
+// while repeating).
 static void prv_caret_wake(MultitapKeyboard *kb) {
   kb->caret_idle = 0;
   kb->caret_on = true;
-  if (!kb->caret_timer)
-    kb->caret_timer = app_timer_register(CARET_BLINK_MS, prv_caret_timer_cb, kb);
+  if (kb->caret_timer) { app_timer_cancel(kb->caret_timer); kb->caret_timer = NULL; }
+  kb->caret_timer = app_timer_register(CARET_BLINK_MS, prv_caret_timer_cb, kb);
 }
 
 static void prv_flash_timer_cb(void *data) {
@@ -505,6 +612,15 @@ static void prv_flash(MultitapKeyboard *kb, int key) {
 }
 
 static void prv_press_char_key(MultitapKeyboard *kb, int key) {
+  // Navigation page/sub-page: keys 3 (middle-row-left) and 5 (middle-row-
+  // right) move the cursor instead of cycling/committing a glyph -- a
+  // one-shot action per tap, like Space/DEL, not a multi-tap cycle. Every
+  // other key on this page is empty (see prv_eff_glyphs) and falls through
+  // to the `n == 0` no-op below.
+  if (prv_on_nav(kb) && (key == 3 || key == 5)) {
+    prv_move_cursor(kb, key == 3 ? -1 : +1);
+    return;
+  }
   const char *eff[MAX_EFF];
   int n = prv_eff_glyphs(kb, kb->page, key, eff, MAX_EFF);
   if (n == 0) return;
@@ -596,8 +712,108 @@ static int prv_key_at_point(MultitapKeyboard *kb, GPoint p) {
   return row * GRID_COLS + col;
 }
 
+static int prv_prefix_w(const char *text, int off, GFont f);   // defined below, in ---- Drawing ----
+
+// Snaps a local x position (0 == where `lo` itself would render) to the
+// nearest UTF-8 character boundary within text[lo..hi), by comparing measured
+// widths via prv_prefix_w — the same "nearest boundary, midpoint as the snap
+// line" rule ordinary text-editor caret hit-testing uses.
+static int prv_snap_offset(const char *text, int lo, int hi, int x, GFont f) {
+  int base = prv_prefix_w(text, lo, f);
+  int best_off = lo, best_dist = -1;
+  int off = lo;
+  while (1) {
+    int w = prv_prefix_w(text, off, f) - base;
+    int dist = (x > w) ? (x - w) : (w - x);
+    if (best_dist < 0 || dist < best_dist) { best_dist = dist; best_off = off; }
+    if (off >= hi) break;
+    int next = off + 1;
+    while (next < hi && ((unsigned char)text[next] & 0xC0) == 0x80) next++;
+    off = next;
+  }
+  return best_off;
+}
+
+// Maps a touch point to a byte offset in kb->buffer, for placing the cursor
+// there (see multitap_keyboard_handle_tap). Returns false if `p` isn't in the
+// text-field strip at all (same p.y < TEXT_AREA_H cutoff prv_key_at_point
+// uses for the whole field, so the two hit-tests partition the layer with no
+// seam). Uses kb->last_display_level (set by the last prv_draw_text_fitted
+// call) rather than re-running layout.
+//
+// Precise in the single-line display (measure boundary-by-boundary and snap
+// to the nearest, via prv_snap_offset) and in the wrapped-two-line display (a
+// small greedy word-wrap pass of our own, mirroring Pebble's built-in
+// word-wrap rule, finds exactly which bytes fall on line 1 vs line 2, then
+// hit-tests within that line the same way). The front-truncation display has
+// no representable position for its hidden leading text at all, so it falls
+// back to a pure geometric test instead of guessing: the left half of the
+// field jumps the cursor to the very start, the right half to the very end.
+static bool prv_text_field_hit(MultitapKeyboard *kb, GPoint p, int *offset_out) {
+  if (p.y >= TEXT_AREA_H) return false;
+  GRect b = layer_get_bounds(kb->layer);
+  GRect field = GRect(4, 4, b.size.w - 8, TEXT_AREA_H - 8);
+  GRect tr = GRect(field.origin.x + 6, field.origin.y, field.size.w - 12, field.size.h);
+
+  const char *text = kb->buffer;
+  int len = (int)strlen(text);
+  int level = kb->last_display_level;
+
+  if (level >= 2 * LADDER_N) {   // front-truncated: geometric fallback only
+    int mid = tr.origin.x + tr.size.w / 2;
+    *offset_out = (p.x < mid) ? 0 : len;
+    return true;
+  }
+
+  int x = p.x - tr.origin.x;
+  if (x < 0) x = 0;
+
+  if (level < LADDER_N) {   // single line
+    GFont f = fonts_get_system_font(LADDER[level].key);
+    *offset_out = prv_snap_offset(text, 0, len, x, f);
+    return true;
+  }
+
+  // Wrapped to (up to) two lines: find the line-break point ourselves via a
+  // greedy word-wrap walk (break at the last space before the line would
+  // overflow the box width), pick the line from the tap's y, then hit-test
+  // x within that line's own span.
+  int i = level - LADDER_N;
+  GFont f = fonts_get_system_font(LADDER[i].key);
+  int line_h = graphics_text_layout_get_content_size(
+                 "Ag", f, GRect(0, 0, 2000, 200), GTextOverflowModeFill, GTextAlignmentLeft).h;
+  int box_w = tr.size.w;
+  int line1_end = len;
+  int last_space = -1;
+  int off = 0;
+  while (off < len) {
+    int next = off + 1;
+    while (next < len && ((unsigned char)text[next] & 0xC0) == 0x80) next++;
+    if (text[off] == ' ') last_space = off;
+    if (prv_prefix_w(text, next, f) > box_w) {
+      line1_end = (last_space >= 0) ? last_space + 1 : off;
+      break;
+    }
+    off = next;
+  }
+  int on_line2 = (p.y - tr.origin.y) >= line_h;
+  int lo = on_line2 ? line1_end : 0;
+  int hi = on_line2 ? len : line1_end;
+  *offset_out = prv_snap_offset(text, lo, hi, x, f);
+  return true;
+}
+
 void multitap_keyboard_handle_tap(MultitapKeyboard *kb, GPoint point) {
   if (!kb) return;
+  int offset;
+  if (prv_text_field_hit(kb, point, &offset)) {
+    prv_commit_pending(kb);
+    kb->cursor_pos = offset;
+    prv_recompute_autocap(kb);
+    prv_caret_wake(kb);
+    layer_mark_dirty(kb->layer);
+    return;
+  }
   int key = prv_key_at_point(kb, point);
   if (key < 0) return;
   prv_flash(kb, key);
@@ -634,13 +850,45 @@ bool multitap_keyboard_point_is_delete(MultitapKeyboard *kb, GPoint point) {
   return kb && prv_key_at_point(kb, point) == KEY_DEL;
 }
 
+// 0 if `point` isn't one of the navigation page's move-cursor keys (3/5),
+// -1 if it's the left key, +1 if it's the right key. The touch driver uses
+// this to give these two keys the same hold-to-repeat behavior as the DEL
+// key (see multitap_keyboard_point_is_delete/multitap_keyboard_move_cursor),
+// instead of the one-shot hold every other key gets.
+int multitap_keyboard_point_is_nav_key(MultitapKeyboard *kb, GPoint point) {
+  if (!kb || !prv_on_nav(kb)) return 0;
+  int key = prv_key_at_point(kb, point);
+  if (key == 3) return -1;
+  if (key == 5) return 1;
+  return 0;
+}
+
+// Moves the cursor one UTF-8 glyph left (dir<0) or right (dir>0), waking the
+// caret and redrawing -- the programmatic equivalent of tapping/holding the
+// navigation page's own move-cursor keys, for the touch driver's repeat timer
+// to call directly without synthesizing a fake tap point.
+void multitap_keyboard_move_cursor(MultitapKeyboard *kb, int dir) {
+  if (!kb) return;
+  prv_caret_wake(kb);
+  prv_move_cursor(kb, dir);
+  layer_mark_dirty(kb->layer);
+}
+
 // Long-press: character keys insert their phone-keypad digit (key 0..8 ->
 // '1'..'9'); the space/0 key inserts the OTHER of space/0 for its page (so on
 // the 123 page, holding 0 types a space); the bottom-left key cycles layout.
+// The navigation page's own keys 3/5 are excluded from the digit-insert (they
+// have no glyph to begin with, but key+1 digit-insert is otherwise generic
+// and keyed off nothing but the raw key index) -- the touch driver never
+// actually reaches this function for those two keys at all (it intercepts
+// them via multitap_keyboard_point_is_nav_key for hold-to-repeat instead, see
+// multitap_keyboard_window.c), but guarding here too keeps this function
+// correct on its own regardless of caller.
 void multitap_keyboard_handle_hold(MultitapKeyboard *kb, GPoint point) {
   if (!kb) return;
   int key = prv_key_at_point(kb, point);
   if (key < 0) return;
+  if (prv_on_nav(kb) && (key == 3 || key == 5)) return;
   prv_caret_wake(kb);
   prv_flash(kb, key);
   if (key == KEY_SHIFT) { prv_cycle_page(kb); return; }
@@ -718,27 +966,34 @@ static int prv_prefix_w(const char *text, int off, GFont f) {
 // through glyphs of different widths; the caller relaxes the floor on a delete.
 // `ul_start`/`ul_end` (byte offsets into `text`, or -1) mark a span to underline
 // in `ul_color` — used to flag the still-cycling multi-tap glyph. `caret_at` (a
-// byte offset, or -1) is where the trailing caret glyph sits in `text`, drawn in
-// `caret_color`. Both effects only apply in the single-line layout, where a span's
-// x-extent can be measured exactly; they're skipped once the text wraps or front-
-// truncates (where positions can't be derived from the public text-layout API), so
-// the caret simply stays the body color there. The caret IS still in `text` for
-// layout, so wrapping accounts for it in every case.
+// byte offset, or -1) is where the (1-byte) caret glyph sits in `text`, drawn in
+// `caret_color`; any real text after it is redrawn in `body_color` at its own
+// measured position (both only matter in the single-line layout — see below).
+// The caret can sit anywhere in `text` now (not just the tail), since the
+// navigation page/a text-field tap can move the cursor mid-string.
+//
+// Interior-cursor positioning is fully supported only in the single-line
+// layout, where a byte offset's x-extent can be measured exactly via
+// prv_prefix_w. The wrap-to-two-lines layout draws `text` (caret glyph
+// already spliced in by the caller) via Pebble's own word-wrap, so the caret
+// lands in the right place for free without any positional code here. The
+// front-truncation layout can't place an interior cursor at all (the
+// discarded leading text has no on-screen position to redraw a cursor at),
+// so this function falls back to the wrap layout instead of front-truncating
+// whenever the caret has real content after it (see the `level` adjustment
+// below) — front-truncation is reserved for the (still common) case where
+// the cursor stays at the tail.
 static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
                                  int *wrap_floor,
                                  int ul_start, int ul_end, GColor ul_color,
-                                 int caret_at, GColor caret_color) {
+                                 int caret_at, GColor caret_color, GColor body_color,
+                                 int *level_out) {
   // GOTHIC reserves generous padding ABOVE the caps (headroom for accents like
   // Ä/Ö), so centering the measured content box leaves the visible glyphs sitting
   // low. `rise` lifts them back to the optical middle; values were measured on the
   // emulator (28pt caps centered when lifted 5px) and scale with font size.
-  static const struct { const char *key; int16_t rise; } LADDER[] = {
-    { FONT_KEY_GOTHIC_28_BOLD, 5 },
-    { FONT_KEY_GOTHIC_24_BOLD, 4 },
-    { FONT_KEY_GOTHIC_18_BOLD, 3 },
-    { FONT_KEY_GOTHIC_14_BOLD, 2 },
-  };
-  const int N = (int)(sizeof(LADDER) / sizeof(LADDER[0]));
+  // (LADDER itself now lives at file scope -- see its own doc comment.)
+  const int N = LADDER_N;
   const GRect wide = GRect(0, 0, 2000, 200);            // single-line measure
   const GRect wrap = GRect(0, 0, box.size.w, 400);      // wrapped-to-width measure
   char buf[BUFFER_CAP + 16];   // fits "..." + the longest caller buffer, with room to spare
@@ -756,11 +1011,33 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
   // stay stuck a notch tighter than the real content needs -- confirmed
   // as a real, reported bug, not a theoretical one. Measuring without the
   // caret removes the coupling entirely.
+  // Excises ONLY the 1-byte caret glyph itself, not everything after it --
+  // with an interior cursor, real text can follow the caret and must still
+  // count toward the fit decision. An earlier version of this dropped the
+  // whole tail past caret_at (fine when the cursor could only ever sit at
+  // the tail, since there was no real tail left to drop) -- with the
+  // navigation page/a field tap able to move the cursor mid-string, that
+  // shortcut let the level selection see only a short prefix and pick a
+  // looser (bigger) font than the full text actually fits, confirmed as a
+  // real, reported bug: right after deleting a character mid-string,
+  // wrap_floor resets to 0 (see below) and this frame's measurement (caret
+  // solid on, right after the delete wakes it) would see only the prefix,
+  // picking a too-loose level whose actual draw then overflowed/clipped the
+  // real (longer) text for one frame, until the next caret blink's
+  // off-phase measurement (caret_at==-1, no truncation at all) recomputed
+  // the correct tighter level and self-corrected.
   char measure_buf[BUFFER_CAP + 16];
   const char *measure_text = text;
   if (caret_at >= 0) {
     int c = caret_at < (int)sizeof(measure_buf) ? caret_at : (int)sizeof(measure_buf) - 1;
-    memcpy(measure_buf, text, c); measure_buf[c] = '\0';
+    size_t tail_src = (size_t)c + 1;              // skip the 1-byte caret glyph itself
+    size_t avail = sizeof(measure_buf) - (size_t)c - 1;
+    size_t tlen = strlen(text);
+    size_t tail_len = (tlen > tail_src) ? tlen - tail_src : 0;
+    if (tail_len > avail) tail_len = avail;
+    memcpy(measure_buf, text, c);
+    memcpy(measure_buf + c, text + tail_src, tail_len);
+    measure_buf[c + tail_len] = '\0';
     measure_text = measure_buf;
   }
 
@@ -797,6 +1074,16 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
     *wrap_floor = level;
   }
 
+  // An interior cursor (real content follows the caret, not just itself) has
+  // no representable position in the front-truncation layout — fall back one
+  // ladder rung to the two-line wrap, which DOES show the caret. Untouched
+  // when the cursor sits at the tail (every existing caller), so this only
+  // changes behavior once the cursor has actually been moved off the end.
+  if (level == 2 * N && caret_at >= 0 && caret_at < (int)strlen(text) - 1) {
+    level = 2 * N - 1;
+  }
+  if (level_out) *level_out = level;
+
   if (level < N) {   // single line
     GFont f = fonts_get_system_font(LADDER[level].key);
     GSize sz = graphics_text_layout_get_content_size(
@@ -804,8 +1091,8 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
     int vy = box.origin.y + (box.size.h - sz.h) / 2 - LADDER[level].rise;
     GRect tr = GRect(box.origin.x, vy, box.size.w, sz.h + 4);
 
-    // Body in the caller's text color, stopping before the caret so it can be
-    // painted in its own color below. With no caret this is the whole string.
+    // Body in `body_color`, stopping before the caret so it can be painted in
+    // its own color below. With no caret this is the whole string.
     char body[BUFFER_CAP + 8];
     const char *body_text = text;
     if (caret_at >= 0) {
@@ -813,6 +1100,7 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
       memcpy(body, text, c); body[c] = '\0';
       body_text = body;
     }
+    graphics_context_set_text_color(ctx, body_color);
     graphics_draw_text(ctx, body_text, f, tr,
                        GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 
@@ -829,12 +1117,22 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
       }
     }
 
-    // Caret in its own (accent) color, painted at its measured x.
+    // Caret in its own (accent) color, painted at its measured x — just the
+    // 1-byte glyph itself, not the rest of the string (which may be real
+    // text now that the cursor can sit mid-string, not just the tail).
     if (caret_at >= 0) {
       int cx = prv_prefix_w(text, caret_at, f);
       graphics_context_set_text_color(ctx, caret_color);
-      graphics_draw_text(ctx, text + caret_at, f,
+      graphics_draw_text(ctx, "|", f,
                          GRect(box.origin.x + cx, vy, box.size.w, sz.h + 4),
+                         GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+      // Real text after the caret, redrawn in body color at its own x (a
+      // no-op empty draw when the caret sits at the tail, today's only
+      // reachable case).
+      int tx = prv_prefix_w(text, caret_at + 1, f);
+      graphics_context_set_text_color(ctx, body_color);
+      graphics_draw_text(ctx, text + caret_at + 1, f,
+                         GRect(box.origin.x + tx, vy, box.size.w, sz.h + 4),
                          GTextOverflowModeFill, GTextAlignmentLeft, NULL);
     }
     return;
@@ -928,6 +1226,23 @@ static void prv_draw_backspace(GContext *ctx, GRect face, GColor ink, GColor kno
   graphics_context_set_stroke_width(ctx, 1);
 }
 
+// Navigation-page arrow icons (keys 3/5): a shaft + chevron head, stroked
+// (not filled) -- the same lightweight graphics_draw_line primitive
+// prv_draw_space_symbol already uses above, deliberately NOT a GPath asset
+// (unlike the DEL key's own backspace tag): a filled polygon would need its
+// own heap-allocated GPath plus a mutable points buffer, real bytes this
+// binary is tight on (see prv_draw_backspace's own comment for that
+// mechanism, still used for DEL). Mirrored by `dir` (-1 left, +1 right).
+static void prv_draw_nav_arrow(GContext *ctx, GRect face, GColor ink, int dir) {
+  int cx = face.origin.x + face.size.w / 2, cy = face.origin.y + face.size.h / 2;
+  graphics_context_set_stroke_color(ctx, ink);
+  graphics_context_set_stroke_width(ctx, 2);
+  graphics_draw_line(ctx, GPoint(cx - dir * 7, cy), GPoint(cx + dir * 2, cy));
+  graphics_draw_line(ctx, GPoint(cx + dir * 2, cy), GPoint(cx - dir * 4, cy - 6));
+  graphics_draw_line(ctx, GPoint(cx + dir * 2, cy), GPoint(cx - dir * 4, cy + 6));
+  graphics_context_set_stroke_width(ctx, 1);
+}
+
 // One step toward black per channel — the shade a key darkens to on press.
 static GColor prv_darker(GColor c) {
   c.r = c.r ? c.r - 1 : 0;
@@ -968,6 +1283,14 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   strncpy(shown, kb->buffer, sizeof(shown)); shown[sizeof(shown) - 1] = '\0';
   // Byte span of the still-cycling pending glyph within `shown`, underlined below
   // to flag it as uncommitted (the classic multi-tap cue). -1 = nothing pending.
+  // Spliced in AT cursor_pos, not appended at the tail -- the pending glyph
+  // will itself be inserted there once committed (prv_commit_pending ->
+  // prv_emit_glyph -> prv_append, all cursor_pos-relative), so its preview
+  // must show up in the same place; appending it at the tail instead (as
+  // this used to, back when the cursor could only ever sit at the tail)
+  // made a freshly-typed letter visibly appear at the end of the text and
+  // only jump to its real position once committed, for any cursor moved
+  // off the tail via the navigation page or a field tap.
   int ul_start = -1, ul_end = -1;
   if (kb->pending_active) {
     const char *eff[MAX_EFF];
@@ -975,17 +1298,34 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
     if (kb->cycle_index < n) {
       char gb[8];
       prv_render_glyph(kb, eff[kb->cycle_index], gb, sizeof(gb));
-      if (strlen(shown) + strlen(gb) < sizeof(shown)) {
-        ul_start = (int)strlen(shown);
-        strcat(shown, gb);
-        ul_end = (int)strlen(shown);
+      int shown_len = (int)strlen(shown);
+      int gl = (int)strlen(gb);
+      int pos = kb->cursor_pos;
+      if (pos < 0) pos = 0;
+      if (pos > shown_len) pos = shown_len;
+      if (shown_len + gl < (int)sizeof(shown)) {
+        memmove(shown + pos + gl, shown + pos, (size_t)(shown_len - pos + 1));
+        memcpy(shown + pos, gb, (size_t)gl);
+        ul_start = pos;
+        ul_end = pos + gl;
       }
     }
   }
+  // Splice the caret glyph in right after the pending glyph if one was just
+  // spliced in above (same placement this always had), otherwise AT
+  // cursor_pos directly -- the navigation page/a text-field tap can move it
+  // mid-string.
   int caret_at = -1;
-  if (kb->caret_on && strlen(shown) + 1 < sizeof(shown)) {
-    caret_at = (int)strlen(shown);
-    strcat(shown, "|");
+  if (kb->caret_on) {
+    int shown_len = (int)strlen(shown);
+    int pos = (ul_end >= 0) ? ul_end : kb->cursor_pos;
+    if (pos < 0) pos = 0;
+    if (pos > shown_len) pos = shown_len;
+    if (shown_len + 1 < (int)sizeof(shown)) {
+      memmove(shown + pos + 1, shown + pos, (size_t)(shown_len - pos + 1));
+      shown[pos] = '|';
+      caret_at = pos;
+    }
   }
 
   // The text header is a white section (standing in for the old divider),
@@ -1014,7 +1354,8 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   // through the same shared shrink-to-fit routine every other mode uses.
   prv_draw_text_fitted(ctx, shown, GRect(field.origin.x + 6, field.origin.y,
                                          field.size.w - 12, field.size.h),
-                       &kb->wrap_floor, ul_start, ul_end, c_acc, caret_at, c_acc);
+                       &kb->wrap_floor, ul_start, ul_end, c_acc, caret_at, c_acc,
+                       c_fg, &kb->last_display_level);
 
   // Keys are filled, rounded, and gapped like the throw grid: letter keys rest
   // on the soft `key` fill; the bottom function row (Shift/space/DEL) is a bold
@@ -1031,6 +1372,7 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   // capital visibly "spends" on the pressed key and the rest drop to lowercase.
   int eff_shift = prv_effective_shift(kb);
   int next_shift = prv_next_shift(kb);
+  bool on_nav = prv_on_nav(kb);
   for (int i = 0; i < KEY_COUNT; i++) {
     int col = i % GRID_COLS, row = i / GRID_COLS;
     GRect face = GRect(go.x + col * cw + 2, go.y + row * ch + 3, cw - 4, ch - 4);
@@ -1082,6 +1424,8 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
     } else if (i == KEY_DEL) {
       // Backspace glyph in place of a "DEL" label.
       prv_draw_backspace(ctx, face, txt, draw_fill);
+    } else if (on_nav && (i == 3 || i == 5)) {
+      prv_draw_nav_arrow(ctx, face, txt, i == 3 ? -1 : +1);
     } else {
       char lbl[LABEL_CAP]; prv_key_label(kb, i, key_shift, lbl, sizeof(lbl));
       // GOTHIC_18 pads above the caps, so center on its cap box (22) and nudge
@@ -1112,6 +1456,7 @@ MultitapKeyboard *multitap_keyboard_create(GRect frame, MultitapKeyboardDoneHand
   kb->touch_key = -1;
   kb->caret_on = true;
   kb->buffer[0] = '\0';
+  kb->cursor_pos = 0;
   prv_recompute_autocap(kb);
 
   kb->layer = layer_create_with_data(frame, sizeof(MultitapKeyboard *));
@@ -1143,10 +1488,14 @@ const char *multitap_keyboard_get_text(MultitapKeyboard *kb) { return kb ? kb->b
 static void prv_clamp_to_max(MultitapKeyboard *kb) {
   if (kb->max_len <= 0) return;
   size_t i = strlen(kb->buffer);
-  if (i <= (size_t)kb->max_len) return;
+  if (i <= (size_t)kb->max_len) {
+    if (kb->cursor_pos > (int)i) kb->cursor_pos = (int)i;
+    return;
+  }
   i = (size_t)kb->max_len;
   while (i > 0 && ((unsigned char)kb->buffer[i] & 0xC0) == 0x80) i--;  // drop continuation
   kb->buffer[i] = '\0';
+  if (kb->cursor_pos > (int)i) kb->cursor_pos = (int)i;
 }
 
 void multitap_keyboard_set_text(MultitapKeyboard *kb, const char *text) {
@@ -1155,6 +1504,7 @@ void multitap_keyboard_set_text(MultitapKeyboard *kb, const char *text) {
   kb->pending_active = false;
   if (text) { strncpy(kb->buffer, text, BUFFER_CAP - 1); kb->buffer[BUFFER_CAP - 1] = '\0'; }
   else kb->buffer[0] = '\0';
+  kb->cursor_pos = (int)strlen(kb->buffer);   // resume editing at the tail, matching every caller's expectation
   prv_clamp_to_max(kb);
   prv_recompute_autocap(kb);
   layer_mark_dirty(kb->layer);
@@ -1170,6 +1520,7 @@ void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes) {
 void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled) {
   if (!kb) return;
   kb->numeric_mode = enabled;
+  kb->locked_sub_page = 0;   // always start on the digits sub-page, never left over from a prior session
   if (enabled) kb->page = PAGE_NUMBERS;
   layer_mark_dirty(kb->layer);
 }
@@ -1178,7 +1529,7 @@ void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool
   if (!kb) return;
   kb->pattern_mode = enabled;
   kb->pattern_notes_enabled = notes_enabled;
-  kb->pattern_show_numbers = false;   // always start on the note layout, never left over from a prior session
+  kb->locked_sub_page = 0;   // always start on the primary sub-page, never left over from a prior session
   if (enabled) kb->page = PAGE_NUMBERS;
   layer_mark_dirty(kb->layer);
 }

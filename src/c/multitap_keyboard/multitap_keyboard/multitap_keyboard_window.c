@@ -31,6 +31,8 @@ static bool      s_held;
 static int       s_touch_key;          // cell the press started on (-1 = off grid)
 static bool      s_canceled;           // finger slid off that cell: no tap/hold
 static AppTimer *s_del_repeat_timer;   // hold-to-erase on the on-screen DEL key
+static AppTimer *s_nav_repeat_timer;   // hold-to-move on the navigation page's own keys
+static int       s_nav_repeat_dir;     // -1 left, +1 right -- which of those two is held
 static bool      s_touch_registered;   // whether we actually subscribed to touch
 
 // ---- Touch -----------------------------------------------------------------
@@ -65,6 +67,10 @@ static void prv_del_repeat_cancel(void) {
   if (s_del_repeat_timer) { app_timer_cancel(s_del_repeat_timer); s_del_repeat_timer = NULL; }
 }
 
+static void prv_nav_repeat_cancel(void) {
+  if (s_nav_repeat_timer) { app_timer_cancel(s_nav_repeat_timer); s_nav_repeat_timer = NULL; }
+}
+
 // Keep erasing while DEL is held, at the same cadence as the Down button, until
 // liftoff cancels the timer.
 static void prv_del_repeat(void *data) {
@@ -75,17 +81,35 @@ static void prv_del_repeat(void *data) {
       multitap_keyboard_delete_repeat_ms(s_keyboard), prv_del_repeat, NULL);
 }
 
+// Keep moving the cursor while a navigation-page arrow key is held, same
+// cadence and shape as prv_del_repeat above.
+static void prv_nav_repeat(void *data) {
+  s_nav_repeat_timer = NULL;
+  multitap_keyboard_move_cursor(s_keyboard, s_nav_repeat_dir);
+  s_nav_repeat_timer = app_timer_register(
+      multitap_keyboard_delete_repeat_ms(s_keyboard), prv_nav_repeat, NULL);
+}
+
 static void prv_hold_fire(void *data) {
   s_hold_timer = NULL;
   s_held = true;
-  // DEL holds repeat (erase continuously), so it stays visually pressed until the
-  // finger lifts. Every other key gets a one-shot hold, so its pressed look drops
-  // the moment the hold fires.
+  // DEL and the navigation page's own move-cursor keys both hold-repeat (so
+  // they stay visually pressed until the finger lifts); every other key gets
+  // a one-shot hold instead, so its pressed look drops the moment the hold
+  // fires.
   if (multitap_keyboard_point_is_delete(s_keyboard, s_touch_pt)) {
     multitap_keyboard_backspace(s_keyboard);   // first erase now...
     prv_notify_live_text();
     s_del_repeat_timer = app_timer_register(
         multitap_keyboard_delete_repeat_ms(s_keyboard), prv_del_repeat, NULL);  // ...then keep going
+    return;
+  }
+  int nav_dir = multitap_keyboard_point_is_nav_key(s_keyboard, s_touch_pt);
+  if (nav_dir != 0) {
+    multitap_keyboard_move_cursor(s_keyboard, nav_dir);   // first move now...
+    s_nav_repeat_dir = nav_dir;
+    s_nav_repeat_timer = app_timer_register(
+        multitap_keyboard_delete_repeat_ms(s_keyboard), prv_nav_repeat, NULL);  // ...then keep going
     return;
   }
   multitap_keyboard_handle_touch_up(s_keyboard);   // one-shot hold fired: drop the pressed look
@@ -106,7 +130,16 @@ static void prv_touch_handler(const TouchEvent *event, void *context) {
       s_touch_key = multitap_keyboard_key_at_point(s_keyboard, s_touch_pt);
       if (s_hold_timer) app_timer_cancel(s_hold_timer);
       prv_del_repeat_cancel();
-      s_hold_timer = app_timer_register(HOLD_MS, prv_hold_fire, NULL);
+      prv_nav_repeat_cancel();
+      // Off the key grid (the text field, or any dead margin) there's no
+      // hold-specific behavior to fire at all -- multitap_keyboard_handle_hold
+      // itself is a no-op there -- so skip arming the hold timer entirely
+      // rather than let a tap that merely dwells past HOLD_MS on the text
+      // field get swallowed as a "hold" instead of registering as the tap
+      // that moves the cursor.
+      if (s_touch_key >= 0) {
+        s_hold_timer = app_timer_register(HOLD_MS, prv_hold_fire, NULL);
+      }
       multitap_keyboard_handle_touch_down(s_keyboard, s_touch_pt);   // pressed look now
       break;
     case TouchEvent_PositionUpdate: {
@@ -127,6 +160,7 @@ static void prv_touch_handler(const TouchEvent *event, void *context) {
     case TouchEvent_Liftoff:
       if (s_hold_timer) { app_timer_cancel(s_hold_timer); s_hold_timer = NULL; }
       prv_del_repeat_cancel();
+      prv_nav_repeat_cancel();
       multitap_keyboard_handle_touch_up(s_keyboard);                 // release the look
       // The keyboard fills the window, so screen coords == layer-local coords.
       if (!s_held && !s_canceled) {
@@ -226,6 +260,7 @@ static void prv_unload(Window *window) {
   if (s_touch_registered) touch_service_unsubscribe();
   if (s_hold_timer) { app_timer_cancel(s_hold_timer); s_hold_timer = NULL; }
   prv_del_repeat_cancel();
+  prv_nav_repeat_cancel();
   multitap_keyboard_destroy(s_keyboard);
   s_keyboard = NULL;
   window_destroy(s_window);

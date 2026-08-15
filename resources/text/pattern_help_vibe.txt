@@ -1,0 +1,11 @@
+A vibration pattern is a list of on-beats and rests, separated by spaces.
+
+Each on-beat is a duration ratio: "1" means the default 100ms; "N" means N times that (e.g. "2" = 200ms); "/D" means 1/D of it (e.g. "/2" = 50ms); "N/D" combines both.
+
+A rest is "z" followed by the same optional ratio (e.g. "z", "z/2").
+
+Rests are optional -- two on-beats with nothing between them play back to back with no gap.
+
+Example pattern:
+
+"1 z/2 1"
