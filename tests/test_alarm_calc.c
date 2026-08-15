@@ -761,6 +761,22 @@ static void test_sound_pattern_parse_bare_duration_is_default(void) {
   assert(ac_pattern_duration_ms(flags[0]) == AC_NOTE_DEFAULT_MS);
 }
 
+// General MIDI's pitch classes repeat every 12 notes with C at every
+// multiple of 12 (note 0 = C-1, 12 = C0, ..., 60 = C4/"middle C", 96 = C7).
+// AC_NOTE_MIDI[C's index] must therefore be congruent to 60 mod 12 for
+// MIDI note 60 to actually BE a C under this table -- true today (96 is
+// exactly 3 octaves above 60), but nothing enforces it if the table's base
+// pitch ever changes, so pin it down here rather than leave it as an
+// unstated assumption.
+static void test_note_midi_c_matches_general_midi_pitch_class(void) {
+  int c_index = -1;
+  for (int i = 0; i < AC_NOTE_COUNT; i++) {
+    if (AC_NOTE_LETTER[i] == 'C') { c_index = i; break; }
+  }
+  assert(c_index >= 0);
+  assert(((int)AC_NOTE_MIDI[c_index] - 60) % 12 == 0);
+}
+
 static void test_sound_pattern_parse_duration_ratio_forms(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(ac_sound_pattern_parse("C2 C/2 C3/2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
@@ -1027,6 +1043,7 @@ int main(void) {
   test_vibe_pattern_format_round_trip();
   test_vibe_pattern_format_empty();
   test_sound_pattern_parse_bare_duration_is_default();
+  test_note_midi_c_matches_general_midi_pitch_class();
   test_sound_pattern_parse_duration_ratio_forms();
   test_sound_pattern_parse_ratio_reduction_round_trip();
   test_sound_pattern_parse_accidentals();
