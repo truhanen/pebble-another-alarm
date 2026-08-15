@@ -1071,14 +1071,27 @@ static uint32_t alarm_sound_duration_ms(const Alarm *a) {
   return 100 + pattern_duration_ms(flags, len);
 }
 
-// Plays a raw pattern string once, for the Tune picker's preview-on-select
-// (pattern_select_select) -- parses on the fly rather than needing a stored
-// Alarm's fields, since a preview can be of a preset that isn't applied yet.
-static void alarm_preview_sound_pattern(const char *text) {
+// Plays a raw pattern string once at an explicit volume -- parses on the
+// fly rather than needing a stored Alarm's fields, since a preview can be
+// of a preset/in-progress pattern that isn't applied (or even fully typed)
+// yet. Shared by alarm_preview_sound_pattern below (the Tune picker's own
+// preview-on-select, at the real configured global volume) and
+// pattern_kb_live_text (the pattern keyboard's own preview-while-typing,
+// always at a fixed low volume -- see that function's own doc comment for
+// why the two intentionally differ).
+static void alarm_preview_sound_pattern_at_volume(const char *text, uint8_t volume) {
   if (!text || !text[0]) { return; }
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   if (!ac_sound_pattern_parse(text, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len)) { return; }
-  alarm_play_sound_pattern(flags, notes, len, (uint8_t)s_audio_volume);
+  alarm_play_sound_pattern(flags, notes, len, volume);
+}
+
+// Plays a raw pattern string once, for the Tune picker's preview-on-select
+// (pattern_select_select) -- always at the real configured global volume,
+// so it previews exactly what the alarm will actually sound like once
+// applied.
+static void alarm_preview_sound_pattern(const char *text) {
+  alarm_preview_sound_pattern_at_volume(text, (uint8_t)s_audio_volume);
 }
 
 // increasing_volume: driven by s_alarm_buzz_count (how many buzz cycles have
@@ -1108,6 +1121,59 @@ static uint8_t alarm_current_volume(const Alarm *a) {
   return (uint8_t)vol;
 }
 #endif // PBL_SPEAKER
+
+// Which grammar the currently-open pattern keyboard is typing -- set right
+// before each multitap_keyboard_window_push_pattern() call below (mirroring
+// that call's own notes_enabled argument), so pattern_kb_live_text (which
+// has no other way to know) can tell a Tune's sound preview from a
+// Vibration's.
+static bool s_pattern_kb_notes_enabled;
+
+// Cuts off whatever pattern_kb_live_text most recently started -- called
+// unconditionally at the top of every keystroke, before deciding whether a
+// NEW preview should start, so "stop the instant another character is
+// typed" falls out for free rather than needing its own tracked "is a
+// preview currently playing" state.
+static void pattern_kb_stop_preview(void) {
+  vibes_cancel();
+#if PBL_SPEAKER
+  speaker_stop();
+#endif
+}
+
+// Live preview while typing in the pattern keyboard (wired as the
+// live_handler param on every multitap_keyboard_window_push_pattern() call
+// below): fires after every keystroke with the full buffer typed so far.
+// Space is this grammar's token separator, so `space_completed` (see its
+// own doc comment, multitap_keyboard_window.h) being true means "a whole
+// segment/token was just freshly completed" -- exactly the moment to
+// preview it. `space_completed` is deliberately NOT re-derived here by
+// just checking whether `text` ends in a space -- that would also be true
+// (wrongly) the instant a multi-tap key's first, still-pending press is
+// registered (the committed buffer hasn't changed yet, so it still ends in
+// the PREVIOUS space) and after a backspace that lands on a leftover space,
+// both of which must NOT replay the preview. Typing anything else next
+// (another character, or a backspace) cuts the preview off immediately via
+// the unconditional stop above, before this function even looks at
+// `space_completed`.
+static void pattern_kb_live_text(const char *text, bool space_completed, void *context) {
+  pattern_kb_stop_preview();
+  if (!space_completed) { return; }
+  if (s_pattern_kb_notes_enabled) {
+#if PBL_SPEAKER
+    // Always a fixed low volume here, regardless of the configured global
+    // AudioVolume -- distinct from the Tune picker's own preview-on-select
+    // (alarm_preview_sound_pattern), which intentionally keeps using the
+    // real global volume so IT previews what the alarm will actually sound
+    // like once applied. The keyboard is a different context (composing a
+    // pattern, possibly late at night with the alarm's own volume cranked
+    // up) where a quiet, constant preview volume is what's wanted instead.
+    alarm_preview_sound_pattern_at_volume(text, 1);
+#endif
+  } else {
+    alarm_preview_vibe_pattern(text);
+  }
+}
 
 static void alarm_buzz_cb(void *ctx) {
   s_alarm_buzz_timer = NULL;
@@ -3660,7 +3726,9 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
     // both paths end up at the same singular screen, same stack depth).
     if (row == new_row) {
       memset(&s_new_tune_draft, 0, sizeof(s_new_tune_draft));
-      multitap_keyboard_window_push_pattern(new_tune_pattern_done, NULL, PATTERN_KEYBOARD_MAX_LEN, NULL, true);
+      s_pattern_kb_notes_enabled = true;
+      multitap_keyboard_window_push_pattern(new_tune_pattern_done, NULL, PATTERN_KEYBOARD_MAX_LEN, NULL, true,
+                                             pattern_kb_live_text);
       return;
     }
     // A Tune preset commits immediately (on request) rather than opening
@@ -3694,8 +3762,9 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
   char initial[PATTERN_KEYBOARD_MAX_LEN + 1];
   pattern_select_vibe_row_text(a, row, initial, sizeof(initial));
   window_stack_pop(true);   // pop the pattern-select menu, then push the keyboard on top
+  s_pattern_kb_notes_enabled = false;
   multitap_keyboard_window_push_pattern(pattern_custom_done, initial[0] ? initial : NULL,
-                                         PATTERN_KEYBOARD_MAX_LEN, NULL, false);
+                                         PATTERN_KEYBOARD_MAX_LEN, NULL, false, pattern_kb_live_text);
 }
 
 static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
@@ -3907,8 +3976,9 @@ static bool s_deferred_kb_notes_enabled;
 static void deferred_kb_push_cb(void *data) {
   const char *initial = s_deferred_kb_has_text ? s_deferred_kb_text : NULL;
   if (s_deferred_kb_is_pattern) {
+    s_pattern_kb_notes_enabled = s_deferred_kb_notes_enabled;
     multitap_keyboard_window_push_pattern(s_deferred_kb_handler, initial, PATTERN_KEYBOARD_MAX_LEN,
-                                           NULL, s_deferred_kb_notes_enabled);
+                                           NULL, s_deferred_kb_notes_enabled, pattern_kb_live_text);
   } else {
     multitap_keyboard_window_push_ex(s_deferred_kb_handler, initial, NAME_LEN, NULL);
   }
@@ -4044,7 +4114,9 @@ static void custom_tune_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) 
     case CUSTOM_TUNE_ROW_TUNE: {
       char initial[PATTERN_KEYBOARD_MAX_LEN + 1];
       ac_sound_pattern_format(initial, sizeof(initial), t->pattern, t->pattern_note, t->pattern_len);
-      multitap_keyboard_window_push_pattern(custom_tune_tune_done, initial, PATTERN_KEYBOARD_MAX_LEN, NULL, true);
+      s_pattern_kb_notes_enabled = true;
+      multitap_keyboard_window_push_pattern(custom_tune_tune_done, initial, PATTERN_KEYBOARD_MAX_LEN, NULL, true,
+                                             pattern_kb_live_text);
       break;
     }
     case CUSTOM_TUNE_ROW_NAME:

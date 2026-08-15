@@ -19,6 +19,10 @@ static bool        s_done;            // guard: deliver the result exactly once
 static bool        s_numeric_mode;    // set by multitap_keyboard_window_push_numeric
 static bool        s_pattern_mode;    // set by multitap_keyboard_window_push_pattern
 static bool        s_pattern_notes_enabled;   // set by multitap_keyboard_window_push_pattern
+static MultitapKeyboardLiveTextHandler s_live_handler;   // set by multitap_keyboard_window_push_pattern, may be NULL
+static int         s_live_prev_len;   // buffer length as of the last live-text notification -- lets
+                                       // prv_notify_live_text tell a genuine append from a pending-glyph
+                                       // no-op or a backspace, see that function's own doc comment
 
 // Tap vs. hold disambiguation, identical to the verified PebbleOS touch flow.
 static GPoint    s_touch_pt;
@@ -31,6 +35,32 @@ static bool      s_touch_registered;   // whether we actually subscribed to touc
 
 // ---- Touch -----------------------------------------------------------------
 
+// Called right after every action that might have changed the buffer (tap,
+// hold, backspace/repeat) while pattern mode is active -- hands the CURRENT
+// full text to s_live_handler (if registered), along with whether THIS call
+// represents a genuine "a space was just typed and completed a segment"
+// moment: the buffer must have grown (strictly longer than after the
+// previous notification) AND its new last character must be a space.
+// Buffer length alone (not content) is enough to detect growth, since a
+// backspace always shrinks it and a still-pending (uncommitted) multi-tap
+// glyph never changes the committed buffer at all -- both cases must NOT
+// count as "a space was entered" even though the buffer may already/still
+// end in a space at that instant (a leftover space after backspacing past
+// a character, or a stale trailing space from before the pending glyph
+// started) -- confirmed as real, reported false triggers, not theoretical
+// ones. Always still notifies (with space_completed=false) on every other
+// change, including backspace and pending-glyph taps, so the caller can
+// unconditionally stop any playing preview the instant ANY further input
+// happens, not just on the next fully-committed character.
+static void prv_notify_live_text(void) {
+  if (!s_pattern_mode || !s_keyboard) return;
+  const char *text = multitap_keyboard_get_text(s_keyboard);
+  int new_len = (int)strlen(text);
+  bool space_completed = (new_len > s_live_prev_len) && new_len > 0 && text[new_len - 1] == ' ';
+  s_live_prev_len = new_len;
+  if (s_live_handler) s_live_handler(text, space_completed, s_context);
+}
+
 static void prv_del_repeat_cancel(void) {
   if (s_del_repeat_timer) { app_timer_cancel(s_del_repeat_timer); s_del_repeat_timer = NULL; }
 }
@@ -40,6 +70,7 @@ static void prv_del_repeat_cancel(void) {
 static void prv_del_repeat(void *data) {
   s_del_repeat_timer = NULL;
   multitap_keyboard_backspace(s_keyboard);
+  prv_notify_live_text();
   s_del_repeat_timer = app_timer_register(
       multitap_keyboard_delete_repeat_ms(s_keyboard), prv_del_repeat, NULL);
 }
@@ -52,12 +83,14 @@ static void prv_hold_fire(void *data) {
   // the moment the hold fires.
   if (multitap_keyboard_point_is_delete(s_keyboard, s_touch_pt)) {
     multitap_keyboard_backspace(s_keyboard);   // first erase now...
+    prv_notify_live_text();
     s_del_repeat_timer = app_timer_register(
         multitap_keyboard_delete_repeat_ms(s_keyboard), prv_del_repeat, NULL);  // ...then keep going
     return;
   }
   multitap_keyboard_handle_touch_up(s_keyboard);   // one-shot hold fired: drop the pressed look
   multitap_keyboard_handle_hold(s_keyboard, s_touch_pt);
+  prv_notify_live_text();
 }
 
 static void prv_touch_handler(const TouchEvent *event, void *context) {
@@ -96,7 +129,10 @@ static void prv_touch_handler(const TouchEvent *event, void *context) {
       prv_del_repeat_cancel();
       multitap_keyboard_handle_touch_up(s_keyboard);                 // release the look
       // The keyboard fills the window, so screen coords == layer-local coords.
-      if (!s_held && !s_canceled) multitap_keyboard_handle_tap(s_keyboard, s_touch_pt);
+      if (!s_held && !s_canceled) {
+        multitap_keyboard_handle_tap(s_keyboard, s_touch_pt);
+        prv_notify_live_text();
+      }
       break;
   }
 }
@@ -137,6 +173,7 @@ static void prv_down_click(ClickRecognizerRef rec, void *ctx) {
 static void prv_down_long_down(ClickRecognizerRef rec, void *ctx) {
   prv_del_repeat_cancel();
   multitap_keyboard_backspace(s_keyboard);
+  prv_notify_live_text();
   s_del_repeat_timer = app_timer_register(
       multitap_keyboard_delete_repeat_ms(s_keyboard), prv_del_repeat, NULL);
 }
@@ -169,6 +206,11 @@ static void prv_load(Window *window) {
   settings_load_and_apply(s_keyboard);
   if (s_max_len > 0) multitap_keyboard_set_max_len(s_keyboard, s_max_len);
   if (s_has_initial) multitap_keyboard_set_text(s_keyboard, s_initial);
+  // Baseline for prv_notify_live_text's own growth check -- otherwise a
+  // pattern keyboard opened pre-filled with text already ending in a space
+  // (re-editing a pattern whose canonical text happens to, though none do
+  // today) would misread its very first notification as a fresh append.
+  s_live_prev_len = s_has_initial ? (int)strlen(s_initial) : 0;
 
   s_touch_registered = touch_service_is_enabled();
   if (s_touch_registered) touch_service_subscribe(prv_touch_handler, NULL);
@@ -191,7 +233,8 @@ static void prv_unload(Window *window) {
 // across the app's lifetime.
 static void prv_push_internal(MultitapKeyboardResultHandler handler,
                                const char *initial_text, int max_len,
-                               void *context, bool numeric, bool pattern, bool pattern_notes) {
+                               void *context, bool numeric, bool pattern, bool pattern_notes,
+                               MultitapKeyboardLiveTextHandler live_handler) {
   if (s_window) return;                    // single instance
 
   s_handler = handler;
@@ -201,6 +244,7 @@ static void prv_push_internal(MultitapKeyboardResultHandler handler,
   s_numeric_mode = numeric;
   s_pattern_mode = pattern;
   s_pattern_notes_enabled = pattern_notes;
+  s_live_handler = live_handler;
   s_has_initial = (initial_text != NULL);
   if (s_has_initial) {
     strncpy(s_initial, initial_text, sizeof(s_initial) - 1);
@@ -219,23 +263,24 @@ static void prv_push_internal(MultitapKeyboardResultHandler handler,
 
 void multitap_keyboard_window_push(MultitapKeyboardResultHandler handler,
                              const char *initial_text, void *context) {
-  prv_push_internal(handler, initial_text, 0, context, false, false, false);
+  prv_push_internal(handler, initial_text, 0, context, false, false, false, NULL);
 }
 
 void multitap_keyboard_window_push_ex(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context) {
-  prv_push_internal(handler, initial_text, max_len, context, false, false, false);
+  prv_push_internal(handler, initial_text, max_len, context, false, false, false, NULL);
 }
 
 void multitap_keyboard_window_push_numeric(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
                                 void *context) {
-  prv_push_internal(handler, initial_text, max_len, context, true, false, false);
+  prv_push_internal(handler, initial_text, max_len, context, true, false, false, NULL);
 }
 
 void multitap_keyboard_window_push_pattern(MultitapKeyboardResultHandler handler,
                                 const char *initial_text, int max_len,
-                                void *context, bool notes_enabled) {
-  prv_push_internal(handler, initial_text, max_len, context, false, true, notes_enabled);
+                                void *context, bool notes_enabled,
+                                MultitapKeyboardLiveTextHandler live_handler) {
+  prv_push_internal(handler, initial_text, max_len, context, false, true, notes_enabled, live_handler);
 }
