@@ -698,12 +698,33 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
   const GRect wrap = GRect(0, 0, box.size.w, 400);      // wrapped-to-width measure
   char buf[BUFFER_CAP + 16];   // fits "..." + the longest caller buffer, with room to spare
 
+  // Level selection measures the text WITHOUT the trailing blinking caret
+  // glyph (if any), even though the caret IS still part of `text` for
+  // drawing purposes elsewhere in this function. The caret toggles on/off
+  // every CARET_BLINK_MS -- if that extra glyph were allowed to affect
+  // which level fits, the field would visibly reflow (e.g. one line <-> two
+  // lines) in sync with the blink whenever the real, committed text sits
+  // right at that boundary. `wrap_floor`'s own hysteresis below doesn't
+  // fully prevent this either: it only ratchets to a TIGHTER level and
+  // never relaxes back on its own (only an actual delete does), so once
+  // the caret's extra glyph pushed the level tighter one blink, it could
+  // stay stuck a notch tighter than the real content needs -- confirmed
+  // as a real, reported bug, not a theoretical one. Measuring without the
+  // caret removes the coupling entirely.
+  char measure_buf[BUFFER_CAP + 16];
+  const char *measure_text = text;
+  if (caret_at >= 0) {
+    int c = caret_at < (int)sizeof(measure_buf) ? caret_at : (int)sizeof(measure_buf) - 1;
+    memcpy(measure_buf, text, c); measure_buf[c] = '\0';
+    measure_text = measure_buf;
+  }
+
   // Find the loosest level that fits this text on its own.
   int natural = 2 * N;   // truncate, unless something looser fits first
   for (int i = 0; i < N; i++) {
     GFont f = fonts_get_system_font(LADDER[i].key);
     GSize sz = graphics_text_layout_get_content_size(
-                 text, f, wide, GTextOverflowModeFill, GTextAlignmentLeft);
+                 measure_text, f, wide, GTextOverflowModeFill, GTextAlignmentLeft);
     if (sz.w <= box.size.w) { natural = i; break; }
   }
   // The text field is a fixed ~36px-tall box -- comfortably one line at
@@ -721,7 +742,7 @@ static void prv_draw_text_fitted(GContext *ctx, const char *text, GRect box,
     int line_h = graphics_text_layout_get_content_size(
                    "Ag", f, wide, GTextOverflowModeFill, GTextAlignmentLeft).h;
     GSize sz = graphics_text_layout_get_content_size(
-                 text, f, wrap, GTextOverflowModeWordWrap, GTextAlignmentLeft);
+                 measure_text, f, wrap, GTextOverflowModeWordWrap, GTextAlignmentLeft);
     if (sz.h <= line_h * 2 + 1 && sz.h <= box.size.h) { natural = N + i; }
   }
 
