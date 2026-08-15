@@ -95,16 +95,20 @@ static const char *const PATTERN_SYMS_VIBE[] = { "/" };
 // of PAGE_NUMBERS's plain 1-per-key digits.
 //
 // SOUND's 3x3 grid (keys 0-8, row-major: 0,1,2 / 3,4,5 / 6,7,8) dedicates
-// the right column (keys 2/5/8) to duration-ratio digits 1-8 (see
+// the LEFT column (keys 0/3/6) to duration-ratio digits 1-8 (see
 // AC_NOTE_RATIO_DIGITS, alarm_calc.h), grouped top-to-bottom like a phone
-// dialpad ("123"/"456"/"789" per key) -- key 8 only cycles "7"/"8" since 9
-// isn't a valid ratio digit. The remaining 6 keys (0,1,3,4,6,7) hold the 7
+// dialpad ("123"/"456"/"789" per key) -- key 6 only cycles "7"/"8" since 9
+// isn't a valid ratio digit. The remaining 6 keys (1,2,4,5,7,8) hold the 7
 // note letters plus the rest marker 'z', 8 items across 6 keys: C, D, E
 // one per key, F/G sharing one key and A/B sharing another (6 keys can't
 // hold 8 items one-each), and 'z' LAST, on its own key, reading in
 // row-major order across those 6 slots (C, D, E, F/G, A/B, z) -- so typing
 // a rest never needs multi-tapping past a note letter to reach it, same as
-// every other item here. Octave shifts and accidentals are both applied
+// every other item here. The digit column deliberately sits on the LEFT
+// (not the right) specifically so 'z' lands on key 8 -- the same physical
+// key VIBE's own grid below puts it on -- keeping 'z' in one consistent
+// position across both keyboards rather than have it move depending on
+// which mode is active. Octave shifts and accidentals are both applied
 // via the bottom-left key's cycle (PATTERN_SYMS_SOUND) instead of
 // dedicated duplicate keys, so there's no need to fit their variants into
 // this grid too.
@@ -112,17 +116,17 @@ static const char *const PATTERN_SYMS_VIBE[] = { "/" };
 // VIBE's grid is a deliberately different shape, not a smaller version of
 // SOUND's -- vibe has no letters to make room for, so every one of the 9
 // keys gets exactly one glyph, no cycling at all: digits 1-8 in row-major
-// order, then 'z' last on key 8. A plain tap always types the intended
-// character directly.
-static const char *const PK_SOUND_0[] = { "C", NULL };
-static const char *const PK_SOUND_1[] = { "D", NULL };
-static const char *const PK_SOUND_2[] = { "1", "2", "3", NULL };
-static const char *const PK_SOUND_3[] = { "E", NULL };
-static const char *const PK_SOUND_4[] = { "F", "G", NULL };
-static const char *const PK_SOUND_5[] = { "4", "5", "6", NULL };
-static const char *const PK_SOUND_6[] = { "A", "B", NULL };
-static const char *const PK_SOUND_7[] = { "z", NULL };
-static const char *const PK_SOUND_8[] = { "7", "8", NULL };
+// order, then 'z' last on key 8 (matching SOUND's own 'z' position above).
+// A plain tap always types the intended character directly.
+static const char *const PK_SOUND_0[] = { "1", "2", "3", NULL };
+static const char *const PK_SOUND_1[] = { "C", NULL };
+static const char *const PK_SOUND_2[] = { "D", NULL };
+static const char *const PK_SOUND_3[] = { "4", "5", "6", NULL };
+static const char *const PK_SOUND_4[] = { "E", NULL };
+static const char *const PK_SOUND_5[] = { "F", "G", NULL };
+static const char *const PK_SOUND_6[] = { "7", "8", NULL };
+static const char *const PK_SOUND_7[] = { "A", "B", NULL };
+static const char *const PK_SOUND_8[] = { "z", NULL };
 static const char *const *const PATTERN_KEY_SOUND[9] = {
   PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_8,
 };
@@ -253,7 +257,20 @@ static const char *prv_shifted(const char *g) {
 static bool prv_has_case(const char *g) { return strcmp(prv_shifted(g), g) != 0; }
 
 // Shift state actually in effect = explicit shift, or auto-cap when armed.
+// Always SHIFT_OFF in pattern_mode -- pattern mode's own glyph tables are
+// case-invariant EXCEPT the rest marker 'z' (PK_SOUND_7/PK_VIBE_8), which
+// must stay lowercase (it's a fixed grammar symbol, not a real letter to
+// capitalize) -- auto-caps arming at the start of a fresh entry would
+// otherwise silently commit an uppercase 'Z' that ac_vibe_pattern_parse/
+// ac_sound_pattern_parse both reject. This is the same class of bug the
+// pattern-mode octave-duplicate keys used to guard against before they
+// were removed in favor of the bottom-left "'"/"," markers (see that
+// history in CLAUDE.md) -- reintroducing a real lowercase glyph
+// (z) needs this guard back. numeric_mode is included too for the same
+// reason in principle, even though CRON_SYMS/digits are already
+// case-invariant so it's currently a no-op there.
 static int prv_effective_shift(MultitapKeyboard *kb) {
+  if (kb->pattern_mode || kb->numeric_mode) return SHIFT_OFF;
   if (kb->shift == SHIFT_LOCK) return SHIFT_LOCK;
   if (kb->shift == SHIFT_ONCE) return SHIFT_ONCE;
   if (kb->settings.auto_caps && kb->autocap_armed && !kb->autocap_suppressed)
