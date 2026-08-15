@@ -278,22 +278,37 @@ static Window     *s_help_window;
 static ScrollLayer *s_help_scroll;
 static TextLayer  *s_help_text;
 
-static const char *HELP_TEXT =
-  "TYPING\n"
-  "Tap a key, then tap again to cycle its letters. Pause, or tap another key, "
-  "to keep the letter.\n\n"
-  "NUMBERS\n"
-  "Hold any key for its number. On the 123 page, hold 0 for a space.\n\n"
-  "SHIFT (bottom-left)\n"
-  "Tap once for a capital, again for CAPS LOCK. Hold Shift to switch the "
-  "layout. On the 123 and #+= pages, tapping it switches the layout.\n\n"
-  "SPECIAL LETTERS\n"
-  "Letters like a and o cycle to a A a A a. Turn them on or off in Settings.\n\n"
-  "BUTTONS\n"
-  "Up: settings\n"
-  "OK: enter (hold for a new line)\n"
-  "Down: switch layout (hold to delete)\n"
-  "Back: go back";
+// This screen's own text used to be a compiled-in string constant here (~530
+// bytes of permanently-resident .text for a screen opened rarely, on
+// request). Shipped as a raw app resource instead now (declared in
+// package.json, resources/text/keyboard_help.txt is the editable source),
+// loaded into a heap-allocated buffer only while this window is actually
+// open -- unlike a `static char[]` buffer (which reserves its bytes in .bss
+// for the app's entire runtime regardless of whether help is ever opened,
+// costing about as much as the string it replaced for a single, standalone
+// text like this one with no sibling texts to share that reservation with),
+// a malloc'd buffer costs ~0 bytes when idle, so the swap is a clear win
+// even for just one text. Same technique as main.c's own load_help_text(),
+// duplicated here in miniature rather than shared across the two
+// compilation units for one string.
+#define HELP_TEXT_BUF_LEN 560
+static char *s_help_text_buf;
+
+static const char *load_help_text(void) {
+  if (!s_help_text_buf) s_help_text_buf = malloc(HELP_TEXT_BUF_LEN);
+  if (!s_help_text_buf) return "";
+  ResHandle h = resource_get_handle(RESOURCE_ID_TEXT_KEYBOARD_HELP);
+  size_t sz = resource_size(h);
+  if (sz >= HELP_TEXT_BUF_LEN) sz = HELP_TEXT_BUF_LEN - 1;
+  resource_load_byte_range(h, 0, (uint8_t *)s_help_text_buf, sz);
+  s_help_text_buf[sz] = '\0';
+  return s_help_text_buf;
+}
+
+static void free_help_text_buf(void) {
+  free(s_help_text_buf);
+  s_help_text_buf = NULL;
+}
 
 static void prv_help_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
@@ -306,7 +321,7 @@ static void prv_help_window_load(Window *window) {
   window_set_background_color(window, t.background);
 
   s_help_text = text_layer_create(GRect(4, 0, bounds.size.w - 8, 2000));
-  text_layer_set_text(s_help_text, HELP_TEXT);
+  text_layer_set_text(s_help_text, load_help_text());
   text_layer_set_font(s_help_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_help_text, GTextOverflowModeWordWrap);
   text_layer_set_background_color(s_help_text, GColorClear);
@@ -327,6 +342,7 @@ static void prv_help_window_unload(Window *window) {
   s_help_window = NULL;
   s_help_scroll = NULL;
   s_help_text = NULL;
+  free_help_text_buf();
 }
 
 static void help_window_push(void) {

@@ -1,0 +1,17 @@
+TYPING
+Tap a key, then tap again to cycle its letters. Pause, or tap another key, to keep the letter.
+
+NUMBERS
+Hold any key for its number. On the 123 page, hold 0 for a space.
+
+SHIFT (bottom-left)
+Tap once for a capital, again for CAPS LOCK. Hold Shift to switch the layout. On the 123 and #+= pages, tapping it switches the layout.
+
+SPECIAL LETTERS
+Letters like a and o cycle to a A a A a. Turn them on or off in Settings.
+
+BUTTONS
+Up: settings
+OK: enter (hold for a new line)
+Down: switch layout (hold to delete)
+Back: go back

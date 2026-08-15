@@ -1863,18 +1863,37 @@ static Layer *s_cron_help_header;
 // ever open at a time in practice (each is reached from a different,
 // mutually-exclusive edit flow) -- sized for the largest of the three
 // texts (cron help, 873 bytes) with a little headroom for future edits.
+// Heap-allocated on first use and freed by whichever *_help_window_unload
+// closes (see free_help_text_buf()), rather than a plain `static char[900]`
+// -- a static array reserves its bytes in .bss for the entire life of the
+// running app regardless of whether any help screen is ever opened, and
+// .bss counts toward virtual_size exactly like compiled code does; a
+// malloc'd buffer only costs that space while a help window is actually on
+// screen, coming out of the much roomier runtime heap instead (this app
+// already mallocs elsewhere, e.g. multitap_keyboard_create).
 // Same GOTHIC_24 (not bold) used by the time editor's own cron-mode hint --
 // see the "secret long-press-SELECT" comment below.
 #define HELP_TEXT_BUF_LEN 900
-static char s_help_text_buf[HELP_TEXT_BUF_LEN];
+static char *s_help_text_buf;
 
 static const char *load_help_text(uint32_t resource_id) {
+  if (!s_help_text_buf) s_help_text_buf = malloc(HELP_TEXT_BUF_LEN);
+  if (!s_help_text_buf) return "";   // OOM: shouldn't happen given this app's own free-heap headroom
   ResHandle h = resource_get_handle(resource_id);
   size_t sz = resource_size(h);
-  if (sz >= sizeof(s_help_text_buf)) sz = sizeof(s_help_text_buf) - 1;
+  if (sz >= HELP_TEXT_BUF_LEN) sz = HELP_TEXT_BUF_LEN - 1;
   resource_load_byte_range(h, 0, (uint8_t *)s_help_text_buf, sz);
   s_help_text_buf[sz] = '\0';
   return s_help_text_buf;
+}
+
+// Called from both cron_help_window_unload and pattern_help_window_unload --
+// only one of the two help windows is ever loaded at a time, so freeing on
+// whichever one closes is always correct (the other can't still be relying
+// on this same buffer).
+static void free_help_text_buf(void) {
+  free(s_help_text_buf);
+  s_help_text_buf = NULL;
 }
 
 static void cron_help_header_update_proc(Layer *l, GContext *ctx) {
@@ -1919,6 +1938,7 @@ static void cron_help_window_unload(Window *w) {
   scroll_layer_destroy(s_cron_help_scroll); s_cron_help_scroll = NULL;
   text_layer_destroy(s_cron_help_text); s_cron_help_text = NULL;
   layer_destroy(s_cron_help_header); s_cron_help_header = NULL;
+  free_help_text_buf();
 }
 
 static void cron_help_window_push(void) {
@@ -3139,6 +3159,7 @@ static void pattern_help_window_unload(Window *w) {
   scroll_layer_destroy(s_pattern_help_scroll); s_pattern_help_scroll = NULL;
   text_layer_destroy(s_pattern_help_text); s_pattern_help_text = NULL;
   layer_destroy(s_pattern_help_header); s_pattern_help_header = NULL;
+  free_help_text_buf();
 }
 
 static void pattern_help_window_push(PatternSelectKind kind) {

@@ -107,6 +107,11 @@
           "type": "raw",
           "name": "TEXT_PATTERN_HELP_SOUND",
           "file": "text/pattern_help_sound.txt"
+        },
+        {
+          "type": "raw",
+          "name": "TEXT_KEYBOARD_HELP",
+          "file": "text/keyboard_help.txt"
         }
       ]
     }

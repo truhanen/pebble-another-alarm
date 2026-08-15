@@ -1548,8 +1548,30 @@ feature — see git history if curious):
   `load_help_text()`, see that function's own doc comment) freed enough
   margin (~1KB) to restore the byte-precise tap-to-position and the split
   caret/tail coloring; the `GPath` arrow icon was the one cut left in place,
-  since the cheaper stroked version already looks and works fine. Any future
-  addition to this file (or bigger features elsewhere) should check
+  since the cheaper stroked version already looks and works fine.
+  `load_help_text()`'s own backing buffer (`s_help_text_buf`) is
+  heap-allocated (`malloc`'d on first use, `free`'d by whichever of
+  `cron_help_window_unload`/`pattern_help_window_unload` closes) rather than
+  a plain `static char[900]` — a static array reserves its bytes in `.bss`
+  for the app's entire runtime regardless of whether any help screen is ever
+  opened, and `.bss` counts toward `virtual_size` exactly like compiled code
+  does, so `malloc`'ing it (~824 bytes recovered) is a strict improvement
+  over the static version with no behavior change, since text_layer only
+  needs the pointer to stay valid for as long as the window showing it is
+  loaded — exactly the buffer's own malloc/free lifetime. The **same**
+  `malloc`-backed-buffer technique is used a second time, independently, for
+  `keyboard_settings.c`'s own "How to type" help screen (`load_help_text()`/
+  `free_help_text_buf()` duplicated there in miniature, since it's a
+  separate compilation unit) — even though that one has no sibling texts to
+  share a buffer with (unlike the three in `main.c`, sized for the *largest*
+  of the three rather than their sum), `malloc` still wins there over a
+  plain compiled string constant (~530 bytes, ~396 bytes recovered) because
+  a heap allocation costs ~0 bytes of `virtual_size` while idle, unlike a
+  `static char[]` buffer of the same size, which would have made that
+  specific swap a net **loss** (confirmed by trying it) — the "needs
+  siblings to share with" reasoning only applies to the static-buffer
+  version, not the `malloc`'d one. Any future addition to this file, to
+  `keyboard_settings.c`, or bigger features elsewhere should check
   `APP_TEST_HOOKS=1 pebble build` specifically, not just a plain build.
 
 ## Tests
