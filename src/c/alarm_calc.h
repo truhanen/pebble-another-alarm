@@ -8,52 +8,102 @@
 #define NAME_LEN   31
 #define CRON_FIELD_LEN 28   // 27 usable chars + NUL; fits comma-lists like "0-59/5,10,20-25/3"
 
-// Custom sound/vibe pattern: a space-separated sequence of on-beats and
-// (optional) breaks, each a duration digit chosen from AC_NOTE_DURATION_DIGITS
-// -- e.g. "1C 2D 1- 1C 2D" (sound) or "2 1- 2 1- 2" (vibe). Breaks are
-// optional between on-beats (two on-beats with no break between them play
-// back to back with no gap); a break is written as the duration digit
-// followed by '-'. Sound (Tune) and vibe (Vibration) have DIFFERENT caps,
-// on request: vibe halved to 8 (short buzz patterns rarely need more, and
-// it keeps VibePattern's own run-length-encoded array small), sound/tune
-// doubled to 32 (tunes -- including the custom-tune library, sound-only --
-// benefit from more headroom for longer musical phrases like Imperial
-// March). Each was 16 (a single shared constant) before this split.
+// Custom sound/vibe pattern: an ABC-notation subset. A space-separated
+// sequence of on-beats (NOTE tokens for sound, bare-duration tokens for
+// vibe -- vibe has no pitch, so it has no letter to attach anything to) and
+// (optional) rests, each carrying a duration expressed as a ratio relative
+// to AC_NOTE_DEFAULT_MS -- e.g. "^C/2 z C3 _D" (sound) or "1 z/2 1" (vibe).
+// A rest is written as 'z' (real ABC's own rest token) followed by an
+// optional duration suffix; two on-tokens with nothing between them play
+// back to back with no gap, same as before. Sound (Tune) and vibe
+// (Vibration) have DIFFERENT caps, on request: vibe halved to 8 (short buzz
+// patterns rarely need more, and it keeps VibePattern's own run-length-
+// encoded array small), sound/tune doubled to 32 (tunes -- including the
+// custom-tune library, sound-only -- benefit from more headroom for longer
+// musical phrases like Imperial March). Each was 16 (a single shared
+// constant) before this split.
 #define AC_VIBE_PATTERN_MAX_SEGMENTS 8
 #define AC_SOUND_PATTERN_MAX_SEGMENTS 32
 
-// Each stored pattern segment is one byte: bit 7 set means a break (silence/
-// no-vibrate); bit 7 clear means an on-beat (for sound, its pitch lives in
-// the parallel sound_pattern_note[] array; for vibe there's no pitch at
-// all). Bits 0-6 hold the duration digit itself -- one of
-// AC_NOTE_DURATION_DIGITS, e.g. a stored 4 means "4 x 100ms == 400ms" --
-// not an arbitrary index, so the digit IS the duration in hundreds of ms;
-// no separate ms lookup table is needed, just digit*100.
-#define AC_PATTERN_BREAK_BIT 0x80u
+// Each stored pattern segment is one byte: bit 7 set means a rest (silence/
+// no-vibrate, a 'z' token); bit 7 clear means an on-beat (for sound, its
+// pitch lives in the parallel sound_pattern_note[] array; for vibe there's
+// no pitch at all). Bits 0-6 hold a duration RATIO packed as
+// `(N-1)*8 + (D-1)`, N,D each one of AC_NOTE_RATIO_DIGITS (1-8), reduced to
+// lowest terms by their GCD before packing so two spellings of the same
+// ratio (e.g. "1/1" and "2/2") always produce the identical byte -- this
+// matters because vibe_preset_match() (main.c) identifies a preset by
+// memcmp-ing raw bytes, which would silently break if the same duration
+// could round-trip to different byte values depending on how it was typed.
+// Actual duration is `round(AC_NOTE_DEFAULT_MS * N / D)` ms -- N/D=1/1 (no
+// duration suffix at all, "bare") means exactly AC_NOTE_DEFAULT_MS. Payload
+// max is 7*8+7=63, comfortably inside the 6 available bits (bit 6 unused/
+// reserved).
+#define AC_PATTERN_REST_BIT 0x80u
 #define AC_PATTERN_DURATION_MASK 0x7Fu
 
-// Every 100ms increment from 100-800ms is a valid duration digit -- one per
-// pattern-keyboard character key (0-7), replacing what used to be an
-// arbitrary raw millisecond value per segment -- so every alarm's "1" means
-// the same 100ms. Each digit IS its duration in hundreds of ms (1=100ms,
-// 2=200ms, ..., 8=800ms), rather than an arbitrary index into a lookup
-// table, so the digits themselves are informative to read even outside the
-// keyboard/app. Defined in alarm_calc.c; AC_NOTE_DURATION_COUNT is
-// AC_NOTE_DURATION_DIGITS' length. ac_vibe_pattern_parse/
-// ac_sound_pattern_parse reject any digit not in this set (i.e. anything
-// outside 1-8) -- "0" and "9" are plain ASCII digits but invalid duration
-// digits. (An earlier version of this set was sparse -- {1,2,4,8}, each
-// double the last like real rhythm notation -- widened to the full
-// contiguous 1-8 range on request, one digit per keyboard key; see
-// multitap_keyboard.c's PATTERN_KEY_SOUND/PATTERN_KEY_VIBE.)
-#define AC_NOTE_DURATION_COUNT 8
-extern const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT];   // { 1, 2, 3, 4, 5, 6, 7, 8 }
-#define AC_NOTE_DURATION_MS_PER_UNIT 100
+// The 8 valid digits for either side of a duration ratio ("N" or "D" in
+// "[N]['/'D]") -- one per pattern-keyboard character key, same set used
+// twice (once per ratio side) rather than once for a whole absolute
+// duration the way it used to be. AC_NOTE_RATIO_DIGIT_COUNT is
+// AC_NOTE_RATIO_DIGITS' length. ac_vibe_pattern_parse/ac_sound_pattern_parse
+// reject any digit not in this set for either N or D (i.e. anything outside
+// 1-8) -- "0" and "9" are plain ASCII digits but invalid ratio digits, same
+// exclusion as before, deliberately kept (rather than widening the range or
+// allowing multi-digit N/D) so the keyboard needs no new character and no
+// digit exceeding what a single keypress already types.
+#define AC_NOTE_RATIO_DIGIT_COUNT 8
+extern const uint8_t AC_NOTE_RATIO_DIGITS[AC_NOTE_RATIO_DIGIT_COUNT];   // { 1, 2, 3, 4, 5, 6, 7, 8 }
+
+// The "bare" duration (no explicit "[N]['/'D]" suffix at all) means exactly
+// this many ms -- 100, matching the old grammar's own per-digit unit
+// (AC_NOTE_DURATION_MS_PER_UNIT used to be 100 too), so every old absolute
+// duration digit N (which meant N*100ms) translates losslessly to the new
+// ratio digit N with NO fraction ever needed (old digit 1 becomes bare
+// itself, digits 2-8 become plain "N") -- a 200ms base was considered
+// (200ms, the old digit "2", was the single most-used value across every
+// existing preset) since it shortens the single most common note to zero
+// characters, but was rejected in favor of 100ms: half the old digits
+// (1,3,5,7) would then need an explicit fraction (e.g. "/2", "3/2") to
+// reproduce their old timing, and the fraction syntax existing mainly to
+// re-express old, already-common values (rather than as a genuinely new,
+// occasionally-reached-for capability) was judged worse than the smaller
+// keystroke saving on the single most common note. Only sound tokens can
+// actually spell "bare", since sound's note letter anchors an empty
+// duration suffix; vibe's on-beat token has no letter to anchor to, so an
+// empty vibe token is ambiguous/unparseable -- vibe must always spell an
+// explicit ratio (e.g. "1" for this same 100ms), same as it always had to
+// spell an explicit digit under the old grammar. No functional loss for
+// vibe, just no new bare-token convenience there.
+#define AC_NOTE_DEFAULT_MS 100
+
+// A sound on-beat's accidental, packed into its pattern_note[] byte
+// alongside octave/letter (see the encoding note above AC_NOTE_LETTER
+// below) -- natural is the default (no prefix character at all); sharp
+// ("^", real ABC notation) and flat ("_", real ABC notation) are both
+// supported even though every flat pitch is enharmonically reachable as
+// some other note's sharp, a deliberate readability choice (spelling a
+// pattern the way it's actually thought of) rather than a reachability gap.
+#define AC_NOTE_ACCIDENTAL_NATURAL 0
+#define AC_NOTE_ACCIDENTAL_SHARP   1
+#define AC_NOTE_ACCIDENTAL_FLAT    2
+#define AC_NOTE_ACCIDENTAL_COUNT   3
 
 // Note letters for a custom SOUND pattern's on-beats (vibe has no pitch, so
 // no equivalent table there) -- a diatonic scale, C-B (one per pattern
-// keyboard key 0-6) -- see AC_NOTE_MIDI below for the actual base-octave
-// pitch each maps to. AC_NOTE_COUNT is its length.
+// keyboard key) -- see AC_NOTE_MIDI below for the actual base-octave pitch
+// each maps to. AC_NOTE_COUNT is its length.
+//
+// A sound on-beat's pattern_note[] byte packs THREE fields arithmetically
+// (not bit-packed): `(octave*AC_NOTE_COUNT + note_index)*AC_NOTE_ACCIDENTAL_COUNT
+// + accidental`. octave ranges 0..AC_NOTE_OCTAVE_SAME+AC_NOTE_OCTAVE_MAX_UP
+// (0..9), note_index 0..AC_NOTE_COUNT-1 (0..6), so the combined
+// octave*7+note_index term maxes at 9*7+6=69; multiplying by
+// AC_NOTE_ACCIDENTAL_COUNT (3) and adding accidental (0-2) maxes the whole
+// value at 69*3+2=209 -- comfortably inside a uint8_t (0-255), with no
+// array growth needed over the old 2-field encoding. Decode:
+// `accidental = value % 3; combined = value / 3; octave = combined / 7;
+// note_index = combined % 7`. Meaningless on a rest segment, same as before.
 #define AC_NOTE_COUNT 7
 extern const char AC_NOTE_LETTER[AC_NOTE_COUNT];   // 'C','D','E','F','G','A','B'
 extern const uint8_t AC_NOTE_MIDI[AC_NOTE_COUNT];  // base-octave MIDI note number per AC_NOTE_LETTER entry
@@ -248,7 +298,7 @@ typedef struct {
   uint8_t sound_pattern_kind;   // 0 = Preset (use sound_preset below), 2 = Library (use custom_tune_id below)
   uint8_t vibe_pattern_kind;    // 0 = Preset (use vibe_pattern above), 1 = Custom
   uint8_t vibe_pattern_len;     // number of segments in vibe_pattern_custom[]; 0 = never set
-  uint8_t vibe_pattern_custom[AC_VIBE_PATTERN_MAX_SEGMENTS];  // bit7=is_break, bits0-6=duration digit (one of AC_NOTE_DURATION_DIGITS)
+  uint8_t vibe_pattern_custom[AC_VIBE_PATTERN_MAX_SEGMENTS];  // bit7=is_rest, bits0-6=packed N/D duration ratio (AC_PATTERN_DURATION_MASK)
 
   // Appended for the custom-tune library (see CustomTune below) -- valid
   // iff sound_pattern_kind == 2 ("Library"), a third value alongside the
@@ -283,8 +333,8 @@ typedef struct {
   uint32_t id;              // stable, allocated once (store_alloc_tune_id), never reused; 0 = unused slot
   char name[NAME_LEN + 1];  // always non-empty for a saved tune (enforced by main.c's UI, not here)
   uint8_t pattern_len;
-  uint8_t pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];       // bit7=is_break, bits0-6=duration digit
-  uint8_t pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];  // octave*AC_NOTE_COUNT + AC_NOTE_LETTER/AC_NOTE_MIDI index
+  uint8_t pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];       // bit7=is_rest, bits0-6=packed N/D duration ratio (AC_PATTERN_DURATION_MASK)
+  uint8_t pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];  // (octave*AC_NOTE_COUNT+note_index)*AC_NOTE_ACCIDENTAL_COUNT+accidental
 } CustomTune;
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
@@ -344,55 +394,77 @@ void ac_format_time(char *buf, size_t n, uint8_t hour, uint8_t minute, bool use_
 void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_days, int first_day_of_week);
 
 // Parses a custom VIBE pattern string: whitespace-separated tokens, each
-// either a bare duration digit ("2", meaning vibrate ON for digit*
-// AC_NOTE_DURATION_MS_PER_UNIT ms) or a duration digit followed by '-'
-// ("1-", meaning a break/pause of that duration) -- e.g. "2 1- 2 1- 2".
-// Breaks are optional: two on-tokens with nothing between them play back
-// to back with no gap. `digit` must be one of AC_NOTE_DURATION_DIGITS
-// (1, 2, 4, or 8 -- not any digit 1-9); token count must be
-// 1..max_segments. On success, writes one packed byte per segment (bit 7 =
-// AC_PATTERN_BREAK_BIT if a break, bits 0-6 = the duration digit) into out
-// (capacity max_segments) and the count into *out_len, returning true.
-// Returns false (leaving out/*out_len untouched) on ANY malformed token
-// (non-digit, digit out of range, trailing garbage after '-'), an empty/
-// whitespace-only string, or more than max_segments tokens.
+// either an on-beat (a duration ratio alone, e.g. "1", "2/3", "/4" -- see
+// AC_NOTE_DEFAULT_MS's doc comment for why vibe can't spell a bare/empty
+// duration the way sound can) or a rest ('z' followed by the same optional
+// duration ratio, e.g. "z", "z/2") -- e.g. "1 z/2 1". Rests are optional
+// between on-beats: two on-tokens with nothing between them play back to
+// back with no gap. Each side of a ratio (N and/or D in "[N]['/'D]") must be
+// one of AC_NOTE_RATIO_DIGITS (1-8); token count must be 1..max_segments.
+// On success, writes one packed byte per segment (bit 7 = AC_PATTERN_REST_BIT
+// if a rest, bits 0-6 = the N/D ratio reduced to lowest terms and packed per
+// AC_PATTERN_DURATION_MASK's doc comment) into out (capacity max_segments)
+// and the count into *out_len, returning true. Returns false (leaving
+// out/*out_len untouched) on ANY malformed token (a vibe on-token with an
+// empty duration, a digit out of range on either side of '/', a '/' with no
+// following digit, trailing garbage), an empty/whitespace-only string, or
+// more than max_segments tokens.
 bool ac_vibe_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len);
 
 // Formats a parsed vibe pattern back into the canonical space-joined text
-// ac_vibe_pattern_parse would itself accept and round-trip exactly. Writes
-// into buf (size n); empty string (not "0 segments") if len == 0.
+// ac_vibe_pattern_parse would itself accept and round-trip exactly -- the
+// duration ratio is always emitted in ONE canonical spelling regardless of
+// how it was originally typed (bare only ever appears here if len==0
+// overall; a segment's own N/D is spelled "N" when D==1, "/D" when N==1, or
+// "N/D" otherwise, mirroring how octave-marker runs are already always
+// canonically re-emitted regardless of input spelling). Writes into buf
+// (size n); empty string (not "0 segments") if len == 0.
 void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t len);
 
 // Parses a custom SOUND pattern string: like ac_vibe_pattern_parse, but
-// every on-token MUST carry a pitch -- a duration digit followed by exactly
-// one note letter from AC_NOTE_LETTER (e.g. "1C"), never a bare digit alone
-// (unlike vibe, where a bare digit is a valid on-token) -- a break is still
-// just the duration digit followed by '-' ("1-"), with no letter, e.g.
-// "1C 2D 1- 1C 2D". An on-token's note letter may optionally be followed by
-// one or more octave markers of the SAME kind -- "'" (apostrophe) shifts up
-// an octave each, "," (comma) shifts down an octave each, real ABC-notation
-// convention (e.g. "1C'" up 1, "1C,,," down 3); no marker means
-// AC_NOTE_OCTAVE_SAME. Up is capped at AC_NOTE_OCTAVE_MAX_UP (1) and down at
-// AC_NOTE_OCTAVE_MAX_DOWN (8) -- see that constant's own doc comment for why
-// the range is asymmetric; exceeding either cap, or mixing "'" and ","
-// within one token, is malformed. On success, writes one packed
-// duration/break byte per segment into out_flags (same encoding as
-// ac_vibe_pattern_parse) and `octave*AC_NOTE_COUNT + <AC_NOTE_LETTER/
-// AC_NOTE_MIDI index>` into out_notes (capacity max_segments each; a break
-// segment's out_notes entry is written as 0 but is meaningless -- callers
-// must check the break bit first), and the count into *out_len, returning
-// true. Returns false (leaving every output untouched) on any malformed
-// token (missing/invalid letter on an on-token, a bare digit with no
-// suffix, digit out of range, an unrecognized letter, an octave marker
-// with no preceding letter, mixed markers, or a marker run past its cap),
-// an empty/whitespace-only string, or more than max_segments tokens.
+// every on-token MUST carry a pitch -- an optional accidental prefix ('^'
+// sharp or '_' flat, real ABC notation; no prefix = natural), then exactly
+// one note letter from AC_NOTE_LETTER, then optional octave markers, then
+// the same optional duration-ratio suffix ac_vibe_pattern_parse uses (e.g.
+// "^C/2", "_D,,,3", "E"). A rest is still just 'z' plus the optional
+// duration suffix, with no letter/accidental/octave -- 'z' followed
+// directly by an accidental or letter is malformed, since a rest has no
+// pitch. Octave markers, unchanged from before: one or more apostrophes
+// "'" (right after the letter) shift up an octave each, one or more commas
+// "," shift down an octave each, real ABC-notation convention (e.g. "C'"
+// up 1, "C,,," down 3); no marker means AC_NOTE_OCTAVE_SAME. Up is capped
+// at AC_NOTE_OCTAVE_MAX_UP (1) and down at AC_NOTE_OCTAVE_MAX_DOWN (8) --
+// see that constant's own doc comment for why the range is asymmetric;
+// exceeding either cap, or mixing "'" and "," within one token, is
+// malformed. On success, writes one packed duration/rest byte per segment
+// into out_flags (same encoding as ac_vibe_pattern_parse) and the packed
+// octave/note/accidental value (see AC_NOTE_COUNT's doc comment) into
+// out_notes (capacity max_segments each; a rest segment's out_notes entry
+// is written as 0 but is meaningless -- callers must check the rest bit
+// first), and the count into *out_len, returning true. Returns false
+// (leaving every output untouched) on any malformed token (missing/invalid
+// letter on an on-token, an accidental with no following letter, more than
+// one accidental character, an accidental on a rest, an unrecognized
+// letter, an octave marker with no preceding letter, mixed markers, a
+// marker run past its cap, or a malformed duration ratio as described
+// above), an empty/whitespace-only string, or more than max_segments
+// tokens.
 bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
                              uint8_t *out_flags, uint8_t *out_notes, uint8_t *out_len);
 
 // Formats a parsed sound pattern back into the canonical space-joined text
-// ac_sound_pattern_parse would itself accept and round-trip exactly. Writes
-// into buf (size n); empty string (not "0 segments") if len == 0.
+// ac_sound_pattern_parse would itself accept and round-trip exactly --
+// accidental prefix, letter, octave markers, then the same canonical
+// duration-ratio suffix ac_vibe_pattern_format's own doc comment describes.
+// Writes into buf (size n); empty string (not "0 segments") if len == 0.
 void ac_sound_pattern_format(char *buf, size_t n, const uint8_t *flags, const uint8_t *notes, uint8_t len);
+
+// Computes one segment's real duration in milliseconds from its packed
+// AC_PATTERN_DURATION_MASK payload (`round(AC_NOTE_DEFAULT_MS * N / D)`) --
+// the single shared place this arithmetic lives, used by every ring-time/
+// preview/duration-summing call site in main.c instead of each one
+// recomputing it inline.
+uint32_t ac_pattern_duration_ms(uint8_t payload);
 
 // ================================= cron mode =================================
 

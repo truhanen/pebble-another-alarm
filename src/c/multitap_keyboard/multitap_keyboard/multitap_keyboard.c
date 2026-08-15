@@ -10,14 +10,15 @@
 #define KEY_COUNT    (GRID_COLS * GRID_ROWS)
 // Bumped from 96 for pebble-another-alarm's pattern mode: a Tune (sound)
 // pattern can now run up to AC_SOUND_PATTERN_MAX_SEGMENTS (32, alarm_calc.h)
-// segments of up to 3 chars each plus separating spaces, needing up to 128
-// bytes -- BUFFER_CAP must exceed the caller's own PATTERN_KEYBOARD_MAX_LEN
-// (main.c) for multitap_keyboard_set_max_len() to actually apply that cap
-// (see there: max_bytes >= BUFFER_CAP is treated as "unlimited, just use
-// BUFFER_CAP"), so this needs its own small headroom above 128, mirroring
-// this file's existing "+8"/"+16" margins on other BUFFER_CAP-sized temp
-// buffers below.
-#define BUFFER_CAP   136
+// segments of up to 13 chars each (an accidental, a note letter, up to 8
+// octave markers, and a "N/D" duration ratio) plus separating spaces,
+// needing up to 160 bytes (see PATTERN_KEYBOARD_MAX_LEN, main.c) --
+// BUFFER_CAP must exceed the caller's own PATTERN_KEYBOARD_MAX_LEN for
+// multitap_keyboard_set_max_len() to actually apply that cap (see there:
+// max_bytes >= BUFFER_CAP is treated as "unlimited, just use BUFFER_CAP"),
+// so this needs its own small headroom above 160, mirroring this file's
+// existing "+8"/"+16" margins on other BUFFER_CAP-sized temp buffers below.
+#define BUFFER_CAP   168
 #define LABEL_CAP    24
 #define KEY_ELEV     2     // 3D key depth: raised by this many px, sunk on press
 #define GRID_VPAD    2     // white breathing room above and below the key grid
@@ -71,46 +72,57 @@ static const char *const CRON_SYMS[] = { "*", "-", "/", "," };
 #define CRON_SYM_COUNT 4
 
 // Bottom-left key cycle for pattern_mode (see multitap_keyboard_set_pattern_mode)
-// -- "-" marks a break/pause token ("1-"); "'"/"," are real ABC-notation
-// octave markers written right after a sound note letter ("1C'" up one
-// octave, "1C," down one octave -- see AC_NOTE_OCTAVE_*, alarm_calc.h).
-// Vibe patterns have no pitch, so it only ever uses "-" there, but the key
-// cycles all three regardless (same as any other multi-glyph key) since
-// vibe/sound share this one bottom-left key.
-static const char *const PATTERN_SYMS[] = { "-", "'", "," };
-#define PATTERN_SYM_COUNT 3
+// -- SOUND-only (VIBE has no pitch, so needs none of "'"/","/"^"/"_", only
+// the leading "/" for a duration ratio's fraction bar). "/" is placed
+// first per request; "'"/"," are real ABC-notation octave markers written
+// right after a sound note letter ("C'" up one octave, "C," down one
+// octave -- see AC_NOTE_OCTAVE_*, alarm_calc.h); "^"/"_" are real
+// ABC-notation sharp/flat accidentals written right BEFORE the letter
+// instead (see AC_NOTE_ACCIDENTAL_*, alarm_calc.h) -- this is the one key
+// whose cycle mixes glyphs used on both sides of the letter, since there's
+// no spare physical key left to split them across (Space is the essential
+// token separator, the digit keys are dedicated per request, and z+the 6
+// letters already fill every other character key -- see
+// PATTERN_KEY_SOUND's own doc comment below).
+static const char *const PATTERN_SYMS_SOUND[] = { "/", "'", ",", "^", "_" };
+#define PATTERN_SYM_SOUND_COUNT 5
+static const char *const PATTERN_SYMS_VIBE[] = { "/" };
+#define PATTERN_SYM_VIBE_COUNT 1
 
 // Per-character-key (0-8) glyph lists for pattern mode, selected by
 // multitap_keyboard_set_pattern_mode's `notes_enabled` instead of by page --
 // this is a THIRD glyph source alongside PAGE_KEY/CRON_SYMS, not a variant
-// of PAGE_NUMBERS's plain 1-per-key digits. The 3x3 character grid (keys
-// 0-8, row-major: 0,1,2 / 3,4,5 / 6,7,8) splits into a left duration column
-// and a right two-column note grid, rather than sharing each key between a
-// digit and a letter -- so typing a note never needs multi-tapping past a
-// digit to reach it. Left column (keys 0/3/6) holds every duration digit
-// 1-8 (see AC_NOTE_DURATION_DIGITS, alarm_calc.h -- each digit literally IS
-// its duration in hundreds of ms), grouped top-to-bottom like a phone
-// dialpad's own 1/4/7 column ("123"/"456"/"789" per key) -- key 6 only
-// cycles "7"/"8" since 9 isn't a valid duration digit. The right two
-// columns (keys 1/2/4/5/7/8) hold the 7 note letters C/D/E/F/G/A/B, one per
-// key except the last (key 8), which cycles A then B since 6 keys can't
-// hold 7 letters one-each. Octave shifts are applied via the bottom-left
-// key's "'"/"," markers instead of dedicated duplicate keys, so there's no
-// need to fit octave variants into this grid too. Without notes (vibe has
-// no pitch): keys 0-7 are bare single-glyph digit keys (no cycling at all),
-// key 8 has no glyph (a press on it, or any key's cycle past its last real
-// glyph, is simply a no-op, same as the widget already does for
-// one-glyph/empty pending logic) -- vibe's own layout is unaffected by this
-// duration/note-column split, which only applies to PATTERN_KEY_SOUND.
-static const char *const PK_SOUND_0[] = { "1", "2", "3", NULL };
-static const char *const PK_SOUND_1[] = { "C", NULL };
-static const char *const PK_SOUND_2[] = { "D", NULL };
-static const char *const PK_SOUND_3[] = { "4", "5", "6", NULL };
-static const char *const PK_SOUND_4[] = { "E", NULL };
-static const char *const PK_SOUND_5[] = { "F", NULL };
-static const char *const PK_SOUND_6[] = { "7", "8", NULL };
-static const char *const PK_SOUND_7[] = { "G", NULL };
-static const char *const PK_SOUND_8[] = { "A", "B", NULL };
+// of PAGE_NUMBERS's plain 1-per-key digits.
+//
+// SOUND's 3x3 grid (keys 0-8, row-major: 0,1,2 / 3,4,5 / 6,7,8) dedicates
+// the right column (keys 2/5/8) to duration-ratio digits 1-8 (see
+// AC_NOTE_RATIO_DIGITS, alarm_calc.h), grouped top-to-bottom like a phone
+// dialpad ("123"/"456"/"789" per key) -- key 8 only cycles "7"/"8" since 9
+// isn't a valid ratio digit. The remaining 6 keys (0,1,3,4,6,7) hold the 7
+// note letters plus the rest marker 'z', 8 items across 6 keys: C, D, E
+// one per key, F/G sharing one key and A/B sharing another (6 keys can't
+// hold 8 items one-each), and 'z' LAST, on its own key, reading in
+// row-major order across those 6 slots (C, D, E, F/G, A/B, z) -- so typing
+// a rest never needs multi-tapping past a note letter to reach it, same as
+// every other item here. Octave shifts and accidentals are both applied
+// via the bottom-left key's cycle (PATTERN_SYMS_SOUND) instead of
+// dedicated duplicate keys, so there's no need to fit their variants into
+// this grid too.
+//
+// VIBE's grid is a deliberately different shape, not a smaller version of
+// SOUND's -- vibe has no letters to make room for, so every one of the 9
+// keys gets exactly one glyph, no cycling at all: digits 1-8 in row-major
+// order, then 'z' last on key 8. A plain tap always types the intended
+// character directly.
+static const char *const PK_SOUND_0[] = { "C", NULL };
+static const char *const PK_SOUND_1[] = { "D", NULL };
+static const char *const PK_SOUND_2[] = { "1", "2", "3", NULL };
+static const char *const PK_SOUND_3[] = { "E", NULL };
+static const char *const PK_SOUND_4[] = { "F", "G", NULL };
+static const char *const PK_SOUND_5[] = { "4", "5", "6", NULL };
+static const char *const PK_SOUND_6[] = { "A", "B", NULL };
+static const char *const PK_SOUND_7[] = { "z", NULL };
+static const char *const PK_SOUND_8[] = { "7", "8", NULL };
 static const char *const *const PATTERN_KEY_SOUND[9] = {
   PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_8,
 };
@@ -122,9 +134,9 @@ static const char *const PK_VIBE_4[] = { "5", NULL };
 static const char *const PK_VIBE_5[] = { "6", NULL };
 static const char *const PK_VIBE_6[] = { "7", NULL };
 static const char *const PK_VIBE_7[] = { "8", NULL };
-static const char *const PK_VIBE_EMPTY[] = { NULL };
+static const char *const PK_VIBE_8[] = { "z", NULL };
 static const char *const *const PATTERN_KEY_VIBE[9] = {
-  PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3, PK_VIBE_4, PK_VIBE_5, PK_VIBE_6, PK_VIBE_7, PK_VIBE_EMPTY,
+  PK_VIBE_0, PK_VIBE_1, PK_VIBE_2, PK_VIBE_3, PK_VIBE_4, PK_VIBE_5, PK_VIBE_6, PK_VIBE_7, PK_VIBE_8,
 };
 
 // Toggleable extended (non-ASCII) characters. Each is appended to a base key's
@@ -277,7 +289,9 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
                           const char **out, int cap) {
   int n = 0;
   if (key == KEY_SHIFT && kb->pattern_mode) {
-    for (int j = 0; j < PATTERN_SYM_COUNT && n < cap; j++) out[n++] = PATTERN_SYMS[j];
+    const char *const *syms = kb->pattern_notes_enabled ? PATTERN_SYMS_SOUND : PATTERN_SYMS_VIBE;
+    int count = kb->pattern_notes_enabled ? PATTERN_SYM_SOUND_COUNT : PATTERN_SYM_VIBE_COUNT;
+    for (int j = 0; j < count && n < cap; j++) out[n++] = syms[j];
     return n;
   }
   if (key == KEY_SHIFT && kb->numeric_mode) {
@@ -453,7 +467,7 @@ static void prv_do_space(MultitapKeyboard *kb) {
   // Numeric mode repurposes the space key as digit "0" (there's no
   // dedicated 0 key among the 9 character keys); pattern mode instead needs
   // a real space to separate tokens, and gets "0" from the bottom-left
-  // key's cycle instead (see PATTERN_SYMS) -- so it must NOT inherit this.
+  // key's cycle instead (see PATTERN_SYMS_SOUND/_VIBE) -- so it must NOT inherit this.
   if (kb->page == PAGE_NUMBERS && !kb->pattern_mode) { prv_append(kb, "0"); prv_recompute_autocap(kb); return; }
 
   prv_append(kb, " ");

@@ -782,13 +782,13 @@ static const SoundPreset SOUND_PRESETS[] = {
   // trailing break: the natural gap before the next ALARM_BUZZ_INTERVAL_MS
   // buzz cycle already covers it, so a stored trailing break would just be
   // dead air twice over.
-  { "Triple (default)", "2C 2- 2C 2- 2C" },
-  { "Double", "2C 2- 2C" },
-  { "Triple fast", "1C 1- 1C 1- 1C" },
-  { "Analog bell", "1C 1G 1C 1G 1C 1G 1C 1G" },
-  { "Celebration", "3C 1- 2C 6D 6C 6F 6E" },
-  { "Lullaby", "8G, 4B, 2A, 2G, 4A, 4D 6D," },
-  { "March", "4A,,, 2- 4A,,, 2- 4A,,, 2- 3F,,, 2- 1C,, 4A,,, 2- 3F,,, 2- 1C,, 6A,,," },
+  { "Triple (default)", "C2 z2 C2 z2 C2" },
+  { "Double", "C2 z2 C2" },
+  { "Triple fast", "C z C z C" },
+  { "Analog bell", "C G C G C G C G" },
+  { "Celebration", "C3 z C2 D6 C6 F6 E6" },
+  { "Lullaby", "G,8 _B,4 A,2 G,2 A,4 D4 D,6" },
+  { "March", "A,,,4 z2 A,,,4 z2 A,,,4 z2 F,,,3 z2 C,, A,,,4 z2 F,,,3 z2 C,, A,,,6" },
 };
 #define SOUND_PRESET_COUNT (int)(sizeof(SOUND_PRESETS) / sizeof(SOUND_PRESETS[0]))
 
@@ -801,7 +801,7 @@ static const SoundPreset SOUND_PRESETS[] = {
 // never drift apart from what this table shows/offers as a starting point.
 typedef struct { const char *label; const char *pattern; } VibePreset;
 static const VibePreset VIBE_PRESETS[] = {
-  { "Double", "2 1- 2" },
+  { "Double", "2 z 2" },
   { "Short", "2" },
   { "Long", "8" },
 };
@@ -874,8 +874,8 @@ static void alarm_play_vibe_pattern(const uint8_t *pattern, uint8_t len) {
   int n_runs = 0;
   for (int i = 0; i < len; i++) {
     uint8_t raw = pattern[i];
-    bool is_on = !(raw & AC_PATTERN_BREAK_BIT);
-    uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+    bool is_on = !(raw & AC_PATTERN_REST_BIT);
+    uint32_t ms = ac_pattern_duration_ms(raw);
     if (n_runs > 0 && run_is_on[n_runs - 1] == is_on) {
       run_ms[n_runs - 1] += ms;
     } else {
@@ -928,10 +928,11 @@ static void alarm_vibrate(const Alarm *a) {
   alarm_play_vibe_pattern(parsed, len);
 }
 
-// Sums a pattern's segment durations (ms) regardless of the break bit --
-// on-beat and break segments both consume their encoded digit's duration,
+// Sums a pattern's segment durations (ms) regardless of the rest bit --
+// on-beat and rest segments both consume their encoded ratio's duration,
 // so this one loop covers both grammars (sound's flags[]/vibe's raw
-// pattern[] use the same bit7=break/bits0-6=duration encoding). Shared by
+// pattern[] use the same AC_PATTERN_REST_BIT/AC_PATTERN_DURATION_MASK
+// encoding, decoded via ac_pattern_duration_ms). Shared by
 // alarm_vibe_duration_ms/alarm_sound_duration_ms below, which each add
 // their own channel's fixed lead-in on top -- see alarm_play_vibe_pattern/
 // alarm_play_sound_pattern for why that lead-in is always exactly 100ms
@@ -939,7 +940,7 @@ static void alarm_vibrate(const Alarm *a) {
 static uint32_t pattern_duration_ms(const uint8_t *flags, uint8_t len) {
   uint32_t total = 0;
   for (int i = 0; i < len; i++) {
-    total += (uint32_t)(flags[i] & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
+    total += ac_pattern_duration_ms(flags[i]);
   }
   return total;
 }
@@ -962,39 +963,47 @@ static uint32_t alarm_vibe_duration_ms(const Alarm *a) {
   return 100 + pattern_duration_ms(parsed, len);
 }
 
-// Builds one SpeakerNote per pattern segment: a break plays as silence
+// Builds one SpeakerNote per pattern segment: a rest plays as silence
 // (midi_note 0, Sine -- the waveform doesn't matter for a silent note, kept
 // distinct from an on-beat's Square purely for clarity), an on-beat plays
-// its note's pitch (decoded from the octave*AC_NOTE_COUNT+base encoding --
-// see AC_NOTE_OCTAVE_*, alarm_calc.h) as a Square wave. Shared by both
-// branches of alarm_play_audio() below, so Default and a stored Custom
-// pattern render identically -- the only difference between them is which
-// (flags, notes, len) triple gets passed in.
+// its note's pitch (decoded from the (octave*AC_NOTE_COUNT+note_index)*
+// AC_NOTE_ACCIDENTAL_COUNT+accidental encoding -- see AC_NOTE_COUNT's doc
+// comment, alarm_calc.h) as a Square wave. Shared by both branches of
+// alarm_play_audio() below, so Default and a stored Custom pattern render
+// identically -- the only difference between them is which (flags, notes,
+// len) triple gets passed in.
 #if PBL_SPEAKER
 static void alarm_build_sound_notes(const uint8_t *flags, const uint8_t *notes_arr, uint8_t len,
                                      SpeakerNote *out) {
   for (int i = 0; i < len; i++) {
     uint8_t raw = flags[i];
-    bool is_break = (raw & AC_PATTERN_BREAK_BIT) != 0;
-    uint32_t ms = (uint32_t)(raw & AC_PATTERN_DURATION_MASK) * AC_NOTE_DURATION_MS_PER_UNIT;
-    uint8_t octave = notes_arr[i] / AC_NOTE_COUNT;
-    uint8_t base = notes_arr[i] % AC_NOTE_COUNT;
+    bool is_rest = (raw & AC_PATTERN_REST_BIT) != 0;
+    uint32_t ms = ac_pattern_duration_ms(raw);
+    int combined = notes_arr[i] / AC_NOTE_ACCIDENTAL_COUNT;
+    int accidental = notes_arr[i] % AC_NOTE_ACCIDENTAL_COUNT;
+    uint8_t octave = (uint8_t)(combined / AC_NOTE_COUNT);
+    uint8_t base = (uint8_t)(combined % AC_NOTE_COUNT);
     uint8_t midi = 0;
-    if (!is_break && base < AC_NOTE_COUNT) {
+    if (!is_rest && base < AC_NOTE_COUNT) {
       // Computed in a signed int before the final clamp+cast -- octave can
       // legitimately be less than AC_NOTE_OCTAVE_SAME (a down-shift), and
       // parse-time validation (AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN,
       // alarm_calc.c) already keeps every valid pattern's result within
-      // 0-127, but nothing here trusted that -- clamp defensively rather
-      // than let a stray/corrupt value silently wrap on the uint8_t cast.
+      // 0-127 for a NATURAL note, but a flat accidental can push a
+      // max-down-octave note one semitone further negative (e.g. C-flat at
+      // the deepest down-shift computes to -1) -- this clamp is what
+      // absorbs that one known edge case, same defensive clamp as before,
+      // just now legitimately reachable rather than purely theoretical.
       int computed = AC_NOTE_MIDI[base] + 12 * ((int)octave - AC_NOTE_OCTAVE_SAME);
+      if (accidental == AC_NOTE_ACCIDENTAL_SHARP) { computed += 1; }
+      else if (accidental == AC_NOTE_ACCIDENTAL_FLAT) { computed -= 1; }
       if (computed < 0) { computed = 0; }
       if (computed > 127) { computed = 127; }
       midi = (uint8_t)computed;
     }
     out[i] = (SpeakerNote){
       .midi_note = midi,
-      .waveform = is_break ? SpeakerWaveformSine : SpeakerWaveformSquare,
+      .waveform = is_rest ? SpeakerWaveformSine : SpeakerWaveformSquare,
       .duration_ms = (uint16_t)ms,
       .velocity = 0, .reserved = 0
     };
@@ -2979,11 +2988,15 @@ static void open_edit_window(int idx) {
 
 // Custom pattern text -- shared by both the Vibration and Tune keyboards,
 // so sized for the LARGER of the two: worst case AC_SOUND_PATTERN_MAX_SEGMENTS
-// (32) segments of up to 3 chars each (a duration digit, a note letter, and
-// an optional "'"/"," octave marker -- or "-" for a break) plus a
-// separating space -- comfortably covers every valid pattern with room to
-// spare. Vibe's own cap (AC_VIBE_PATTERN_MAX_SEGMENTS, 8) needs far less.
-#define PATTERN_KEYBOARD_MAX_LEN 128
+// (32) segments of up to 13 chars each (an accidental, a note letter, up to
+// 8 octave markers, and a "N/D" duration ratio -- e.g. "^C,,,,,,,,8/8")
+// plus a separating space -- comfortably covers every valid pattern with
+// room to spare, even though the segment cap (not this char cap) remains
+// the practically-binding limit in every realistic pattern, same as
+// before. Bumped from 128 (sized for the old grammar's 10-char worst case)
+// to cover the new grammar's larger per-segment worst case with headroom.
+// Vibe's own cap (AC_VIBE_PATTERN_MAX_SEGMENTS, 8) needs far less.
+#define PATTERN_KEYBOARD_MAX_LEN 160
 
 typedef enum { PATTERN_SELECT_VIBE, PATTERN_SELECT_SOUND } PatternSelectKind;
 
@@ -3025,60 +3038,69 @@ static PatternSelectKind s_pattern_help_kind;
 
 static const char *const PATTERN_HELP_TEXT_VIBE =
   "A vibration pattern is a list "
-  "of on-beats and breaks, "
+  "of on-beats and rests, "
   "separated by spaces.\n"
   "\n"
-  "Each starts with a duration "
-  "digit: 1-8 -- the number of "
-  "100ms units (1=100ms, "
-  "2=200ms, ... 8=800ms). A "
-  "bare digit means \"on\". A "
-  "digit followed by \"-\" is a "
-  "break/pause of that length.\n"
+  "Each on-beat is a duration "
+  "ratio: \"1\" means the "
+  "default 100ms; \"N\" means "
+  "N times that (e.g. \"2\" = "
+  "200ms); \"/D\" means 1/D of "
+  "it (e.g. \"/2\" = 50ms); "
+  "\"N/D\" combines both.\n"
   "\n"
-  "Breaks are optional -- two "
+  "A rest is \"z\" followed by "
+  "the same optional ratio "
+  "(e.g. \"z\", \"z/2\").\n"
+  "\n"
+  "Rests are optional -- two "
   "on-beats with nothing "
   "between them play back to "
   "back with no gap.\n"
   "\n"
   "Example pattern:\n"
   "\n"
-  "\"2 1- 2 1- 2\"";
+  "\"1 z/2 1\"";
 
 static const char *const PATTERN_HELP_TEXT_SOUND =
   "A tune is a list "
-  "of on-beats and breaks, "
+  "of notes and rests, "
   "separated by spaces.\n"
   "\n"
-  "Each starts with a duration "
-  "digit: 1-8 -- the number of "
-  "100ms units (1=100ms, "
-  "2=200ms, ... 8=800ms). An "
-  "on-beat must be followed by "
-  "a note letter (C D E F G A "
-  "B). A digit followed by "
-  "\"-\" is a break/pause of "
-  "that length.\n"
+  "Each note is an optional "
+  "sharp (\"^\") or flat (\"_\") "
+  "before a letter (C D E F G "
+  "A B), e.g. \"^C\", \"_D\". No "
+  "prefix means natural.\n"
   "\n"
   "A note letter can have "
   "octave marks right after "
   "it: \"'\" for up, \",\" for "
-  "down (e.g. \"1C'\", \"1C,\"). "
+  "down (e.g. \"C'\", \"C,\"). "
   "No mark means the base "
   "octave. \",\" can repeat up "
   "to 8 times for deeper "
   "octaves down (e.g. "
-  "\"1C,,,\"); \"'\" only once, "
+  "\"C,,,\"); \"'\" only once, "
   "up.\n"
   "\n"
-  "Breaks are optional -- two "
-  "on-beats with nothing "
-  "between them play back to "
-  "back with no gap.\n"
+  "A duration ratio can follow: "
+  "\"N\" for N times the default "
+  "100ms, \"/D\" for 1/D of it, "
+  "\"N/D\" for both -- no ratio "
+  "means the default itself "
+  "(e.g. \"C2\" = 200ms, \"C/2\" "
+  "= 50ms, bare \"C\" = 100ms).\n"
+  "\n"
+  "A rest is \"z\" followed by "
+  "the same optional ratio "
+  "(e.g. \"z\", \"z/2\") -- rests "
+  "are optional between notes, "
+  "same as vibration.\n"
   "\n"
   "Example pattern:\n"
   "\n"
-  "\"1C 2D' 1- 1C 2D,\"";
+  "\"^C' z/2 _D,\"";
 
 static void pattern_help_header_update_proc(Layer *l, GContext *ctx) {
   GRect b = layer_get_bounds(l);

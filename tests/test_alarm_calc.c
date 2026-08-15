@@ -617,43 +617,74 @@ static void test_format_cron_summary(void) {
   assert(strcmp(buf, "* * * * * *") == 0);
 }
 
-static void test_vibe_pattern_parse_bare_digits_are_on(void) {
-  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
-  uint8_t len;
-  assert(ac_vibe_pattern_parse("2 1 4", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(len == 3);
-  assert(out[0] == 2 && out[1] == 1 && out[2] == 4);
-  assert(!(out[0] & AC_PATTERN_BREAK_BIT) && !(out[1] & AC_PATTERN_BREAK_BIT) && !(out[2] & AC_PATTERN_BREAK_BIT));
+// Payload helper mirroring alarm_calc.c's own (N-1)*AC_NOTE_RATIO_DIGIT_COUNT+(D-1)
+// packing formula, so tests read as "what ratio do I expect" rather than
+// opaque numbers.
+#define RATIO(n, d) (((n) - 1) * AC_NOTE_RATIO_DIGIT_COUNT + ((d) - 1))
+#define NOTE_BYTE(octave, idx, acc) (((octave) * AC_NOTE_COUNT + (idx)) * AC_NOTE_ACCIDENTAL_COUNT + (acc))
+
+static void test_ac_pattern_duration_ms(void) {
+  assert(ac_pattern_duration_ms(RATIO(1, 1)) == 100);   // bare/default
+  assert(ac_pattern_duration_ms(RATIO(2, 1)) == 200);
+  assert(ac_pattern_duration_ms(RATIO(1, 2)) == 50);
+  assert(ac_pattern_duration_ms(RATIO(3, 2)) == 150);
+  assert(ac_pattern_duration_ms(RATIO(1, 8)) == 13);   // 12.5, rounded to nearest
+  assert(ac_pattern_duration_ms(RATIO(8, 1)) == 800);
+  // The rest bit must not affect the duration decode.
+  assert(ac_pattern_duration_ms(AC_PATTERN_REST_BIT | RATIO(2, 1)) == 200);
 }
 
-static void test_vibe_pattern_parse_breaks_optional(void) {
+static void test_vibe_pattern_parse_on_beats_require_explicit_ratio(void) {
+  // Vibe has no letter to anchor a bare/default duration to -- every
+  // on-beat must spell an explicit ratio (contrast with
+  // test_sound_pattern_parse_bare_duration_is_default below, where "C"
+  // alone is valid).
   uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
-  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(len == 5);
-  assert(out[0] == 2 && !(out[0] & AC_PATTERN_BREAK_BIT));
-  assert(out[1] == (1 | AC_PATTERN_BREAK_BIT));
-  assert(out[2] == 2 && !(out[2] & AC_PATTERN_BREAK_BIT));
-  assert(out[3] == (1 | AC_PATTERN_BREAK_BIT));
-  assert(out[4] == 2 && !(out[4] & AC_PATTERN_BREAK_BIT));
+  assert(ac_vibe_pattern_parse("1 2 4", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 3);
+  assert(out[0] == RATIO(1, 1) && out[1] == RATIO(2, 1) && out[2] == RATIO(4, 1));
+  assert(!(out[0] & AC_PATTERN_REST_BIT) && !(out[1] & AC_PATTERN_REST_BIT) && !(out[2] & AC_PATTERN_REST_BIT));
+}
+
+static void test_vibe_pattern_parse_rest_forms(void) {
+  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
+  uint8_t len;
+  // Bare 'z' alone means a rest at the default duration.
+  assert(ac_vibe_pattern_parse("z", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(len == 1 && out[0] == (AC_PATTERN_REST_BIT | RATIO(1, 1)));
+  // 'z' plus each of the three ratio-suffix forms.
+  assert(ac_vibe_pattern_parse("z2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(out[0] == (AC_PATTERN_REST_BIT | RATIO(2, 1)));
+  assert(ac_vibe_pattern_parse("z/2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(out[0] == (AC_PATTERN_REST_BIT | RATIO(1, 2)));
+  assert(ac_vibe_pattern_parse("z3/2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(out[0] == (AC_PATTERN_REST_BIT | RATIO(3, 2)));
 }
 
 static void test_vibe_pattern_parse_consecutive_on_beats(void) {
-  // No break required between two on-beats -- this is the whole point of
-  // making breaks optional.
+  // No rest required between two on-beats -- this is the whole point of
+  // making rests optional.
   uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
   assert(ac_vibe_pattern_parse("1 2 4", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(len == 3);
 }
 
-static void test_vibe_pattern_parse_rejects_out_of_range_digit(void) {
-  uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
-  uint8_t len;
-  // '0' and '9' are plain ASCII digits but outside AC_NOTE_DURATION_DIGITS'
-  // 1-8 range -- validity isn't just "any digit 1-9".
-  assert(!ac_vibe_pattern_parse("0", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("9", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+// Two spellings of the same real duration must produce the IDENTICAL byte
+// -- the direct regression test for GCD-reducing N/D before packing (see
+// AC_PATTERN_DURATION_MASK's doc comment, alarm_calc.h).
+static void test_vibe_pattern_parse_ratio_reduction_round_trip(void) {
+  uint8_t a[AC_VIBE_PATTERN_MAX_SEGMENTS], b[AC_VIBE_PATTERN_MAX_SEGMENTS];
+  uint8_t la, lb;
+  assert(ac_vibe_pattern_parse("z", AC_VIBE_PATTERN_MAX_SEGMENTS, a, &la));
+  assert(ac_vibe_pattern_parse("z2/2", AC_VIBE_PATTERN_MAX_SEGMENTS, b, &lb));
+  assert(a[0] == b[0]);
+  assert(ac_vibe_pattern_parse("1", AC_VIBE_PATTERN_MAX_SEGMENTS, a, &la));
+  assert(ac_vibe_pattern_parse("2/2", AC_VIBE_PATTERN_MAX_SEGMENTS, b, &lb));
+  assert(a[0] == b[0]);
+  assert(ac_vibe_pattern_parse("4/2", AC_VIBE_PATTERN_MAX_SEGMENTS, a, &la));   // reduces to 2/1
+  assert(a[0] == RATIO(2, 1));
 }
 
 static void test_vibe_pattern_parse_rejects_malformed(void) {
@@ -661,7 +692,17 @@ static void test_vibe_pattern_parse_rejects_malformed(void) {
   uint8_t len;
   assert(!ac_vibe_pattern_parse("", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(!ac_vibe_pattern_parse("   ", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
-  assert(!ac_vibe_pattern_parse("1--", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("z-", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("zz", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  // '0' and '9' are plain ASCII digits but outside AC_NOTE_RATIO_DIGITS'
+  // 1-8 range -- on EITHER side of the ratio.
+  assert(!ac_vibe_pattern_parse("0", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("9", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("1/0", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("1/9", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(!ac_vibe_pattern_parse("/", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));    // '/' with no digit at all
+  assert(!ac_vibe_pattern_parse("1/", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));   // '/' with no following digit
+  assert(!ac_vibe_pattern_parse("1x", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));   // trailing garbage
   assert(!ac_vibe_pattern_parse("1C", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));   // note letters aren't valid for vibe
   assert(!ac_vibe_pattern_parse("a", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(!ac_vibe_pattern_parse(NULL, AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
@@ -679,16 +720,28 @@ static void test_vibe_pattern_format_round_trip(void) {
   uint8_t out[AC_VIBE_PATTERN_MAX_SEGMENTS];
   uint8_t len;
   char buf[64];
-  assert(ac_vibe_pattern_parse("2 1- 2 1- 2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  assert(ac_vibe_pattern_parse("1 z/2 1 z/2 1", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   ac_vibe_pattern_format(buf, sizeof(buf), out, len);
-  assert(strcmp(buf, "2 1- 2 1- 2") == 0);
+  assert(strcmp(buf, "1 z/2 1 z/2 1") == 0);
 
-  // Exercises the full 1-8 duration-digit range, one token per digit --
-  // exactly AC_VIBE_PATTERN_MAX_SEGMENTS (8) tokens.
+  // Exercises the full 1-8 ratio-digit range as a plain multiplier, one
+  // token per digit -- exactly AC_VIBE_PATTERN_MAX_SEGMENTS (8) tokens.
   assert(ac_vibe_pattern_parse("1 2 3 4 5 6 7 8", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
   assert(len == 8);
   ac_vibe_pattern_format(buf, sizeof(buf), out, len);
   assert(strcmp(buf, "1 2 3 4 5 6 7 8") == 0);
+
+  // Canonicalization: an unreduced N/D spelling always formats back out
+  // reduced, regardless of how it was typed -- but a vibe on-beat that
+  // reduces all the way to the default ratio must still format as an
+  // explicit "1", never bare (see ac_vibe_pattern_format's own doc
+  // comment) -- this is the direct regression test for that fix.
+  assert(ac_vibe_pattern_parse("4/2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  ac_vibe_pattern_format(buf, sizeof(buf), out, len);
+  assert(strcmp(buf, "2") == 0);
+  assert(ac_vibe_pattern_parse("2/2", AC_VIBE_PATTERN_MAX_SEGMENTS, out, &len));
+  ac_vibe_pattern_format(buf, sizeof(buf), out, len);
+  assert(strcmp(buf, "1") == 0);
 }
 
 static void test_vibe_pattern_format_empty(void) {
@@ -697,27 +750,73 @@ static void test_vibe_pattern_format_empty(void) {
   assert(strcmp(buf, "") == 0);
 }
 
-static void test_sound_pattern_parse_notes_and_breaks(void) {
+// Unlike vibe, a sound on-beat's note letter anchors an empty duration
+// suffix, so "bare" is valid and means exactly AC_NOTE_DEFAULT_MS.
+static void test_sound_pattern_parse_bare_duration_is_default(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(len == 5);
-  // No octave marker -> AC_NOTE_OCTAVE_SAME; encoded as
-  // AC_NOTE_OCTAVE_SAME*AC_NOTE_COUNT + base index ('C'=0, 'D'=1).
-  assert(flags[0] == 1 && notes[0] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 0);
-  assert(flags[1] == 2 && notes[1] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 1);
-  assert(flags[2] == (1 | AC_PATTERN_BREAK_BIT));
-  assert(flags[3] == 1 && notes[3] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 0);
-  assert(flags[4] == 2 && notes[4] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 1);
+  assert(ac_sound_pattern_parse("C D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 2);
+  assert(flags[0] == RATIO(1, 1) && notes[0] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 0, AC_NOTE_ACCIDENTAL_NATURAL));
+  assert(flags[1] == RATIO(1, 1) && notes[1] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 1, AC_NOTE_ACCIDENTAL_NATURAL));
+  assert(ac_pattern_duration_ms(flags[0]) == AC_NOTE_DEFAULT_MS);
+}
+
+static void test_sound_pattern_parse_duration_ratio_forms(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("C2 C/2 C3/2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 3);
+  assert(flags[0] == RATIO(2, 1));
+  assert(flags[1] == RATIO(1, 2));
+  assert(flags[2] == RATIO(3, 2));
+}
+
+static void test_sound_pattern_parse_ratio_reduction_round_trip(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  char buf[32];
+  assert(ac_sound_pattern_parse("C4/4", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(flags[0] == RATIO(1, 1));   // 4/4 reduces to 1/1 -- bare
+  ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
+  assert(strcmp(buf, "C") == 0);
+  assert(ac_sound_pattern_parse("C2/2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(flags[0] == RATIO(1, 1));
+  ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
+  assert(strcmp(buf, "C") == 0);
+}
+
+// Sharp ("^") and flat ("_") prefixes decode to distinct note bytes (and
+// thus distinct MIDI pitches once alarm_build_sound_notes/main.c applies
+// the +-1 semitone) from the natural (no-prefix) spelling of the same
+// letter+octave.
+static void test_sound_pattern_parse_accidentals(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("C ^C _C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 3);
+  assert(notes[0] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 0, AC_NOTE_ACCIDENTAL_NATURAL));
+  assert(notes[1] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 0, AC_NOTE_ACCIDENTAL_SHARP));
+  assert(notes[2] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 0, AC_NOTE_ACCIDENTAL_FLAT));
+  assert(notes[0] != notes[1] && notes[1] != notes[2] && notes[0] != notes[2]);
+}
+
+static void test_sound_pattern_parse_octave_and_accidental_combined(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("^C' _C,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 2);
+  assert(notes[0] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME + 1, 0, AC_NOTE_ACCIDENTAL_SHARP));
+  // 8 commas = max down-shift -- this is the encoding-level half of the
+  // known C-flat-at-max-down-octave edge case (see alarm_build_sound_notes,
+  // main.c, for the MIDI computation that clamps this to 0 instead of -1);
+  // parsing/encoding it is valid regardless -- only the final MIDI value
+  // needs clamping.
+  assert(notes[1] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME - 8, 0, AC_NOTE_ACCIDENTAL_FLAT));
 }
 
 static void test_sound_pattern_parse_octave_markers(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(ac_sound_pattern_parse("1C 1C' 1C,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("C C' C,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(len == 3);
-  // No marker -> AC_NOTE_OCTAVE_SAME; encoded as octave*AC_NOTE_COUNT + base index (C = 0).
-  assert(notes[0] == AC_NOTE_OCTAVE_SAME * AC_NOTE_COUNT + 0);
-  assert(notes[1] == (AC_NOTE_OCTAVE_SAME + 1) * AC_NOTE_COUNT + 0);
-  assert(notes[2] == (AC_NOTE_OCTAVE_SAME - 1) * AC_NOTE_COUNT + 0);
+  assert(notes[0] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME, 0, AC_NOTE_ACCIDENTAL_NATURAL));
+  assert(notes[1] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME + 1, 0, AC_NOTE_ACCIDENTAL_NATURAL));
+  assert(notes[2] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME - 1, 0, AC_NOTE_ACCIDENTAL_NATURAL));
 }
 
 // Markers can stack: "'" up to AC_NOTE_OCTAVE_MAX_UP (1) times, "," up to
@@ -726,102 +825,134 @@ static void test_sound_pattern_parse_octave_markers(void) {
 // resulting MIDI pitch within 0-127).
 static void test_sound_pattern_parse_stacked_octave_markers(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(ac_sound_pattern_parse("1C,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 8 commas, at the cap
+  assert(ac_sound_pattern_parse("C,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 8 commas, at the cap
   assert(len == 1);
-  assert(notes[0] == (AC_NOTE_OCTAVE_SAME - 8) * AC_NOTE_COUNT + 0);
+  assert(notes[0] == NOTE_BYTE(AC_NOTE_OCTAVE_SAME - 8, 0, AC_NOTE_ACCIDENTAL_NATURAL));
 
   // A 9th comma exceeds AC_NOTE_OCTAVE_MAX_DOWN -- rejected outright.
-  assert(!ac_sound_pattern_parse("1C,,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C,,,,,,,,,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 
   // A 2nd apostrophe exceeds AC_NOTE_OCTAVE_MAX_UP (1) -- rejected, not
   // silently clamped back down to 1.
-  assert(!ac_sound_pattern_parse("1C''", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C''", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bad_octave_marker(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1C^", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // not a real marker
-  assert(!ac_sound_pattern_parse("1Cx", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("Cx", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // not a real marker/ratio char
   // Mixing "'" and "," within one token is malformed, even if each half
   // alone would be within its own cap.
-  assert(!ac_sound_pattern_parse("1C',", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse("1C,'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C',", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C,'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+}
+
+static void test_sound_pattern_parse_rejects_accidental_misuse(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("^", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));     // accidental, no letter
+  assert(!ac_sound_pattern_parse("^^C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // double accidental
+  assert(!ac_sound_pattern_parse("^_C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // mixed accidentals
+  assert(!ac_sound_pattern_parse("^z", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));    // accidental on a rest
 }
 
 static void test_sound_pattern_parse_rejects_bare_digit(void) {
-  // Unlike vibe, sound always needs an explicit note letter or '-'.
+  // A bare duration digit with no letter and no 'z' is invalid for sound --
+  // unlike vibe, where it's the whole point of an on-beat token.
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(!ac_sound_pattern_parse("1", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse("1C 2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C 2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_bad_note(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1H", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 'H' isn't a note letter
-  assert(!ac_sound_pattern_parse("1X 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("H", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));   // 'H' isn't a note letter
+  assert(!ac_sound_pattern_parse("X D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+}
+
+// A rest has no pitch -- 'z' plus a letter/accidental right after it is
+// malformed, not silently ignored.
+static void test_sound_pattern_parse_rejects_rest_with_pitch(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(!ac_sound_pattern_parse("zC", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+}
+
+static void test_sound_pattern_parse_rest_forms(void) {
+  uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
+  assert(ac_sound_pattern_parse("z z2 z/2 z3/2", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 4);
+  assert(flags[0] == (AC_PATTERN_REST_BIT | RATIO(1, 1)));
+  assert(flags[1] == (AC_PATTERN_REST_BIT | RATIO(2, 1)));
+  assert(flags[2] == (AC_PATTERN_REST_BIT | RATIO(1, 2)));
+  assert(flags[3] == (AC_PATTERN_REST_BIT | RATIO(3, 2)));
 }
 
 static void test_sound_pattern_parse_rejects_malformed(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(!ac_sound_pattern_parse("", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  // '0' and '9' are plain ASCII digits but outside AC_NOTE_DURATION_DIGITS'
+  // '0' and '9' are plain ASCII digits but outside AC_NOTE_RATIO_DIGITS'
   // 1-8 range.
-  assert(!ac_sound_pattern_parse("0C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(!ac_sound_pattern_parse("9C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C0", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C9", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(!ac_sound_pattern_parse(NULL, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_parse_rejects_too_many_segments(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
-  assert(!ac_sound_pattern_parse("1C 2D 4E 8F 1G", 4, flags, notes, &len));   // 5 tokens, max 4
-  assert(ac_sound_pattern_parse("1C 2D 4E 8F", 4, flags, notes, &len));
+  assert(!ac_sound_pattern_parse("C D E F G", 4, flags, notes, &len));   // 5 tokens, max 4
+  assert(ac_sound_pattern_parse("C D E F", 4, flags, notes, &len));
   assert(len == 4);
 }
 
 // Exercises the REAL production cap (AC_SOUND_PATTERN_MAX_SEGMENTS == 32),
 // not just the artificial max_segments=4 above -- and confirms the text
-// needed to reach it (95 chars for 32 plain "<digit><letter>" tokens
-// space-separated) comfortably fits under the pattern keyboard's own
-// PATTERN_KEYBOARD_MAX_LEN (128, main.c) cap, so the on-watch keyboard's
+// needed to reach it comfortably fits under the pattern keyboard's own
+// PATTERN_KEYBOARD_MAX_LEN (160, main.c) cap, so the on-watch keyboard's
 // character limit is never what stops a tune from reaching its full 32
-// notes -- the segment cap always binds first.
+// notes -- the segment cap always binds first. Uses bare notes (the common
+// case under the new grammar, since bare means the single most-used old
+// duration) rather than the old grammar's "<digit><letter>" shape.
 static void test_sound_pattern_parse_max_segments_boundary(void) {
   const char *p32 =
-    "1C 2D 3E 4F 5G 6A 7B 8C 1D 2E 3F 4G 5A 6B 7C 8D "
-    "1E 2F 3G 4A 5B 6C 7D 8E 1F 2G 3A 4B 5C 6D 7E 8F";
-  assert(strlen(p32) == 95);   // well under the 128-char keyboard cap
+    "C D E F G A B C D E F G A B C D "
+    "E F G A B C D E F G A B C D E F";
+  assert(strlen(p32) == 63);   // well under the 160-char keyboard cap
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   assert(ac_sound_pattern_parse(p32, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(len == 32);
 
-  char p33[128];
-  snprintf(p33, sizeof(p33), "%s 1G", p32);   // one more than the cap
+  char p33[160];
+  snprintf(p33, sizeof(p33), "%s G", p32);   // one more than the cap
   assert(!ac_sound_pattern_parse(p33, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
 }
 
 static void test_sound_pattern_format_round_trip(void) {
   uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], len;
   char buf[64];
-  assert(ac_sound_pattern_parse("1C 2D 1- 1C 2D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("C D z C D", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
-  assert(strcmp(buf, "1C 2D 1- 1C 2D") == 0);
+  assert(strcmp(buf, "C D z C D") == 0);
 
-  assert(ac_sound_pattern_parse("1C' 1D,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("^C' _D,", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
-  assert(strcmp(buf, "1C' 1D,") == 0);
+  assert(strcmp(buf, "^C' _D,") == 0);
 
-  // Exercises the full 1-8 duration-digit range, one token per digit.
-  assert(ac_sound_pattern_parse("1C 2D 3E 4F 5G 6A 7B 8C", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
-  assert(len == 8);
+  // Exercises the full 1-8 ratio-digit range as a plain multiplier, one
+  // token per digit.
+  assert(ac_sound_pattern_parse("C2 D3 E4 F5 G6 A7 B8", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(len == 7);
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
-  assert(strcmp(buf, "1C 2D 3E 4F 5G 6A 7B 8C") == 0);
+  assert(strcmp(buf, "C2 D3 E4 F5 G6 A7 B8") == 0);
 
   // Both octave-marker extremes round-trip exactly: 8 stacked commas (max
   // down) and 1 apostrophe (max up).
-  assert(ac_sound_pattern_parse("1C,,,,,,,, 1C'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
+  assert(ac_sound_pattern_parse("C,,,,,,,, C'", AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &len));
   assert(len == 2);
   ac_sound_pattern_format(buf, sizeof(buf), flags, notes, len);
-  assert(strcmp(buf, "1C,,,,,,,, 1C'") == 0);
+  assert(strcmp(buf, "C,,,,,,,, C'") == 0);
+
+  // A malformed pattern with an unparseable-but-otherwise-plausible
+  // duration ratio (parsed with pattern_parse_duration(tok, pos, ...));
+  // canonicalization: parsing "C4/4"/"C2/2" (both reduce to bare) formats
+  // back as plain "C" -- covered in test_sound_pattern_parse_ratio_reduction_round_trip.
 }
 
 static void test_sound_pattern_format_empty(void) {
@@ -886,20 +1017,28 @@ int main(void) {
   test_cron_next_offset_days_rare_week53_reports_no_match();
   test_cron_next_offset_days_week_crosses_new_year();
   test_format_cron_summary();
-  test_vibe_pattern_parse_bare_digits_are_on();
-  test_vibe_pattern_parse_breaks_optional();
+  test_ac_pattern_duration_ms();
+  test_vibe_pattern_parse_on_beats_require_explicit_ratio();
+  test_vibe_pattern_parse_rest_forms();
   test_vibe_pattern_parse_consecutive_on_beats();
-  test_vibe_pattern_parse_rejects_out_of_range_digit();
+  test_vibe_pattern_parse_ratio_reduction_round_trip();
   test_vibe_pattern_parse_rejects_malformed();
   test_vibe_pattern_parse_rejects_too_many_segments();
   test_vibe_pattern_format_round_trip();
   test_vibe_pattern_format_empty();
-  test_sound_pattern_parse_notes_and_breaks();
+  test_sound_pattern_parse_bare_duration_is_default();
+  test_sound_pattern_parse_duration_ratio_forms();
+  test_sound_pattern_parse_ratio_reduction_round_trip();
+  test_sound_pattern_parse_accidentals();
+  test_sound_pattern_parse_octave_and_accidental_combined();
   test_sound_pattern_parse_octave_markers();
   test_sound_pattern_parse_stacked_octave_markers();
   test_sound_pattern_parse_rejects_bad_octave_marker();
+  test_sound_pattern_parse_rejects_accidental_misuse();
   test_sound_pattern_parse_rejects_bare_digit();
   test_sound_pattern_parse_rejects_bad_note();
+  test_sound_pattern_parse_rejects_rest_with_pitch();
+  test_sound_pattern_parse_rest_forms();
   test_sound_pattern_parse_rejects_malformed();
   test_sound_pattern_parse_rejects_too_many_segments();
   test_sound_pattern_parse_max_segments_boundary();

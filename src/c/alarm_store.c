@@ -58,12 +58,13 @@ static size_t alarm_size_for_schema(int schema) {
 // however many bytes an older blob actually holds, leaving whatever's
 // newer at its safe zero default -- the exact same free-ride append
 // handling alarm_size_for_schema() has always relied on for MAIN. Only a
-// genuine FUTURE EXTENSION-layout hard break (a resize/reorder/removal,
-// like 19's own) needs to bump this threshold -- at which point anything
+// genuine FUTURE EXTENSION-layout hard break (a resize/reorder/removal, or
+// -- as with 20's own bump -- a same-size REINTERPRETATION of what the
+// bytes mean) needs to bump this threshold -- at which point anything
 // older than the new hard break falls back to ALARM_EXT_CORE_SIZE-only,
-// same as anything older than 19 does today.
+// same as anything older than 20 does today.
 static bool ext_schema_is_appendable(int schema) {
-  return schema >= 19;
+  return schema >= 20;
 }
 
 // The per-alarm blob is split across two persist keys, not one -- see

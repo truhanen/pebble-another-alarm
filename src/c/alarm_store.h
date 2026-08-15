@@ -24,7 +24,16 @@
 #define PERSIST_KEY_TUNE_SCHEMA          14
 #define PERSIST_KEY_TUNE_COUNT           15
 #define PERSIST_KEY_NEXT_TUNE_ID         16
-#define TUNE_STORE_SCHEMA 3
+#define TUNE_STORE_SCHEMA 4
+// Bumped from 3: pattern[]/pattern_note[]'s byte encoding changed shape
+// entirely as part of the ABC-notation grammar rework (durations became
+// packed N/D ratios instead of an absolute digit; pattern_note[] gained a
+// packed accidental alongside octave/letter) -- see STORE_SCHEMA's own
+// matching bump comment above for the full rationale (this feature has
+// never shipped, so there's no real migration cost either way).
+// store_load_tunes() wipes on any mismatch anyway, so this needed nothing
+// beyond the bump itself, same as every other bump in this history.
+//
 // Bumped from 2: pattern_note[]'s octave encoding widened from 3 values
 // (down 1/same/up 1) to 10 (down up to 8/same/up 1), to support stacking
 // multiple "'"/"," markers -- see AC_NOTE_OCTAVE_MAX_UP/_MAX_DOWN's own doc
@@ -54,7 +63,29 @@
 // needed -- sizeof(CustomTune) is well under PERSIST_DATA_MAX_LENGTH).
 // Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
 #define PERSIST_KEY_TUNE_BASE          300
-#define STORE_SCHEMA 19  // bumped: removed sound's inline-Custom representation
+#define STORE_SCHEMA 20  // bumped: the custom sound/vibe pattern grammar itself was
+                          // reworked into an ABC-notation subset (durations became
+                          // ratios instead of an absolute digit, sharp/flat accidentals
+                          // were added, breaks became a dedicated 'z' rest token) --
+                          // see ac_vibe_pattern_parse/ac_sound_pattern_parse's own doc
+                          // comments (alarm_calc.h) for the grammar itself. This is a
+                          // hard EXTENSION-blob break, same class as 13/14/15/17/18
+                          // below (a stored byte's MEANING changes, even though
+                          // vibe_pattern_custom[]/CustomTune.pattern[]/pattern_note[]
+                          // keep their existing sizes -- no resize this time, purely a
+                          // reinterpretation), so ext_schema_is_appendable() (alarm_store.c)
+                          // moves its threshold from 19 to 20 -- any alarm stored under
+                          // schema 19 has its signal fields (sound_pattern_kind onward)
+                          // degrade to their safe zero defaults rather than being
+                          // reinterpreted as garbage under the new byte meaning, exactly
+                          // the mechanism schema 19's own comment below describes. This
+                          // feature has never shipped to any end user (single
+                          // development device only), so unlike every other bump in this
+                          // file's history, there is no real user this one wipes data
+                          // for -- but the bump is still the correct, established idiom
+                          // regardless.
+                          //
+                          // Prior bump (19): removed sound's inline-Custom representation
                           // (sound_pattern_len/sound_pattern[]/sound_pattern_note[]) --
                           // tracing every call site that could set sound_pattern_kind==1
                           // found exactly one left (main.c's Tune-preset direct-commit
@@ -219,7 +250,7 @@
                           //     resized/reordered/removed), neither `alarm_size_for_schema()`
                           //     NOR `ext_schema_is_appendable()` (both alarm_store.c) need
                           //     any change at all -- MAIN is untouched by definition, and
-                          //     ext_schema_is_appendable()'s existing `>= 19` already covers
+                          //     ext_schema_is_appendable()'s existing `>= 20` already covers
                           //     this new bump too, so store_load() reads the new field in
                           //     full for free via the same truncation trick MAIN has always
                           //     used. Just check the new EXTENSION size against
@@ -250,7 +281,7 @@
                           // The EXTENSION mechanism itself (store_load(), alarm_store.c) is
                           // now a range check, same shape as alarm_size_for_schema() but
                           // independent of it: `ext_schema_is_appendable(stored_schema)`
-                          // (currently `>= 19`) decides, and a downgrade (stored_schema >
+                          // (currently `>= 20`) decides, and a downgrade (stored_schema >
                           // STORE_SCHEMA) always counts as "no" regardless of that check,
                           // since a newer binary's own EXTENSION layout is unknown to us.
                           //

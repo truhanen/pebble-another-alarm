@@ -127,28 +127,28 @@ void ac_format_repeat_summary(char *buf, size_t n, bool repeats, uint8_t repeat_
 
 // ============================ custom sound/vibe patterns ============================
 
-// AC_NOTE_DURATION_DIGITS -- see AC_NOTE_DURATION_COUNT's doc comment
-// (alarm_calc.h): the only valid duration digits, each literally the
-// number of AC_NOTE_DURATION_MS_PER_UNIT (100ms) units it represents, so
-// "4" always means 400ms with no lookup table needed -- just digit*100.
-const uint8_t AC_NOTE_DURATION_DIGITS[AC_NOTE_DURATION_COUNT] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+// AC_NOTE_RATIO_DIGITS -- see AC_NOTE_RATIO_DIGIT_COUNT's doc comment
+// (alarm_calc.h): the only valid digits for either side of a "[N]['/'D]"
+// duration ratio.
+const uint8_t AC_NOTE_RATIO_DIGITS[AC_NOTE_RATIO_DIGIT_COUNT] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 
 // AC_NOTE_LETTER/AC_NOTE_MIDI -- see AC_NOTE_COUNT's doc comment
 // (alarm_calc.h): C major scale starting at MIDI 96 (C7, close to the
 // fixed B6/95 pitch every alarm used before custom sound patterns existed).
-// Octave shifts (see AC_NOTE_OCTAVE_*) are applied on top of these base
-// pitches at parse/format time, not baked into separate table entries.
+// Octave/accidental shifts (see AC_NOTE_OCTAVE_*/AC_NOTE_ACCIDENTAL_*) are
+// applied on top of these base pitches at parse/format time, not baked
+// into separate table entries.
 const char AC_NOTE_LETTER[AC_NOTE_COUNT] = { 'C', 'D', 'E', 'F', 'G', 'A', 'B' };
 const uint8_t AC_NOTE_MIDI[AC_NOTE_COUNT] = { 96, 98, 100, 101, 103, 105, 107 };
 
-// Parses a token's leading duration digit. Returns false unless `c` is one
-// of AC_NOTE_DURATION_DIGITS -- i.e. '1'-'8'; '0' and '9' are plain ASCII
-// digits but not valid duration digits.
-static bool pattern_parse_digit(char c, uint8_t *out_digit) {
+// Parses one side of a duration ratio. Returns false unless `c` is one of
+// AC_NOTE_RATIO_DIGITS -- i.e. '1'-'8'; '0' and '9' are plain ASCII digits
+// but not valid ratio digits.
+static bool pattern_parse_ratio_digit(char c, uint8_t *out_digit) {
   if (c < '0' || c > '9') { return false; }
   uint8_t d = (uint8_t)(c - '0');
-  for (int i = 0; i < AC_NOTE_DURATION_COUNT; i++) {
-    if (AC_NOTE_DURATION_DIGITS[i] == d) { *out_digit = d; return true; }
+  for (int i = 0; i < AC_NOTE_RATIO_DIGIT_COUNT; i++) {
+    if (AC_NOTE_RATIO_DIGITS[i] == d) { *out_digit = d; return true; }
   }
   return false;
 }
@@ -159,6 +159,64 @@ static int pattern_note_index(char c) {
     if (AC_NOTE_LETTER[i] == c) { return i; }
   }
   return -1;
+}
+
+static uint8_t pattern_gcd(uint8_t a, uint8_t b) {
+  while (b != 0) { uint8_t t = b; b = (uint8_t)(a % b); a = t; }
+  return a;
+}
+
+// Parses the optional "[N]['/'D]" duration-ratio suffix occupying
+// tok[start..tlen) -- shared by both grammars: vibe's on-beat token is
+// nothing BUT this suffix (start==0), while sound's on-token/rest reach it
+// only after consuming their own leading characters. An empty suffix
+// (start==tlen) is the "bare" case, N=1,D=1 (AC_NOTE_DEFAULT_MS exactly).
+// N/D is reduced to lowest terms by their GCD before packing, so two
+// spellings of the same ratio (e.g. "1" and "2/2") always produce the
+// identical byte -- see AC_PATTERN_DURATION_MASK's doc comment for why
+// this matters. Returns false (leaving *out_payload untouched) if either
+// side isn't a valid AC_NOTE_RATIO_DIGITS digit, '/' has no following
+// digit, or any character remains unconsumed.
+static bool pattern_parse_duration(const char *tok, int start, int tlen, uint8_t *out_payload) {
+  uint8_t n = 1, d = 1;
+  int i = start;
+  if (i < tlen && tok[i] != '/') {
+    if (!pattern_parse_ratio_digit(tok[i], &n)) { return false; }
+    i++;
+  }
+  if (i < tlen && tok[i] == '/') {
+    i++;
+    if (i >= tlen || !pattern_parse_ratio_digit(tok[i], &d)) { return false; }
+    i++;
+  }
+  if (i != tlen) { return false; }   // trailing garbage
+  uint8_t g = pattern_gcd(n, d);
+  n = (uint8_t)(n / g);
+  d = (uint8_t)(d / g);
+  *out_payload = (uint8_t)((n - 1) * AC_NOTE_RATIO_DIGIT_COUNT + (d - 1));
+  return true;
+}
+
+// Writes the canonical duration-ratio text for an already-reduced `payload`
+// -- empty string when N==D==1 ("bare"), "N" when D==1, "/D" when N==1,
+// else "N/D". Shared by both formatters so ac_vibe_pattern_format/
+// ac_sound_pattern_format can never disagree on which of several
+// equivalent spellings to emit.
+static void pattern_format_duration(char *buf, size_t n, uint8_t payload) {
+  uint8_t note_n = (uint8_t)(payload / AC_NOTE_RATIO_DIGIT_COUNT + 1);
+  uint8_t note_d = (uint8_t)(payload % AC_NOTE_RATIO_DIGIT_COUNT + 1);
+  if (n == 0) { return; }
+  if (note_n == 1 && note_d == 1) { buf[0] = '\0'; return; }
+  if (note_d == 1) { snprintf(buf, n, "%d", note_n); return; }
+  if (note_n == 1) { snprintf(buf, n, "/%d", note_d); return; }
+  snprintf(buf, n, "%d/%d", note_n, note_d);
+}
+
+uint32_t ac_pattern_duration_ms(uint8_t raw) {
+  uint8_t payload = raw & AC_PATTERN_DURATION_MASK;
+  uint32_t note_n = payload / AC_NOTE_RATIO_DIGIT_COUNT + 1;
+  uint32_t note_d = payload % AC_NOTE_RATIO_DIGIT_COUNT + 1;
+  return (AC_NOTE_DEFAULT_MS * note_n + note_d / 2) / note_d;   // round to nearest ms
 }
 
 bool ac_vibe_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out, uint8_t *out_len) {
@@ -173,13 +231,15 @@ bool ac_vibe_pattern_parse(const char *text, uint8_t max_segments, uint8_t *out,
     while (*p && *p != ' ') { p++; }
     int tlen = (int)(p - tok);
     if (count >= max_segments) { return false; }   // too many segments
-    uint8_t digit;
-    if (tlen < 1 || !pattern_parse_digit(tok[0], &digit)) { return false; }
-    bool is_break;
-    if (tlen == 1) { is_break = false; }                          // bare digit: on
-    else if (tlen == 2 && tok[1] == '-') { is_break = true; }      // digit + '-': break
-    else { return false; }                                        // trailing garbage
-    parsed[count] = digit | (is_break ? AC_PATTERN_BREAK_BIT : 0);
+    bool is_rest = (tok[0] == 'z');
+    uint8_t payload;
+    // A rest's duration suffix starts right after 'z' and may be empty
+    // (bare); an on-beat token IS the duration suffix in its entirety
+    // (start==0) -- since a real token is never zero-length, this always
+    // consumes at least one character, so a vibe on-beat can never be the
+    // empty/bare duration the way a rest or a sound note letter can.
+    if (!pattern_parse_duration(tok, is_rest ? 1 : 0, tlen, &payload)) { return false; }
+    parsed[count] = payload | (is_rest ? AC_PATTERN_REST_BIT : 0);
     count++;
   }
   if (count == 0) { return false; }
@@ -193,9 +253,17 @@ void ac_vibe_pattern_format(char *buf, size_t n, const uint8_t *pattern, uint8_t
   buf[0] = '\0';
   size_t used = 0;
   for (uint8_t i = 0; i < len; i++) {
-    uint8_t digit = pattern[i] & AC_PATTERN_DURATION_MASK;
-    bool is_break = (pattern[i] & AC_PATTERN_BREAK_BIT) != 0;
-    int written = snprintf(buf + used, n - used, "%s%d%s", i ? " " : "", digit, is_break ? "-" : "");
+    bool is_rest = (pattern[i] & AC_PATTERN_REST_BIT) != 0;
+    char dur[8];
+    pattern_format_duration(dur, sizeof(dur), pattern[i] & AC_PATTERN_DURATION_MASK);
+    // Unlike sound (whose note letter anchors a bare duration), a vibe
+    // on-beat token IS the duration text in its entirety -- it can never
+    // be spelled as an empty string (see ac_vibe_pattern_parse's own doc
+    // comment), so an on-beat's otherwise-bare ("") duration must be
+    // spelled out explicitly as "1" here, or this would format right back
+    // into unparseable text.
+    if (!is_rest && dur[0] == '\0') { snprintf(dur, sizeof(dur), "1"); }
+    int written = snprintf(buf + used, n - used, "%s%s%s", i ? " " : "", is_rest ? "z" : "", dur);
     if (written < 0 || (size_t)written >= n - used) { break; }
     used += (size_t)written;
   }
@@ -215,39 +283,53 @@ bool ac_sound_pattern_parse(const char *text, uint8_t max_segments,
     while (*p && *p != ' ') { p++; }
     int tlen = (int)(p - tok);
     if (count >= max_segments) { return false; }
-    uint8_t digit;
-    if (tlen < 1 || !pattern_parse_digit(tok[0], &digit)) { return false; }
-    if (tlen == 2 && tok[1] == '-') {
-      flags[count] = digit | AC_PATTERN_BREAK_BIT;
+
+    if (tok[0] == 'z') {
+      // A rest has no pitch, so nothing but 'z' plus its optional duration
+      // suffix is valid here -- an accidental/letter right after 'z' falls
+      // through to pattern_parse_duration below and is rejected there,
+      // since neither is a valid ratio-digit or '/'.
+      uint8_t payload;
+      if (!pattern_parse_duration(tok, 1, tlen, &payload)) { return false; }
+      flags[count] = payload | AC_PATTERN_REST_BIT;
       notes[count] = 0;
-    } else if (tlen >= 2) {
-      int ni = pattern_note_index(tok[1]);
-      if (ni < 0) { return false; }   // unrecognized note letter
-      int octave = AC_NOTE_OCTAVE_SAME;
-      if (tlen > 2) {
-        // Real ABC-notation octave markers, right after the letter: one or
-        // more "'" (apostrophe) shift up an octave each, one or more ","
-        // (comma) shift down an octave each -- but never mixed within one
-        // token, and each direction has its own cap (see AC_NOTE_OCTAVE_
-        // MAX_UP/_MAX_DOWN's doc comment, alarm_calc.h, for why the range
-        // is asymmetric). Anything else (a stray non-marker char, a run
-        // longer than the cap) is malformed.
-        char marker = tok[2];
-        if (marker != '\'' && marker != ',') { return false; }
-        int mcount = 0;
-        for (int k = 2; k < tlen; k++) {
-          if (tok[k] != marker) { return false; }   // mixed markers, e.g. "1C',"
-          mcount++;
-        }
-        int max_count = (marker == '\'') ? AC_NOTE_OCTAVE_MAX_UP : AC_NOTE_OCTAVE_MAX_DOWN;
-        if (mcount > max_count) { return false; }
-        octave = (marker == '\'') ? AC_NOTE_OCTAVE_SAME + mcount : AC_NOTE_OCTAVE_SAME - mcount;
-      }
-      flags[count] = digit;
-      notes[count] = (uint8_t)(octave * AC_NOTE_COUNT + ni);
-    } else {
-      return false;   // a bare digit (no letter, no '-') is invalid for sound -- unlike vibe
+      count++;
+      continue;
     }
+
+    int pos = 0;
+    int accidental = AC_NOTE_ACCIDENTAL_NATURAL;
+    if (tok[0] == '^') { accidental = AC_NOTE_ACCIDENTAL_SHARP; pos = 1; }
+    else if (tok[0] == '_') { accidental = AC_NOTE_ACCIDENTAL_FLAT; pos = 1; }
+
+    if (pos >= tlen) { return false; }   // an accidental with no letter, or an empty token
+    int ni = pattern_note_index(tok[pos]);
+    if (ni < 0) { return false; }   // unrecognized note letter
+    pos++;
+
+    // Real ABC-notation octave markers, right after the letter: one or
+    // more "'" (apostrophe) shift up an octave each, one or more ","
+    // (comma) shift down an octave each -- but never mixed within one
+    // token, and each direction has its own cap (see AC_NOTE_OCTAVE_
+    // MAX_UP/_MAX_DOWN's doc comment, alarm_calc.h, for why the range is
+    // asymmetric). A stray opposite-kind marker, or a run longer than the
+    // cap, falls through to pattern_parse_duration below and is rejected
+    // there as an unparseable duration.
+    int octave = AC_NOTE_OCTAVE_SAME;
+    if (pos < tlen && (tok[pos] == '\'' || tok[pos] == ',')) {
+      char marker = tok[pos];
+      int mcount = 0;
+      while (pos < tlen && tok[pos] == marker) { mcount++; pos++; }
+      int max_count = (marker == '\'') ? AC_NOTE_OCTAVE_MAX_UP : AC_NOTE_OCTAVE_MAX_DOWN;
+      if (mcount > max_count) { return false; }
+      octave = (marker == '\'') ? AC_NOTE_OCTAVE_SAME + mcount : AC_NOTE_OCTAVE_SAME - mcount;
+    }
+
+    uint8_t payload;
+    if (!pattern_parse_duration(tok, pos, tlen, &payload)) { return false; }
+
+    flags[count] = payload;
+    notes[count] = (uint8_t)((octave * AC_NOTE_COUNT + ni) * AC_NOTE_ACCIDENTAL_COUNT + accidental);
     count++;
   }
   if (count == 0) { return false; }
@@ -262,15 +344,20 @@ void ac_sound_pattern_format(char *buf, size_t n, const uint8_t *flags, const ui
   buf[0] = '\0';
   size_t used = 0;
   for (uint8_t i = 0; i < len; i++) {
-    uint8_t digit = flags[i] & AC_PATTERN_DURATION_MASK;
-    bool is_break = (flags[i] & AC_PATTERN_BREAK_BIT) != 0;
+    bool is_rest = (flags[i] & AC_PATTERN_REST_BIT) != 0;
+    char dur[8];
+    pattern_format_duration(dur, sizeof(dur), flags[i] & AC_PATTERN_DURATION_MASK);
     int written;
-    if (is_break) {
-      written = snprintf(buf + used, n - used, "%s%d-", i ? " " : "", digit);
+    if (is_rest) {
+      written = snprintf(buf + used, n - used, "%sz%s", i ? " " : "", dur);
     } else {
-      int octave = notes[i] / AC_NOTE_COUNT;
-      int ni = notes[i] % AC_NOTE_COUNT;
+      int combined = notes[i] / AC_NOTE_ACCIDENTAL_COUNT;
+      int accidental = notes[i] % AC_NOTE_ACCIDENTAL_COUNT;
+      int octave = combined / AC_NOTE_COUNT;
+      int ni = combined % AC_NOTE_COUNT;
       char letter = (ni < AC_NOTE_COUNT) ? AC_NOTE_LETTER[ni] : '?';
+      const char *acc_str = (accidental == AC_NOTE_ACCIDENTAL_SHARP) ? "^"
+                           : (accidental == AC_NOTE_ACCIDENTAL_FLAT) ? "_" : "";
       // Emit N repeated marker characters for a shift of magnitude N,
       // rather than a single fixed marker -- the exact inverse of parse's
       // marker-run counting above. AC_NOTE_OCTAVE_MAX_DOWN+1 is generous
@@ -282,7 +369,7 @@ void ac_sound_pattern_format(char *buf, size_t n, const uint8_t *flags, const ui
       if (mcount > AC_NOTE_OCTAVE_MAX_DOWN) { mcount = AC_NOTE_OCTAVE_MAX_DOWN; }   // defensive; shouldn't happen
       for (int m = 0; m < mcount; m++) { markers[m] = mchar; }
       markers[mcount] = '\0';
-      written = snprintf(buf + used, n - used, "%s%d%c%s", i ? " " : "", digit, letter, markers);
+      written = snprintf(buf + used, n - used, "%s%s%c%s%s", i ? " " : "", acc_str, letter, markers, dur);
     }
     if (written < 0 || (size_t)written >= n - used) { break; }
     used += (size_t)written;
