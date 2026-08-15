@@ -72,63 +72,81 @@ static const char *const CRON_SYMS[] = { "*", "-", "/", "," };
 #define CRON_SYM_COUNT 4
 
 // Bottom-left key cycle for pattern_mode (see multitap_keyboard_set_pattern_mode)
-// -- SOUND-only (VIBE has no pitch, so needs none of "'"/","/"^"/"_", only
-// the leading "/" for a duration ratio's fraction bar). "/" is placed
-// first per request; "'"/"," are real ABC-notation octave markers written
-// right after a sound note letter ("C'" up one octave, "C," down one
-// octave -- see AC_NOTE_OCTAVE_*, alarm_calc.h); "^"/"_" are real
-// ABC-notation sharp/flat accidentals written right BEFORE the letter
-// instead (see AC_NOTE_ACCIDENTAL_*, alarm_calc.h) -- this is the one key
-// whose cycle mixes glyphs used on both sides of the letter, since there's
-// no spare physical key left to split them across (Space is the essential
-// token separator, the digit keys are dedicated per request, and z+the 6
-// letters already fill every other character key -- see
-// PATTERN_KEY_SOUND's own doc comment below).
-static const char *const PATTERN_SYMS_SOUND[] = { "/", "'", ",", "^", "_" };
-#define PATTERN_SYM_SOUND_COUNT 5
-static const char *const PATTERN_SYMS_VIBE[] = { "/" };
-#define PATTERN_SYM_VIBE_COUNT 1
+// -- just the fraction bar "/" for a duration ratio, for BOTH SOUND and
+// VIBE now (they used to differ: SOUND's own cycle also carried octave
+// markers/accidentals here, but those moved to SOUND's own key 7 -- see
+// PATTERN_KEY_SOUND's own doc comment below -- once they had a real
+// character key of their own to live on instead of sharing this one with
+// "/"). This key's glyph source is chosen before this function ever looks
+// at which of SOUND's two pages is showing, so "/" stays available
+// identically on both.
+static const char *const PATTERN_SYMS[] = { "/" };
+#define PATTERN_SYM_COUNT 1
 
 // Per-character-key (0-8) glyph lists for pattern mode, selected by
 // multitap_keyboard_set_pattern_mode's `notes_enabled` instead of by page --
 // this is a THIRD glyph source alongside PAGE_KEY/CRON_SYMS, not a variant
 // of PAGE_NUMBERS's plain 1-per-key digits.
 //
-// SOUND's 3x3 grid (keys 0-8, row-major: 0,1,2 / 3,4,5 / 6,7,8) dedicates
-// the LEFT column (keys 0/3/6) to duration-ratio digits 1-8 (see
-// AC_NOTE_RATIO_DIGITS, alarm_calc.h), grouped top-to-bottom like a phone
-// dialpad ("123"/"456"/"789" per key) -- key 6 only cycles "7"/"8" since 9
-// isn't a valid ratio digit. The remaining 6 keys (1,2,4,5,7,8) hold the 7
-// note letters plus the rest marker 'z', 8 items across 6 keys: C, D, E
-// one per key, F/G sharing one key and A/B sharing another (6 keys can't
-// hold 8 items one-each), and 'z' LAST, on its own key, reading in
-// row-major order across those 6 slots (C, D, E, F/G, A/B, z) -- so typing
-// a rest never needs multi-tapping past a note letter to reach it, same as
-// every other item here. The digit column deliberately sits on the LEFT
-// (not the right) specifically so 'z' lands on key 8 -- the same physical
-// key VIBE's own grid below puts it on -- keeping 'z' in one consistent
-// position across both keyboards rather than have it move depending on
-// which mode is active. Octave shifts and accidentals are both applied
-// via the bottom-left key's cycle (PATTERN_SYMS_SOUND) instead of
-// dedicated duplicate keys, so there's no need to fit their variants into
-// this grid too.
+// SOUND's PRIMARY page ("note layout") is a plain 3x3 grid (keys 0-8,
+// row-major: 0,1,2 / 3,4,5 / 6,7,8): the 7 note letters C-G/A/B one per key,
+// the rest marker 'z' LAST on key 8, and key 7 (bottom-center of this grid,
+// directly above the Space key) cycling the octave markers/accidentals
+// instead of sitting empty -- "'"/"," are real ABC-notation octave markers
+// written right after a sound note letter ("C'" up one octave, "C," down
+// one octave -- see AC_NOTE_OCTAVE_*, alarm_calc.h); "^"/"_" are real
+// ABC-notation sharp/flat accidentals written right BEFORE the letter
+// instead (see AC_NOTE_ACCIDENTAL_*, alarm_calc.h). These used to share the
+// bottom-left (Shift) key's cycle with "/" before key 7 was free for them to
+// move to; the bottom-left key now only ever cycles "/" (see PATTERN_SYMS
+// above), for both SOUND and VIBE alike.
+//
+// Duration digits are deliberately NOT on this grid at all -- they don't
+// need a dedicated key, since they're already reachable two other ways that
+// both predate this rework: long-pressing ANY key (including key 7) inserts
+// its keypad digit (multitap_keyboard_handle_hold, unchanged, pure key+1
+// arithmetic regardless of a key's tap-time glyph list), and pressing DOWN
+// cycles to a second, SOUND-only "numbers" page (PATTERN_KEY_SOUND_NUMBERS
+// below) -- restoring the widget's own original page-cycling behavior for
+// this one case, which pattern mode otherwise still locks out (see
+// multitap_keyboard_set_pattern_mode). 'z' stays on key 8 to match VIBE's
+// own grid below, so it never moves depending on which mode is active. Key
+// 7's octave/accidental cycle is note-layout-only -- the numbers page keeps
+// its own key 7 as a plain "8" (see PATTERN_KEY_SOUND_NUMBERS below), since
+// that page already has real digit content there.
 //
 // VIBE's grid is a deliberately different shape, not a smaller version of
 // SOUND's -- vibe has no letters to make room for, so every one of the 9
 // keys gets exactly one glyph, no cycling at all: digits 1-8 in row-major
 // order, then 'z' last on key 8 (matching SOUND's own 'z' position above).
-// A plain tap always types the intended character directly.
-static const char *const PK_SOUND_0[] = { "1", "2", "3", NULL };
-static const char *const PK_SOUND_1[] = { "C", NULL };
-static const char *const PK_SOUND_2[] = { "D", NULL };
-static const char *const PK_SOUND_3[] = { "4", "5", "6", NULL };
-static const char *const PK_SOUND_4[] = { "E", NULL };
-static const char *const PK_SOUND_5[] = { "F", "G", NULL };
-static const char *const PK_SOUND_6[] = { "7", "8", NULL };
-static const char *const PK_SOUND_7[] = { "A", "B", NULL };
+// A plain tap always types the intended character directly. Unlike SOUND,
+// VIBE has no second page to cycle to (DOWN stays a no-op here, same as
+// before this rework) -- its one page already IS the digits.
+static const char *const PATTERN_KEY_EMPTY[] = { NULL };   // the numbers page's own empty key 8 below
+static const char *const PK_SOUND_0[] = { "C", NULL };
+static const char *const PK_SOUND_1[] = { "D", NULL };
+static const char *const PK_SOUND_2[] = { "E", NULL };
+static const char *const PK_SOUND_3[] = { "F", NULL };
+static const char *const PK_SOUND_4[] = { "G", NULL };
+static const char *const PK_SOUND_5[] = { "A", NULL };
+static const char *const PK_SOUND_6[] = { "B", NULL };
+static const char *const PK_SOUND_7[] = { "'", ",", "^", "_", NULL };
 static const char *const PK_SOUND_8[] = { "z", NULL };
 static const char *const *const PATTERN_KEY_SOUND[9] = {
   PK_SOUND_0, PK_SOUND_1, PK_SOUND_2, PK_SOUND_3, PK_SOUND_4, PK_SOUND_5, PK_SOUND_6, PK_SOUND_7, PK_SOUND_8,
+};
+// SOUND's SECONDARY page ("numbers layout"), reached by pressing DOWN (see
+// prv_cycle_page) -- reuses N0..N7 (defined above for PAGE_KEY[PAGE_NUMBERS])
+// directly rather than a new set of literals, since they're already exactly
+// the single-glyph "1".."8" this needs. Key 8 is deliberately left empty
+// rather than showing "9": AC_NOTE_RATIO_DIGITS (alarm_calc.h) caps ratio
+// digits at 1-8, and this file's own PATTERN_KEY_SOUND has always kept
+// invalid digits off its tap-discoverable grids on principle (see that
+// table's own history) -- long-press-anywhere already reaches "9" as an
+// accepted low-discoverability edge case, which isn't license to also put it
+// on this primary, labeled page.
+static const char *const *const PATTERN_KEY_SOUND_NUMBERS[9] = {
+  N0, N1, N2, N3, N4, N5, N6, N7, PATTERN_KEY_EMPTY,
 };
 static const char *const PK_VIBE_0[] = { "1", NULL };
 static const char *const PK_VIBE_1[] = { "2", NULL };
@@ -202,14 +220,26 @@ struct MultitapKeyboard {
   bool numeric_mode;        // fixed to PAGE_NUMBERS; bottom-left key cycles
                             // */-/,/  instead of Shift/layout-cycle. Set via
                             // multitap_keyboard_set_numeric_mode().
-  bool pattern_mode;        // fixed to PAGE_NUMBERS; bottom-left key types
-                            // "-" and the space key types a literal space
-                            // (not "0") -- see multitap_keyboard_set_pattern_mode().
+  bool pattern_mode;        // `page` fixed to PAGE_NUMBERS; bottom-left key
+                            // cycles PATTERN_SYMS and the space key types a
+                            // literal space (not "0") -- see
+                            // multitap_keyboard_set_pattern_mode().
   bool pattern_notes_enabled; // pattern_mode only: character keys 0-8 pull
-                            // from PATTERN_KEY_SOUND (duration digit + note
-                            // letter) instead of PATTERN_KEY_VIBE (duration
-                            // digit only, no pitch) -- set alongside
-                            // pattern_mode, meaningless otherwise.
+                            // from PATTERN_KEY_SOUND/_NUMBERS (SOUND) instead
+                            // of PATTERN_KEY_VIBE (duration digit only, no
+                            // pitch) -- set alongside pattern_mode,
+                            // meaningless otherwise.
+  bool pattern_show_numbers; // SOUND pattern mode only (meaningless for VIBE
+                            // or outside pattern_mode): false = the note
+                            // layout (PATTERN_KEY_SOUND) is showing, true =
+                            // the numbers layout (PATTERN_KEY_SOUND_NUMBERS)
+                            // is, toggled by DOWN (see prv_cycle_page).
+                            // Deliberately a separate field rather than
+                            // reusing `page` itself for this -- toggling
+                            // `page` between PAGE_NUMBERS/PAGE_ALPHA would
+                            // reawaken prv_eff_glyphs's extended-character
+                            // block (page==PAGE_ALPHA), which has no
+                            // business firing in pattern mode.
 
   bool pending_active;
   int  pending_key;
@@ -306,9 +336,7 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
                           const char **out, int cap) {
   int n = 0;
   if (key == KEY_SHIFT && kb->pattern_mode) {
-    const char *const *syms = kb->pattern_notes_enabled ? PATTERN_SYMS_SOUND : PATTERN_SYMS_VIBE;
-    int count = kb->pattern_notes_enabled ? PATTERN_SYM_SOUND_COUNT : PATTERN_SYM_VIBE_COUNT;
-    for (int j = 0; j < count && n < cap; j++) out[n++] = syms[j];
+    for (int j = 0; j < PATTERN_SYM_COUNT && n < cap; j++) out[n++] = PATTERN_SYMS[j];
     return n;
   }
   if (key == KEY_SHIFT && kb->numeric_mode) {
@@ -316,12 +344,19 @@ static int prv_eff_glyphs(MultitapKeyboard *kb, int page, int key,
     return n;
   }
   // Pattern mode's character keys (0-8) pull from their own glyph tables
-  // instead of PAGE_KEY[PAGE_NUMBERS] -- a plain digit-per-key table
-  // wouldn't fit a duration digit AND (for sound) a note letter on the
-  // same key. `key` is guaranteed 0-8 here: KEY_SHIFT already returned
-  // above, and callers never pass KEY_SPACE/KEY_DEL to this function.
+  // instead of PAGE_KEY -- `key` is guaranteed 0-8 here: KEY_SHIFT already
+  // returned above, and callers never pass KEY_SPACE/KEY_DEL to this
+  // function. SOUND additionally picks between its two pages via
+  // pattern_show_numbers (see that field's own doc comment) -- deliberately
+  // NOT via the `page` param itself, which stays pinned to PAGE_NUMBERS for
+  // pattern mode's whole lifetime (see multitap_keyboard_set_pattern_mode),
+  // so the `page == PAGE_ALPHA` extended-character check below can never
+  // fire during pattern mode regardless of which of SOUND's two pages is
+  // showing.
   const char *const *base = (kb->pattern_mode)
-    ? (kb->pattern_notes_enabled ? PATTERN_KEY_SOUND[key] : PATTERN_KEY_VIBE[key])
+    ? (kb->pattern_notes_enabled
+         ? (kb->pattern_show_numbers ? PATTERN_KEY_SOUND_NUMBERS[key] : PATTERN_KEY_SOUND[key])
+         : PATTERN_KEY_VIBE[key])
     : PAGE_KEY[page][key];
   for (int j = 0; base[j] && n < cap; j++) out[n++] = base[j];
   if (page == PAGE_ALPHA) {
@@ -413,8 +448,19 @@ static void prv_arm_commit_timer(MultitapKeyboard *kb) {
   kb->commit_timer = app_timer_register(ms, prv_commit_timer_cb, kb);
 }
 
+// numeric_mode stays locked to its one page. pattern_mode's VIBE side also
+// stays locked (its one page already IS the digits, nothing to cycle to);
+// SOUND side toggles pattern_show_numbers instead of `page` itself -- see
+// that field's own doc comment for why `page` isn't reused for this.
 static void prv_cycle_page(MultitapKeyboard *kb) {
-  if (kb->numeric_mode || kb->pattern_mode) return;   // locked to the digits page in this mode
+  if (kb->numeric_mode) return;
+  if (kb->pattern_mode) {
+    if (!kb->pattern_notes_enabled) return;
+    prv_commit_pending(kb);
+    kb->pattern_show_numbers = !kb->pattern_show_numbers;
+    layer_mark_dirty(kb->layer);
+    return;
+  }
   prv_commit_pending(kb);
   kb->page = (kb->page + 1) % PAGE_COUNT;
   layer_mark_dirty(kb->layer);
@@ -483,8 +529,7 @@ static void prv_do_space(MultitapKeyboard *kb) {
   prv_commit_pending(kb);
   // Numeric mode repurposes the space key as digit "0" (there's no
   // dedicated 0 key among the 9 character keys); pattern mode instead needs
-  // a real space to separate tokens, and gets "0" from the bottom-left
-  // key's cycle instead (see PATTERN_SYMS_SOUND/_VIBE) -- so it must NOT inherit this.
+  // a real space to separate tokens -- so it must NOT inherit this.
   if (kb->page == PAGE_NUMBERS && !kb->pattern_mode) { prv_append(kb, "0"); prv_recompute_autocap(kb); return; }
 
   prv_append(kb, " ");
@@ -1133,6 +1178,7 @@ void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool
   if (!kb) return;
   kb->pattern_mode = enabled;
   kb->pattern_notes_enabled = notes_enabled;
+  kb->pattern_show_numbers = false;   // always start on the note layout, never left over from a prior session
   if (enabled) kb->page = PAGE_NUMBERS;
   layer_mark_dirty(kb->layer);
 }

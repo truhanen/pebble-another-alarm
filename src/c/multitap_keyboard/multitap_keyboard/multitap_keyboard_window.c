@@ -166,6 +166,11 @@ static void prv_select_long(ClickRecognizerRef rec, void *ctx) {
 }
 static void prv_down_click(ClickRecognizerRef rec, void *ctx) {
   multitap_keyboard_cycle_page(s_keyboard);      // Down cycles the keyboard type (layout)
+  // Cycling a pattern-mode page can commit a still-pending multi-tap glyph
+  // (prv_cycle_page calls prv_commit_pending before flipping pages) -- every
+  // other buffer-mutating action here already notifies afterward, this one
+  // needs to too. A no-op outside pattern mode.
+  prv_notify_live_text();
 }
 // Down held = backspace, with the same hold-to-repeat cadence as the on-screen
 // DEL key. The down handler erases once and arms the repeat; the up handler

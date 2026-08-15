@@ -99,23 +99,31 @@ void multitap_keyboard_set_max_len(MultitapKeyboard *kb, int max_bytes);
 // multitap_keyboard_window_push_numeric() for the full-screen wrapper).
 void multitap_keyboard_set_numeric_mode(MultitapKeyboard *kb, bool enabled);
 
-// Like numeric mode (fixed to PAGE_NUMBERS, no ABC/symbols page reachable),
-// but for note/break duration patterns (e.g. "1C 2D 1- 1C 2D" with notes,
-// "2 1- 2 1- 2" without) instead of cron syntax: the 9 character keys pull
-// from their own small glyph tables instead of PAGE_NUMBERS's plain 1-per-
-// key digits (a duration digit 1/2/4/8, plus -- when `notes_enabled` -- a note
-// letter, since a plain digit-per-key table can't fit both on one key); the
-// bottom-left key types a single, non-cycling "-" (a break/pause marker,
-// e.g. "1-") instead of multi-tap-cycling multiple symbols; and the space
-// key types a literal space instead of being repurposed as "0" (numeric
-// mode's own special case, which pattern mode needs to NOT inherit, since
-// patterns are space-separated). `notes_enabled` selects which per-key
-// table is used (sound patterns carry a pitch per on-beat; vibe patterns
-// don't) -- see PATTERN_KEY_SOUND/PATTERN_KEY_VIBE in multitap_keyboard.c.
-// The text field itself renders through the same shared prv_draw_text_fitted()
-// every other mode uses -- on-beat/break tokens don't need distinct styling.
-// Call once, right after creating the keyboard (or via
-// multitap_keyboard_window_push_pattern() for the full-screen wrapper).
+// Like numeric mode (fixed to PAGE_NUMBERS, no ABC/symbols page reachable
+// via the usual Shift-key cycle), but for ABC-notation-subset sound/vibe
+// patterns (e.g. "^C' z/2 _D," with notes, "1 z/2 1" without) instead of
+// cron syntax: the 9 character keys pull from their own glyph tables
+// instead of PAGE_NUMBERS's plain 1-per-key digits -- see PATTERN_KEY_SOUND/
+// PATTERN_KEY_VIBE in multitap_keyboard.c. `notes_enabled` selects which
+// table (sound patterns carry a pitch per on-beat; vibe patterns don't).
+//
+// SOUND's own character keys additionally cycle between TWO pages via the
+// DOWN button (unlike every other locked mode, including VIBE): a "note
+// layout" (note letters C-B, plus the rest marker 'z') and a "numbers
+// layout" (plain duration digits 1-8) -- see PATTERN_KEY_SOUND_NUMBERS and
+// prv_cycle_page. Duration digits are also always reachable by long-pressing
+// ANY character key regardless of which page is showing (the widget's own
+// generic long-press-inserts-a-keypad-digit behavior, unaffected by pattern
+// mode). The bottom-left key cycles a small fixed symbol set (octave
+// markers, sharp/flat accidentals, and for SOUND a fraction slash) instead
+// of the usual multi-tap ABC/symbols cycle, identically on both of SOUND's
+// pages; the space key types a literal space instead of being repurposed as
+// "0" (numeric mode's own special case, which pattern mode needs to NOT
+// inherit, since patterns are space-separated). The text field itself
+// renders through the same shared prv_draw_text_fitted() every other mode
+// uses -- on-beat/rest tokens don't need distinct styling. Call once, right
+// after creating the keyboard (or via multitap_keyboard_window_push_pattern()
+// for the full-screen wrapper, which always starts on the note layout).
 void multitap_keyboard_set_pattern_mode(MultitapKeyboard *kb, bool enabled, bool notes_enabled);
 
 // Behavior settings.
