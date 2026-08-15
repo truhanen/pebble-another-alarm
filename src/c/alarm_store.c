@@ -235,6 +235,33 @@ void store_save_vibe_pattern(int pattern) {
   persist_write_int(PERSIST_KEY_VIBE_PATTERN, pattern);
 }
 
+int store_load_default_sound_pattern_kind(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_SOUND_PATTERN_KIND)) { return 0; }   // default Preset
+  return persist_read_int(PERSIST_KEY_DEFAULT_SOUND_PATTERN_KIND);
+}
+
+void store_save_default_sound_pattern_kind(int kind) {
+  persist_write_int(PERSIST_KEY_DEFAULT_SOUND_PATTERN_KIND, kind);
+}
+
+int store_load_default_sound_preset(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_SOUND_PRESET)) { return 0; }   // default Triple
+  return persist_read_int(PERSIST_KEY_DEFAULT_SOUND_PRESET);
+}
+
+void store_save_default_sound_preset(int preset) {
+  persist_write_int(PERSIST_KEY_DEFAULT_SOUND_PRESET, preset);
+}
+
+uint32_t store_load_default_custom_tune_id(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID)) { return 0; }   // no reference
+  return (uint32_t)persist_read_int(PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID);
+}
+
+void store_save_default_custom_tune_id(uint32_t id) {
+  persist_write_int(PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID, (int32_t)id);
+}
+
 int store_load_default_snooze_minutes(void) {
   if (!persist_exists(PERSIST_KEY_DEFAULT_SNOOZE_MINUTES)) { return 9; }
   return persist_read_int(PERSIST_KEY_DEFAULT_SNOOZE_MINUTES);

@@ -16,6 +16,17 @@
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
+// Default sound for NEWLY CREATED alarms -- a watch-side equivalent of
+// PERSIST_KEY_VIBE_PATTERN's own "seed new alarms with this" role, but
+// needing three fields instead of one since sound's default can be either
+// a factory preset OR a saved custom tune (see Alarm's own sound_pattern_
+// kind/sound_preset/custom_tune_id, alarm_calc.h, which this mirrors
+// exactly). Set on-watch by long-pressing SELECT on a row in the Tune
+// picker (main.c) -- no phone/AppMessage involvement, unlike every other
+// key in this block.
+#define PERSIST_KEY_DEFAULT_SOUND_PATTERN_KIND 17   // 0=Preset, 2=Library
+#define PERSIST_KEY_DEFAULT_SOUND_PRESET       18   // valid iff kind==0
+#define PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID     19   // valid iff kind==2
 // Custom-tune library -- a separate persisted table from Alarm/STORE_SCHEMA
 // below, with its own schema counter (TUNE_STORE_SCHEMA) since it's a
 // logically independent concern: a future Alarm-only schema bump shouldn't
@@ -347,6 +358,19 @@ void store_save_first_day_of_week(int day);
 // not read at ring time; each alarm rings with its own vibe_pattern.
 int store_load_vibe_pattern(void);
 void store_save_vibe_pattern(int pattern);
+
+// Default sound for newly created alarms -- see PERSIST_KEY_DEFAULT_SOUND_
+// PATTERN_KIND's own doc comment above. Set on-watch (long-press SELECT in
+// the Tune picker), not phone-configured. All three default to 0 when
+// unset, meaning "Preset 0" (Triple) -- the same value a brand-new alarm's
+// sound_pattern_kind/sound_preset already got for free via memset before
+// this existed.
+int store_load_default_sound_pattern_kind(void);
+void store_save_default_sound_pattern_kind(int kind);
+int store_load_default_sound_preset(void);
+void store_save_default_sound_preset(int preset);
+uint32_t store_load_default_custom_tune_id(void);
+void store_save_default_custom_tune_id(uint32_t id);
 
 // Default snooze duration (minutes) pre-filled for newly created alarms
 // (defaults to 9 when unset).

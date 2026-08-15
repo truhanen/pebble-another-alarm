@@ -131,6 +131,14 @@ static int s_audio_volume = 0;        // 0-100, 0 = sound disabled (global, like
 static bool s_default_vibration_enabled = true;   // pre-fills new alarms' own toggles
 static bool s_default_sound_enabled = true;
 static bool s_default_increasing_volume = false;
+// Default SOUND for newly created alarms -- the watch-side (long-press
+// SELECT in the Tune picker), sound-side equivalent of s_default_vibe_
+// pattern above, mirroring Alarm's own sound_pattern_kind/sound_preset/
+// custom_tune_id fields exactly since sound's default can be either a
+// factory preset or a saved custom tune (see pattern_select_select_long).
+static int s_default_sound_pattern_kind = 0;   // 0=Preset, 2=Library
+static int s_default_sound_preset = 0;         // valid iff kind==0
+static uint32_t s_default_custom_tune_id = 0;  // valid iff kind==2
 
 static uint32_t next_alarm_id(void) {
   uint32_t id = s_next_local_id;
@@ -157,6 +165,9 @@ static void persist_all(void) {
   store_save_default_vibration_enabled(s_default_vibration_enabled);
   store_save_default_sound_enabled(s_default_sound_enabled);
   store_save_default_increasing_volume(s_default_increasing_volume);
+  store_save_default_sound_pattern_kind(s_default_sound_pattern_kind);
+  store_save_default_sound_preset(s_default_sound_preset);
+  store_save_default_custom_tune_id(s_default_custom_tune_id);
 }
 
 // Lowest set bit in cron_hour_mask/cron_min_mask -- the day's earliest
@@ -782,7 +793,7 @@ static const SoundPreset SOUND_PRESETS[] = {
   // trailing break: the natural gap before the next ALARM_BUZZ_INTERVAL_MS
   // buzz cycle already covers it, so a stored trailing break would just be
   // dead air twice over.
-  { "Triple (default)", "C z C z C" },
+  { "Triple", "C z C z C" },
   { "Double", "C z C" },
   { "Triple slow", "C2 z2 C2 z2 C2" },
   { "Analog bell", "C G C G C G C G" },
@@ -3566,12 +3577,23 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
     label = SOUND_PRESETS[preset_idx].label;
     strncpy(pattern_text, SOUND_PRESETS[preset_idx].pattern, sizeof(pattern_text) - 1);
     has_pattern = true;
+    // Right-aligned marker for whichever preset is currently long-press-set
+    // as the default for new alarms (see pattern_select_select_long) --
+    // this used to be permanently baked into SOUND_PRESETS[0]'s own label
+    // string ("Triple (default)"); it's a dynamic, movable marker now.
+    if (s_default_sound_pattern_kind == 0 && preset_idx == s_default_sound_preset) {
+      snprintf(value, sizeof(value), "default");
+    }
   } else if (tune_idx >= 0 && tune_idx < s_tune_count) {
     label = s_tunes[tune_idx].name;
     ac_sound_pattern_format(pattern_text, sizeof(pattern_text), s_tunes[tune_idx].pattern,
                             s_tunes[tune_idx].pattern_note, s_tunes[tune_idx].pattern_len);
     has_pattern = true;
-    snprintf(value, sizeof(value), "(custom)");   // the one collapsed-line cue distinguishing a custom tune from a preset
+    // "*" is the one collapsed-line cue distinguishing a custom tune from a
+    // preset (replacing the old parenthesized "(custom)"); combined with
+    // "default" (see above) when this tune is ALSO the current default.
+    bool is_default = (s_default_sound_pattern_kind == 2 && s_tunes[tune_idx].id == s_default_custom_tune_id);
+    snprintf(value, sizeof(value), is_default ? "*, default" : "*");
   }
 
   if (has_pattern && pattern_select_row_is_selected(s_pattern_select_menu, row)) {
@@ -3771,6 +3793,42 @@ static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
   MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
   pattern_select_select(s_pattern_select_menu, &idx, ctx);
 }
+
+// Long-press SELECT in the SOUND picker marks the highlighted row (a preset
+// or a saved tune) as the default sound newly created alarms are seeded
+// with (see start_new_alarm_flow) -- a no-op in the Vibration picker, and
+// on Off/"+ Custom tune"/Help (none of which is a real preset/tune to point
+// a default at). Row-index derivation deliberately mirrors pattern_select_
+// select's own early-return, range-tested shape (not pattern_select_
+// draw_row's subtract-then-bounds-check shape) -- mixing the two is exactly
+// how an off-by-one sneaks in: a bare subtraction without also checking
+// `< s_tune_count` would let a long-press on "+ Custom tune" read one past
+// the last real tune. Reloads the picker in place rather than popping it --
+// this is "mark as default", not "apply to the currently-open alarm", so
+// unlike a short-press commit, the picker stays open; re-marking the
+// already-current default is a harmless no-op overwrite, same as this
+// picker's other commit branches never guard against redundant writes.
+static void pattern_select_select_long(ClickRecognizerRef r, void *ctx) {
+  if (s_pattern_select_kind != PATTERN_SELECT_SOUND) { return; }
+  MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
+  int row = idx.row;
+  if (row == 0 || row == pattern_select_sound_help_row()) { return; }   // Off / Help
+  int tunes_base = PATTERN_SELECT_SOUND_TUNES_BASE;
+  int new_row = pattern_select_sound_new_row();
+  if (row >= tunes_base && row < new_row) {
+    s_default_sound_pattern_kind = 2;
+    s_default_custom_tune_id = s_tunes[row - tunes_base].id;
+  } else if (row == new_row) {
+    return;   // "+ Custom tune" -- nothing to mark default
+  } else {
+    int preset_idx = (row >= 1 && row <= SOUND_PRESET_COUNT) ? row - 1 : -1;
+    if (preset_idx < 0) { return; }
+    s_default_sound_pattern_kind = 0;
+    s_default_sound_preset = (uint8_t)preset_idx;
+  }
+  persist_all();
+  menu_layer_reload_data(s_pattern_select_menu);
+}
 // SOUND rows resize on selection (expand-on-navigate, see
 // pattern_select_cell_height) -- MenuLayer caches each row's cell height and
 // only re-queries it on menu_layer_reload_data(), not on a plain selection
@@ -3816,6 +3874,7 @@ static void pattern_select_back(ClickRecognizerRef r, void *ctx) {
 }
 static void pattern_select_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_SELECT, pattern_select_select_click);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, pattern_select_select_long, NULL);
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, pattern_select_up_click);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, pattern_select_down_click);
   window_single_click_subscribe(BUTTON_ID_BACK, pattern_select_back);
@@ -4189,6 +4248,17 @@ static void custom_tune_on_delete_choice(int choice, void *ctx) {
   remove_tune_at(s_custom_tune_idx);
   persist_tunes();
   revert_alarms_using_tune(id);
+  // revert_alarms_using_tune only calls persist_all() when it actually
+  // reverted an alarm -- if this tune wasn't referenced by any existing
+  // alarm but WAS the default for new ones, that persist would never fire,
+  // silently leaving this reset unsaved until some later, unrelated
+  // persist_all() call (or lost outright across a restart before one
+  // happens). Persist unconditionally here instead of relying on it.
+  if (s_default_sound_pattern_kind == 2 && s_default_custom_tune_id == id) {
+    s_default_sound_pattern_kind = 0;
+    s_default_sound_preset = 0;
+    persist_all();
+  }
   window_stack_pop(true);   // this screen -- back to the Tune picker
   if (s_pattern_select_menu) {
     menu_layer_reload_data(s_pattern_select_menu);
@@ -4362,6 +4432,30 @@ static void start_new_alarm_flow(void) {
   s_draft.enabled = true;
   s_draft.vibration_enabled = s_default_vibration_enabled;
   s_draft.vibe_pattern = (uint8_t)s_default_vibe_pattern;
+  // Sound's own default mirrors vibe_pattern's role above, but needs a
+  // kind/preset/tune-id triple instead of one field, since the watch-set
+  // default (see pattern_select_select_long) can point at either a factory
+  // preset or a saved custom tune. sound_enabled itself stays independently
+  // seeded from s_default_sound_enabled right below, same as always -- a
+  // new alarm can end up with a default tune set but sound_enabled=false,
+  // exactly like every existing alarm's own sound_preset/custom_tune_id
+  // already coexists with its own sound_enabled today.
+  s_draft.sound_pattern_kind = (uint8_t)s_default_sound_pattern_kind;
+  if (s_default_sound_pattern_kind == 2) {
+    int ti = find_tune_by_id(s_default_custom_tune_id);
+    if (ti >= 0) {
+      s_draft.custom_tune_id = s_default_custom_tune_id;
+    } else {
+      // Stale default (the tune was deleted without going through
+      // custom_tune_on_delete_choice's own reset, or a TUNE_STORE_SCHEMA
+      // wipe) -- fall back to the default preset, same defensive style
+      // used elsewhere for a stale custom_tune_id (e.g. alarm_play_audio).
+      s_draft.sound_pattern_kind = 0;
+      s_draft.sound_preset = (uint8_t)s_default_sound_preset;
+    }
+  } else {
+    s_draft.sound_preset = (uint8_t)s_default_sound_preset;
+  }
   s_draft.sound_enabled = s_default_sound_enabled;
   s_draft.increasing_volume = s_default_increasing_volume;
   // 0 here (already the case when the phone's "Enable snooze" toggle is
@@ -4837,6 +4931,9 @@ static void init(void) {
   s_default_vibration_enabled = store_load_default_vibration_enabled();
   s_default_sound_enabled = store_load_default_sound_enabled();
   s_default_increasing_volume = store_load_default_increasing_volume();
+  s_default_sound_pattern_kind = store_load_default_sound_pattern_kind();
+  s_default_sound_preset = store_load_default_sound_preset();
+  s_default_custom_tune_id = store_load_default_custom_tune_id();
 
   // If launched by a wakeup, the firing event was already consumed.
   WakeupId wid; int32_t cookie;
