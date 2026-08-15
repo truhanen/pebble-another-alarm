@@ -782,9 +782,9 @@ static const SoundPreset SOUND_PRESETS[] = {
   // trailing break: the natural gap before the next ALARM_BUZZ_INTERVAL_MS
   // buzz cycle already covers it, so a stored trailing break would just be
   // dead air twice over.
-  { "Triple (default)", "C2 z2 C2 z2 C2" },
-  { "Double", "C2 z2 C2" },
-  { "Triple fast", "C z C z C" },
+  { "Triple (default)", "C z C z C" },
+  { "Double", "C z C" },
+  { "Triple slow", "C2 z2 C2 z2 C2" },
   { "Analog bell", "C G C G C G C G" },
   { "Celebration", "C3 z C2 D6 C6 F6 E6" },
   { "Lullaby", "G,8 _B,4 A,2 G,2 A,4 D4 D,6" },
