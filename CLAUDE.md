@@ -109,7 +109,7 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronHour` | 10026 | string | Raw cron hour field, parsed into `cron_hour_mask`. |
 | `TestAlarmCronDow` | 10027 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
 | `TestAlarmCronFiredNow` | 10028 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
-| `TestAlarmAutoDismiss` | 10029 | int 0/1 | Sets `auto_dismiss` (see "Key design points" below). |
+| `TestAlarmAutoDismiss` | 10029 | int 0-2 | Sets `auto_dismiss_mode` directly (0=Off, 1=On, 2=On+hide — see "Key design points" below). |
 | `TestAlarmVibePattern` | 10030 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
 | `TestAlarmIncreasingVolume` | 10031 | int 0/1 | Sets `increasing_volume` directly (see "Key design points" below). |
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
@@ -438,25 +438,40 @@ in this app at all, so every message key is now just an ordinary scalar at
   `Alarm[MAX_ALARMS]`-shaped variable is a stack-budget risk that gets
   worse every time `Alarm` grows, and won't show up in `pebble build`, only
   by actually installing over real persisted data.
-- **`auto_dismiss` alarms still show the ring screen, but only briefly**:
-  `trigger_alarm()` branches on `a->auto_dismiss` — an auto-dismiss alarm fires
+- **`auto_dismiss_mode` is a 3-state field (Off/On/On+hide), not a bool**:
+  `trigger_alarm()` branches on `a->auto_dismiss_mode` — mode 1 ("On") fires
   vibration/sound (via its own existing `vibration_enabled`/`sound_enabled`
   toggles) **exactly once** instead of calling `alarm_buzz_start()`'s
-  repeating 4s cadence, and arms a one-shot `s_alarm_auto_dismiss_timer`
-  (`ALARM_AUTO_DISMISS_MS`, ~2s) that calls `alarm_do_stop()` — the same
-  end state as the user pressing Stop — instead of waiting indefinitely.
-  `alarm_stop`/`alarm_snooze` are refactored so `alarm_stop` is a thin
-  wrapper around `alarm_do_stop()` (shared by the timer callback
-  `alarm_auto_dismiss_cb`), and manually pressing Stop or Snooze during that
-  couple-second window cancels the pending timer first
-  (`alarm_cancel_auto_dismiss()`, also called from `alarm_window_unload` as a
-  safety net, and defensively at the top of every `trigger_alarm()` call so
-  a stale timer can never fire against whichever alarm gets shown next) —
-  otherwise it could fire moments later and clobber a snooze the user just
-  set, or re-run the "show next pending" chain a second time. Toggled via
-  the edit menu's `EDIT_ROW_AUTO_DISMISS` ("Auto-dismiss" On/Off) row, alongside
-  Vibration/Sound; no wizard step, defaults to off (like every other bool
-  field not driven by a phone-config default).
+  repeating 4s cadence, shows the usual red ring screen, and arms a one-shot
+  `s_alarm_auto_dismiss_timer` (`ALARM_AUTO_DISMISS_MS`, ~2s) that calls
+  `alarm_do_stop()` — the same end state as the user pressing Stop — instead
+  of waiting indefinitely. Mode 2 ("On, hide") fires that same one-shot
+  signal but skips the ring screen (and the timer) entirely: `trigger_alarm()`
+  returns early, before ever creating/pushing `s_alarm_window` or touching
+  the title buffers, straight into calling `alarm_do_stop()` itself —
+  reusing the exact same stop bookkeeping mode 1's timer callback uses,
+  just invoked synchronously instead of after a delay. `alarm_finish_ring()`'s
+  non-wakeup-launch branch is guarded with `s_alarm_window &&
+  window_stack_contains_window(s_alarm_window)` specifically because of this
+  — a mode-2 alarm can reach it without `s_alarm_window` ever having been
+  created (e.g. the very first alarm ever triggered is mode 2), unlike every
+  other caller of `alarm_finish_ring()`, which always runs after a real ring
+  screen was shown. `alarm_stop`/`alarm_snooze` are refactored so
+  `alarm_stop` is a thin wrapper around `alarm_do_stop()` (shared by the
+  timer callback `alarm_auto_dismiss_cb` and mode 2's direct call), and
+  manually pressing Stop or Snooze during mode 1's couple-second window
+  cancels the pending timer first (`alarm_cancel_auto_dismiss()`, also called
+  from `alarm_window_unload` as a safety net, and defensively at the top of
+  every `trigger_alarm()` call so a stale timer can never fire against
+  whichever alarm gets shown next) — otherwise it could fire moments later
+  and clobber a snooze the user just set, or re-run the "show next pending"
+  chain a second time. Cycled via the edit menu's `EDIT_ROW_AUTO_DISMISS`
+  ("Auto-dismiss" Off/On/"On, hide") row, alongside Vibration/Sound; no
+  wizard step, defaults to Off (like every other field not driven by a
+  phone-config default). The field used to be `bool auto_dismiss` — widened
+  to `uint8_t auto_dismiss_mode` in the same struct position with no
+  `STORE_SCHEMA` bump, since `bool`/`uint8_t` are the same size on this
+  target and the two old values (0/1) keep their exact old meaning.
 - **Dismissing an alarm exits straight to the watchface if the app wasn't
   already open**: `s_launched_by_wakeup` (`main.c`, set in `init()` from
   `wakeup_get_launch_event()`'s return value) is true only when this whole

@@ -175,11 +175,19 @@ typedef struct {
   uint8_t snooze_max;       // 0 = unlimited
   bool vibration_enabled;
   bool sound_enabled;
-  bool auto_dismiss;            // ring screen fires vibration/sound (per the two
-                             // toggles above) exactly once instead of the
-                             // usual repeating buzz, then auto-dismisses
-                             // itself after a couple seconds -- same end
-                             // state as the user pressing Stop. See main.c's
+  uint8_t auto_dismiss_mode; // 0 = Off (normal repeating ring). 1 = On: fires
+                             // vibration/sound (per the two toggles above)
+                             // exactly once instead of the usual repeating
+                             // buzz, shows the ring screen, then
+                             // auto-dismisses itself after a couple seconds
+                             // -- same end state as the user pressing Stop.
+                             // 2 = On, hide: same one-shot signal, but the
+                             // ring screen is never shown at all -- finishes
+                             // immediately instead of arming a timer. Same
+                             // 1-byte size/position as the old `bool
+                             // auto_dismiss` field it replaced, so existing
+                             // persisted 0/1 values keep their old meaning
+                             // with no migration needed. See main.c's
                              // trigger_alarm()/alarm_auto_dismiss_cb().
   bool timeline_pin_enabled; // reserved placeholder; no push logic exists yet
   bool alarm_pending;        // due, still owed a ring screen

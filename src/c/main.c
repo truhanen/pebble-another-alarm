@@ -1354,7 +1354,10 @@ static void alarm_finish_ring(void) {
   if (show_next_pending_alarm()) { return; }
   if (s_launched_by_wakeup) {
     window_stack_pop_all(false);
-  } else {
+  } else if (s_alarm_window && window_stack_contains_window(s_alarm_window)) {
+    // Guarded (unlike a plain unconditional window_stack_remove) because an
+    // auto_dismiss_mode==2 ("hide") alarm can reach here without the ring
+    // window ever having been created at all.
     window_stack_remove(s_alarm_window, true);
   }
 }
@@ -1502,6 +1505,23 @@ static void alarm_window_unload(Window *w) {
 static void trigger_alarm(int idx, int count) {
   if (idx < 0 || idx >= s_count) { return; }
   const Alarm *a = &s_alarms[idx];
+  s_alarm_idx = idx;
+
+  if (a->auto_dismiss_mode == 2) {
+    // On, hide: fire the one-shot signal same as mode 1, but never create or
+    // show the ring screen at all -- finish (and chain to the next pending
+    // alarm, if any) immediately instead of arming the self-dismiss timer.
+    alarm_cancel_auto_dismiss();
+    s_alarm_buzz_start_s = now_s();
+    s_alarm_buzz_count = 0;
+    if (a->vibration_enabled) { alarm_vibrate(a); }
+#if PBL_SPEAKER
+    if (a->sound_enabled) { alarm_play_audio(a, alarm_current_volume(a)); }
+#endif // PBL_SPEAKER
+    alarm_do_stop();
+    return;
+  }
+
   char time_buf[16];
   if (a->is_cron) {
     // A cron alarm has no single fixed hour/minute to show -- its own
@@ -1517,7 +1537,6 @@ static void trigger_alarm(int idx, int count) {
   else { snprintf(s_alarm_title_buf, sizeof(s_alarm_title_buf), "%s", time_buf); }
   if (count > 1) { snprintf(s_alarm_sub_buf, sizeof(s_alarm_sub_buf), "+%d more", count - 1); }
   else { s_alarm_sub_buf[0] = '\0'; }
-  s_alarm_idx = idx;
 
   if (!s_alarm_window) {
     s_alarm_window = window_create();
@@ -1539,7 +1558,7 @@ static void trigger_alarm(int idx, int count) {
   // alarm_buzz_start() at all.
   s_alarm_buzz_start_s = now_s();
   s_alarm_buzz_count = 0;
-  if (a->auto_dismiss) {
+  if (a->auto_dismiss_mode == 1) {
     if (a->vibration_enabled) { alarm_vibrate(a); }
 #if PBL_SPEAKER
     // Note: auto_dismiss only ever buzzes once, at buzz_count=0, so an
@@ -2826,7 +2845,8 @@ static void edit_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cel
       break;
     case EDIT_ROW_AUTO_DISMISS:
       key = "Auto-dismiss";
-      snprintf(value, sizeof(value), "%s", a->auto_dismiss ? "On" : "Off");
+      snprintf(value, sizeof(value), "%s",
+               a->auto_dismiss_mode == 2 ? "On, hide" : a->auto_dismiss_mode == 1 ? "On" : "Off");
       break;
     case EDIT_ROW_DELETE:
       key = "Delete";   // action row, no value
@@ -2999,7 +3019,7 @@ static void edit_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
       signal_edit_window_push();
       break;
     case EDIT_ROW_AUTO_DISMISS:
-      a->auto_dismiss = !a->auto_dismiss;
+      a->auto_dismiss_mode = (a->auto_dismiss_mode + 1) % 3;
       persist_all();
       menu_layer_reload_data(s_edit_menu);
       break;
@@ -4692,7 +4712,7 @@ static bool handle_test_message(DictionaryIterator *iter) {
         a->cron_last_fired_min = (t->value->int32 != 0) ? (int32_t)(now_s() / 60) : -1;
         changed = true;
       }
-      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoDismiss))) { a->auto_dismiss = t->value->int32 != 0; changed = true; }
+      if ((t = dict_find(iter, MESSAGE_KEY_TestAlarmAutoDismiss))) { a->auto_dismiss_mode = (uint8_t)t->value->int32; changed = true; }
       // Sound's kind (0=Preset, 2=Library) is a plain int; MESSAGE_KEY_
       // TestAlarmSoundCustomPattern used to set an inline-Custom (kind==1)
       // pattern here the same way vibe's own hook below still does, but
