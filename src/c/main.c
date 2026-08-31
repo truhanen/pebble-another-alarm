@@ -305,17 +305,18 @@ static MenuLayer *itemized_menu_create(Layer *root, GRect bounds, MenuLayerCallb
 // ================================= main list =================================
 
 static uint16_t ml_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
-  return (uint16_t)(s_count + 1);   // +1 for the trailing "+ New alarm" row
+  return (uint16_t)(s_count + 1);   // +1 for the leading "+ New alarm" row
 }
 
 #define ML_ROW_H 58   // taller now that line 2 matches timer's detail-row font size (24pt, not 18pt)
-// The trailing "+ New alarm" row has no second line, so it only needs one
+// The leading "+ New alarm" row has no second line, so it only needs one
 // row's worth of height, not the two-line alarm rows' ML_ROW_H — same
-// single-row height as the cron/repeat/confirm/edit itemized menus.
-#define ML_NEW_ROW_H 34
+// single-row height as the cron/repeat/confirm/edit itemized menus, minus
+// 3px of vertical extent on request.
+#define ML_NEW_ROW_H 31
 
 static int16_t ml_cell_height(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
-  return (cell_index->row == s_count) ? ML_NEW_ROW_H : ML_ROW_H;
+  return (cell_index->row == 0) ? ML_NEW_ROW_H : ML_ROW_H;
 }
 
 // Row tint by state, same "state tints the row, selected row gets a
@@ -350,8 +351,10 @@ static void ml_row_colors(bool enabled, bool snoozing, bool skip_pending, bool s
 }
 
 static bool ml_is_boundary_row(int row) {
-  return row < s_count;   // every alarm row has a divider below it; the
-                          // trailing "+ New alarm" row is the list's end
+  // Row 0 ("+ New alarm") gets a divider below it only when there's an
+  // alarm list beneath it to separate from; every alarm row gets one
+  // except the very last, which is now the true end of the list.
+  return (row == 0) ? (s_count > 0) : (row < s_count);
 }
 
 // Leading play/stop/skip indicator for an alarm row's first line, ported
@@ -405,8 +408,12 @@ static void ml_draw_new_alarm_row(GContext *ctx, const Layer *cell_layer, bool s
   graphics_context_set_fill_color(ctx, selected ? GColorBlack : GColorWhite);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, selected ? GColorWhite : GColorBlack);
+  // GOTHIC reserves headroom above the caps, so a measured/centered box
+  // still sits low (same issue/fix as main_hint_update_proc's own "rise") --
+  // nudged 1px lower than the exact optical center, on request.
+  const int rise = 3;
   graphics_draw_text(ctx, "+ New alarm", fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                     GRect(4, (b.size.h - 26) / 2, b.size.w - 8, 26),
+                     GRect(4, (b.size.h - 26) / 2 - rise, b.size.w - 8, 26),
                      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
 }
 
@@ -538,8 +545,8 @@ static void ml_draw_alarm_row(GContext *ctx, const Layer *cell_layer, int idx, i
 static void ml_draw_row(GContext *ctx, const Layer *cell_layer, MenuIndex *cell_index, void *ctx2) {
   int row = cell_index->row;
   MenuIndex sel = menu_layer_get_selected_index(s_menu);
-  if (row == s_count) { ml_draw_new_alarm_row(ctx, cell_layer, sel.row == row); return; }
-  ml_draw_alarm_row(ctx, cell_layer, s_order[row], row, sel.row == row);
+  if (row == 0) { ml_draw_new_alarm_row(ctx, cell_layer, sel.row == row); return; }
+  ml_draw_alarm_row(ctx, cell_layer, s_order[row - 1], row, sel.row == row);
 }
 
 // Short-press SELECT on an alarm row cycles its state directly, with no
@@ -593,8 +600,8 @@ static void ml_dismiss_snooze(int idx) {
 
 static void ml_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   int row = cell_index->row;
-  if (row == s_count) { start_new_alarm_flow(); return; }
-  int idx = s_order[row];
+  if (row == 0) { start_new_alarm_flow(); return; }
+  int idx = s_order[row - 1];
   // Short-press on a snoozing alarm dismisses the snooze instead of cycling
   // enabled/disabled/skip -- the state cycle only resumes once it's no
   // longer snoozing.
@@ -610,8 +617,8 @@ static void ml_select(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
 // behind a long-press instead of the previous single short-press.
 static void ml_select_long(MenuLayer *ml, MenuIndex *cell_index, void *ctx) {
   int row = cell_index->row;
-  if (row == s_count) { return; }   // no long-press action on "+ New alarm"
-  open_edit_window(s_order[row]);
+  if (row == 0) { return; }   // no long-press action on "+ New alarm"
+  open_edit_window(s_order[row - 1]);
 }
 
 // ================================= scheduling =================================
@@ -4502,8 +4509,8 @@ static Layer *bottom_bar_attach(Layer *root) {
 
 // One-alarm hint, adapted from pebble-another-timer's empty_hint_update_proc
 // (its s_count == 1 branch): drawn into the blank space below the list's
-// two rows (the alarm + trailing "+ New alarm"), centered, word-wrapped,
-// with the same GOTHIC optical-rise nudge timer uses. The trailing row is
+// two rows ("+ New alarm" + the one alarm), centered, word-wrapped, with
+// the same GOTHIC optical-rise nudge timer uses. The leading row is
 // shorter than an alarm row (ML_NEW_ROW_H vs. ML_ROW_H — see ml_cell_height),
 // so free space starts after one of each, not a uniform 2 * ML_ROW_H.
 static void main_hint_update_proc(Layer *layer, GContext *ctx) {
@@ -4512,7 +4519,7 @@ static void main_hint_update_proc(Layer *layer, GContext *ctx) {
   if (b.size.h <= 32) { return; }
   const GFont f = fonts_get_system_font(FONT_KEY_GOTHIC_24);
   const char *msg = "- Short-press to cycle state\n- Long-press to edit";
-  int free_top = ML_ROW_H * s_count + ML_NEW_ROW_H;   // bottom of the "+ New alarm" row
+  int free_top = ML_ROW_H * s_count + ML_NEW_ROW_H;   // bottom of the one alarm row
   GRect area = GRect(8, free_top, b.size.w - 16, b.size.h - free_top);
   if (area.size.h <= 20) { return; }
   GSize sz = graphics_text_layout_get_content_size(
@@ -4543,6 +4550,16 @@ static void main_window_load(Window *w) {
     .select_long_click = ml_select_long });
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
+  // Select the first alarm (row 1) by default rather than leaving MenuLayer's
+  // own row-0 ("+ New alarm") default selected -- but align its BOTTOM edge
+  // to the viewport instead of its top: aligning top would force a scroll
+  // large enough to put row 1 exactly at the top of the screen, hiding
+  // "+ New alarm" above it. Row 1 sits right after "+ New alarm" near the
+  // very start of the list, so bottom-aligning it never needs to scroll past
+  // 0 -- both rows stay visible together.
+  if (s_count > 0) {
+    menu_layer_set_selected_index(s_menu, (MenuIndex){ 0, 1 }, MenuRowAlignBottom, false);
+  }
 
   s_main_hint_layer = layer_create(menu_bounds);
   layer_set_update_proc(s_main_hint_layer, main_hint_update_proc);
