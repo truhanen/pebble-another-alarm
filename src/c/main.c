@@ -836,6 +836,16 @@ static TextLayer *s_alarm_lbl_down;
 static int s_alarm_idx = -1;
 static char s_alarm_title_buf[16 + NAME_LEN + 2];
 static char s_alarm_sub_buf[32];
+// auto_dismiss_mode==2 ("On, hide") reuses this exact same ring window/timer
+// flow as mode 1 -- the only difference is visual: no title/sub/snooze/stop
+// text, just a blank black screen, since there's no window-transparency
+// mechanism on this platform to actually let the watchface show through
+// instead. Read by alarm_window_load and the "window already on stack"
+// update path in trigger_alarm() -- both need it, since the SAME reused
+// s_alarm_window can go from a normal (mode 0/1) alarm's content straight to
+// a hidden (mode 2) one's blank content (or back) across a chain of
+// multiple pending alarms without ever being popped/reloaded in between.
+static bool s_alarm_blank;
 static AppTimer *s_alarm_buzz_timer;
 static int64_t s_alarm_buzz_start_s;
 static int s_alarm_buzz_count;   // buzz cycles completed since this ring started; drives increasing_volume (see alarm_current_volume)
@@ -1362,9 +1372,6 @@ static void alarm_finish_ring(void) {
   if (s_launched_by_wakeup) {
     window_stack_pop_all(false);
   } else if (s_alarm_window && window_stack_contains_window(s_alarm_window)) {
-    // Guarded (unlike a plain unconditional window_stack_remove) because an
-    // auto_dismiss_mode==2 ("hide") alarm can reach here without the ring
-    // window ever having been created at all.
     window_stack_remove(s_alarm_window, true);
   }
 }
@@ -1459,8 +1466,26 @@ static void layout_alarm_title(void) {
   layer_set_frame(text_layer_get_layer(s_alarm_title), GRect(2, title_y, box_w, used_h + 4));
 }
 
+// Applies s_alarm_blank (plus s_alarm_title_buf/s_alarm_sub_buf when not
+// blank) to the already-created ring window layers -- shared by
+// alarm_window_load (first creation) and trigger_alarm's "window already on
+// stack" update path, since the reused s_alarm_window can flip between a
+// normal (mode 0/1) alarm's real content and mode 2's blank content across a
+// chain of multiple pending alarms without ever being popped/reloaded in
+// between. Blank mode clears every label (title/sub/snooze/stop) and swaps
+// the background to plain black -- there's no window-transparency mechanism
+// on this platform to actually let the watchface show through instead, so a
+// blank full-screen window is the closest available substitute.
+static void alarm_window_apply_content(void) {
+  if (!s_alarm_window) { return; }
+  window_set_background_color(s_alarm_window, s_alarm_blank ? GColorBlack : GColorRed);
+  if (s_alarm_sub) { text_layer_set_text(s_alarm_sub, s_alarm_blank ? "" : s_alarm_sub_buf); }
+  if (s_alarm_lbl_up) { text_layer_set_text(s_alarm_lbl_up, s_alarm_blank ? "" : "Snooze"); }
+  if (s_alarm_title) { text_layer_set_text(s_alarm_title, s_alarm_blank ? "" : s_alarm_title_buf); layout_alarm_title(); }
+  if (s_alarm_lbl_down) { text_layer_set_text(s_alarm_lbl_down, s_alarm_blank ? "" : "Stop x2"); }
+}
+
 static void alarm_window_load(Window *w) {
-  window_set_background_color(w, GColorRed);
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
   const int h = b.size.h, wd = b.size.w;
@@ -1470,7 +1495,6 @@ static void alarm_window_load(Window *w) {
   text_layer_set_text_color(s_alarm_sub, GColorWhite);
   text_layer_set_font(s_alarm_sub, fonts_get_system_font(FONT_KEY_GOTHIC_24));
   text_layer_set_text_alignment(s_alarm_sub, GTextAlignmentCenter);
-  text_layer_set_text(s_alarm_sub, s_alarm_sub_buf);
   layer_add_child(root, text_layer_get_layer(s_alarm_sub));
 
   s_alarm_lbl_up = text_layer_create(GRect(0, h * 22 / 100 - 31, wd - 6, 34));
@@ -1478,7 +1502,6 @@ static void alarm_window_load(Window *w) {
   text_layer_set_text_color(s_alarm_lbl_up, GColorWhite);
   text_layer_set_font(s_alarm_lbl_up, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_text_alignment(s_alarm_lbl_up, GTextAlignmentRight);
-  text_layer_set_text(s_alarm_lbl_up, "Snooze");
   layer_add_child(root, text_layer_get_layer(s_alarm_lbl_up));
 
   s_alarm_title = text_layer_create(GRect(2, h / 2 - 36, wd - 4, 72));
@@ -1486,18 +1509,16 @@ static void alarm_window_load(Window *w) {
   text_layer_set_text_color(s_alarm_title, GColorWhite);
   text_layer_set_text_alignment(s_alarm_title, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_alarm_title, GTextOverflowModeWordWrap);
-  text_layer_set_text(s_alarm_title, s_alarm_title_buf);
   layer_add_child(root, text_layer_get_layer(s_alarm_title));
-
-  layout_alarm_title();
 
   s_alarm_lbl_down = text_layer_create(GRect(0, h * 78 / 100 - 6, wd - 6, 34));
   text_layer_set_background_color(s_alarm_lbl_down, GColorClear);
   text_layer_set_text_color(s_alarm_lbl_down, GColorWhite);
   text_layer_set_font(s_alarm_lbl_down, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_text_alignment(s_alarm_lbl_down, GTextAlignmentRight);
-  text_layer_set_text(s_alarm_lbl_down, "Stop x2");
   layer_add_child(root, text_layer_get_layer(s_alarm_lbl_down));
+
+  alarm_window_apply_content();
 }
 
 static void alarm_window_unload(Window *w) {
@@ -1513,21 +1534,33 @@ static void trigger_alarm(int idx, int count) {
   if (idx < 0 || idx >= s_count) { return; }
   const Alarm *a = &s_alarms[idx];
   s_alarm_idx = idx;
-
-  if (a->auto_dismiss_mode == 2) {
-    // On, hide: fire the one-shot signal same as mode 1, but never create or
-    // show the ring screen at all -- finish (and chain to the next pending
-    // alarm, if any) immediately instead of arming the self-dismiss timer.
-    alarm_cancel_auto_dismiss();
-    s_alarm_buzz_start_s = now_s();
-    s_alarm_buzz_count = 0;
-    if (a->vibration_enabled) { alarm_vibrate(a); }
-#if PBL_SPEAKER
-    if (a->sound_enabled) { alarm_play_audio(a, alarm_current_volume(a)); }
-#endif // PBL_SPEAKER
-    alarm_do_stop();
-    return;
-  }
+  // auto_dismiss_mode==2 ("On, hide") follows the exact same ring-window +
+  // one-shot-signal + fixed-timer flow as mode 1 now -- it used to skip
+  // creating/pushing the ring window entirely and call alarm_do_stop()
+  // synchronously right after enqueueing the signal, which was a real bug:
+  // alarm_do_stop()'s alarm_finish_ring() calls window_stack_pop_all() when
+  // the app was launched by this very wakeup, and when trigger_alarm() is
+  // reached from init() (i.e. the app had to relaunch from closed to fire
+  // this alarm), that ran AFTER init() had already pushed the main list --
+  // so the pop_all immediately tore it back down again, visibly flashing it
+  // on screen for an instant, and killed the async vibe/speaker playback
+  // that had just been enqueued before it could finish (confirmed
+  // on-device: a custom pattern played in full when the app already
+  // happened to be open, since that pop_all branch never fires there, but
+  // only its first pulse -- sometimes its first two -- when the wakeup had
+  // to relaunch the app from closed, a timing race between the app tearing
+  // itself down and the still-playing pattern). Reusing mode 1's flow fixes
+  // both by construction: the ring window (kept on stack until the fixed
+  // ALARM_AUTO_DISMISS_MS timer fires) satisfies the platform's "must
+  // always have >=1 window" requirement for exactly as long as mode 1
+  // already relies on, so nothing tears down mid-playback. Since there's no
+  // window-transparency mechanism on this platform to actually let the
+  // watchface show through instead, s_alarm_blank (read by
+  // alarm_window_load/alarm_window_apply_content) makes that window render
+  // as a blank black screen -- no title/sub/snooze/stop labels -- rather
+  // than the real alarm content, which is the only user-visible difference
+  // from mode 1 left.
+  s_alarm_blank = (a->auto_dismiss_mode == 2);
 
   char time_buf[16];
   if (a->is_cron) {
@@ -1554,8 +1587,7 @@ static void trigger_alarm(int idx, int count) {
   if (!window_stack_contains_window(s_alarm_window)) {
     window_stack_push(s_alarm_window, true);
   } else {
-    if (s_alarm_title) { text_layer_set_text(s_alarm_title, s_alarm_title_buf); layout_alarm_title(); }
-    if (s_alarm_sub) { text_layer_set_text(s_alarm_sub, s_alarm_sub_buf); }
+    alarm_window_apply_content();
   }
 
   alarm_cancel_auto_dismiss();   // never leave a stale timer armed against whichever alarm gets shown next
@@ -1565,7 +1597,7 @@ static void trigger_alarm(int idx, int count) {
   // alarm_buzz_start() at all.
   s_alarm_buzz_start_s = now_s();
   s_alarm_buzz_count = 0;
-  if (a->auto_dismiss_mode == 1) {
+  if (a->auto_dismiss_mode == 1 || a->auto_dismiss_mode == 2) {
     if (a->vibration_enabled) { alarm_vibrate(a); }
 #if PBL_SPEAKER
     // Note: auto_dismiss only ever buzzes once, at buzz_count=0, so an
