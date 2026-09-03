@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Pebble docs
+
+When looking up Pebble SDK API/guide documentation, always use
+`developer.repebble.com` — never `developer.rebble.io`.
+
 ## What this is
 
 A Pebble watchapp (C + Pebble SDK, emery/Pebble Time 2 only) implementing a

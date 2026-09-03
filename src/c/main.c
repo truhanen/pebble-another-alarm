@@ -831,11 +831,17 @@ static bool show_next_pending_alarm(void) {
 static Window *s_alarm_window;
 static TextLayer *s_alarm_title;
 static TextLayer *s_alarm_sub;
-static TextLayer *s_alarm_lbl_up;
-static TextLayer *s_alarm_lbl_down;
+static TextLayer *s_alarm_time;
+static Layer *s_alarm_lbl_up;
+static Layer *s_alarm_lbl_down;
 static int s_alarm_idx = -1;
 static char s_alarm_title_buf[16 + NAME_LEN + 2];
+// True when s_alarm_title_buf holds a formatted time (no label set on the
+// alarm) rather than a real user-typed label -- see alarm_title_font's own
+// comment for why this changes how its font-fit loop measures the text.
+static bool s_alarm_title_is_time;
 static char s_alarm_sub_buf[32];
+static char s_alarm_clock_buf[16];
 // auto_dismiss_mode==2 ("On, hide") reuses this exact same ring window/timer
 // flow as mode 1 -- the only difference is visual: no title/sub/snooze/stop
 // text, just a blank black screen, since there's no window-transparency
@@ -1429,24 +1435,220 @@ static void alarm_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_BACK, alarm_back_noop);
 }
 
-static GFont alarm_title_font(const char *text, int box_w, int box_h, GSize *out) {
-  static const char *const keys[] = {
-    FONT_KEY_BITHAM_42_BOLD,
-    FONT_KEY_BITHAM_30_BLACK,
-    FONT_KEY_GOTHIC_28_BOLD,
-    FONT_KEY_GOTHIC_24_BOLD,
-    FONT_KEY_GOTHIC_18_BOLD,
-  };
-  const GRect probe = GRect(0, 0, box_w, 2000);
-  GFont chosen = NULL;
+// Gap between each rotated label and the screen's top/bottom edge --
+// "Snooze"'s gap to the top edge, "Stop x2"'s gap to the bottom edge is 2x
+// that (both on request, back when the labels' own bounding box was
+// narrower and still needed a visible right-edge margin too -- now that the
+// box is taller/longer (the descender-clipping fix padded sz.h), that
+// margin reads as redundant, so there's no right-edge gap at all any more;
+// the top/bottom gaps are unrelated and stay as they were). Also bounds the
+// column reserved along the ring screen's right edge -- the title's own
+// box_w (layout_alarm_title) is shrunk by RING_EDGE_LABEL_W so its centered
+// text never reaches into it.
+#define RING_EDGE_RIGHT_MARGIN 0
+#define RING_EDGE_TOP_MARGIN 4
+#define RING_EDGE_BOTTOM_MARGIN 8
+#define RING_EDGE_LABEL_W 40
+
+// Pebble has no rotated-text primitive -- graphics_draw_text is horizontal
+// only, and there's no public API to get a GContext for an arbitrary
+// offscreen GBitmap to render text into first. The only rotation primitive
+// is graphics_draw_rotated_bitmap, which rotates a bitmap. So: draw the
+// text normally into a scratch area of the real framebuffer, capture that
+// framebuffer as the "source" bitmap, rotate-blit it onto the real
+// destination, then erase the scratch area -- all within this one
+// LayerUpdateProc call, so nothing scratch-y is ever actually presented
+// (Pebble only presents the buffer state at the end of the update pass).
+// `screen` is the ring window's full size; `max_len` bounds how long the
+// text is allowed to grow (font-fit below, so it never reaches the title
+// in the middle of the screen); `anchor_top` true packs the rotated text
+// against the screen's top edge (for "Snooze"), false against its bottom
+// edge (for "Stop x2") -- both cases flush against the right edge.
+static void draw_edge_rotated_label(GContext *ctx, const char *text, GSize screen,
+    int max_len, bool anchor_top) {
+  static const char *const keys[] = { FONT_KEY_GOTHIC_28_BOLD, FONT_KEY_GOTHIC_24_BOLD };
+  const GRect probe = GRect(0, 0, 2000, 40);
+  GFont font = NULL;
+  GSize sz;
   for (unsigned i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
-    GFont f = fonts_get_system_font(keys[i]);
-    GSize sz = graphics_text_layout_get_content_size(
-        text, f, probe, GTextOverflowModeWordWrap, GTextAlignmentCenter);
+    font = fonts_get_system_font(keys[i]);
+    sz = graphics_text_layout_get_content_size(
+        text, font, probe, GTextOverflowModeFill, GTextAlignmentLeft);
+    if (sz.w <= max_len) { break; }
+  }
+  // graphics_text_layout_get_content_size's reported height doesn't leave
+  // room for descenders (confirmed on-device: the "p" in "Stop x2" got its
+  // low tail clipped) -- both the scratch draw box below and the bitmap
+  // cropped from it are sized off sz.h, so pad it before either happens,
+  // rather than only widening the (already-generous) erase padding further
+  // down, which is too late: the glyph itself is already clipped by then.
+  sz.h += 6;
+
+  // Scratch: drawn flush-left, well below the title's own band (layout_
+  // alarm_title caps the title layer's own frame bottom at down_top+2 at
+  // the very most, so this leaves a healthy ~25px of clearance from that
+  // worst case -- always clear of the destination column at the right
+  // edge, AND of the title/clock/"+N more" labels above it, sized exactly
+  // to the measured text so nothing beyond it is touched. (The top-left
+  // corner used to be a safe scratch spot too, until the live-clock label
+  // started living there -- don't move this back without checking what
+  // else now occupies the corner.)
+  const int scratch_y = screen.h * 78 / 100 - 18 + 27;
+  const GRect scratch = GRect(4, scratch_y, sz.w, sz.h);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, text, font, scratch, GTextOverflowModeFill,
+      GTextAlignmentLeft, NULL);
+
+  // graphics_draw_rotated_bitmap rotates and draws its ENTIRE source bitmap
+  // (anchored via src_ic/dest_ic, not cropped to some sub-rect around them)
+  // -- passing the captured framebuffer directly as `src` (an earlier
+  // version of this code did exactly that) rotates a copy of the WHOLE
+  // screen on top of itself, which happened to look fine while the rest of
+  // the screen was empty/uniform but visibly ghosts every other label once
+  // there's real content elsewhere (confirmed on-device: the title and the
+  // live clock added above both reappeared as garbled rotated duplicates).
+  // So: copy just the scratch rect's pixels into their own small bitmap
+  // first, and rotate THAT -- GBitmapFormat8Bit is one byte (GColor8) per
+  // pixel on this platform, and gbitmap_get_data_row_info's own bounds are
+  // trivial (min_x=0) on this rectangular (non-circular) display.
+  GBitmap *fb = graphics_capture_frame_buffer(ctx);
+  if (fb) {
+    GBitmap *crop = gbitmap_create_blank(GSize(sz.w, sz.h), GBitmapFormat8Bit);
+    if (crop) {
+      for (int y = 0; y < sz.h; y++) {
+        GBitmapDataRowInfo src_row = gbitmap_get_data_row_info(fb, scratch.origin.y + y);
+        GBitmapDataRowInfo dst_row = gbitmap_get_data_row_info(crop, y);
+        memcpy(dst_row.data, src_row.data + scratch.origin.x, sz.w);
+      }
+    }
+    graphics_release_frame_buffer(ctx, fb);
+
+    if (crop) {
+      const GPoint src_ic = GPoint(sz.w / 2, sz.h / 2);
+      // sz.h is the text's rotated *width* and sz.w its rotated *height*
+      // (rotating swaps the axes) -- position both edges with the fixed
+      // margins above rather than centering in some larger reserved area.
+      const int dest_x = screen.w - RING_EDGE_RIGHT_MARGIN - sz.h / 2;
+      const int dest_y = anchor_top
+          ? RING_EDGE_TOP_MARGIN + sz.w / 2
+          : screen.h - RING_EDGE_BOTTOM_MARGIN - sz.w / 2;
+      graphics_draw_rotated_bitmap(ctx, crop, src_ic, DEG_TO_TRIGANGLE(270), GPoint(dest_x, dest_y));
+      gbitmap_destroy(crop);
+    }
+  }
+
+  // Erase the scratch text -- padded well beyond the measured content box
+  // (glyph descenders/anti-aliasing can spill a few px past the measured
+  // size), and never touching anything else since this corner is otherwise
+  // unused.
+  graphics_context_set_fill_color(ctx, GColorRed);
+  graphics_fill_rect(ctx, GRect(scratch.origin.x - 4, scratch.origin.y - 4,
+      scratch.size.w + 8, scratch.size.h + 12), 0, GCornerNone);
+}
+
+static void alarm_lbl_up_update_proc(Layer *l, GContext *ctx) {
+  if (s_alarm_blank) { return; }
+  GRect b = layer_get_bounds(l);
+  draw_edge_rotated_label(ctx, "Snooze", b.size, b.size.h / 2 - 6, true);
+}
+
+static void alarm_lbl_down_update_proc(Layer *l, GContext *ctx) {
+  if (s_alarm_blank) { return; }
+  GRect b = layer_get_bounds(l);
+  draw_edge_rotated_label(ctx, "Stop x2", b.size, b.size.h / 2 - 6, false);
+}
+
+// Shared by alarm_title_font (the main ring-screen text) and
+// layout_alarm_title's own clock layout below, which needs to pick "one
+// font step smaller" than whatever the title lands on -- keeping one ladder
+// at file scope so layout_alarm_clock (below) can pick a font from the same
+// ladder -- deliberately NOT the same chosen index as the title's own
+// shrink-to-fit result, though (see layout_alarm_clock's own comment): the
+// clock must stay a fixed size regardless of how far a long label shrinks
+// the title.
+static const char *const ALARM_TITLE_FONT_KEYS[] = {
+  FONT_KEY_BITHAM_42_BOLD,
+  FONT_KEY_BITHAM_30_BLACK,
+  FONT_KEY_GOTHIC_28_BOLD,
+  FONT_KEY_GOTHIC_24_BOLD,
+  FONT_KEY_GOTHIC_18_BOLD,
+};
+#define ALARM_TITLE_FONT_COUNT (sizeof(ALARM_TITLE_FONT_KEYS) / sizeof(ALARM_TITLE_FONT_KEYS[0]))
+
+// `single_line` is for the fallback title text -- the alarm's own set time,
+// formatted exactly as the main list shows it (e.g. "09:00" or "09:00+",
+// see trigger_alarm) -- which has no spaces to wrap at, so word-wrapping it
+// across two lines was really just hyphen-splitting a short time value mid-
+// digit ("00:00+" -> "00:00" / "-" / "+", confirmed on-device, clearly a
+// bug, not a real fit decision). A real label CAN still wrap normally
+// (multiple words, wrapping across them reads fine): only the single-line
+// path measures against an effectively unbounded width to get the text's
+// true one-line size, then shrinks the font until that whole line fits
+// box_w -- never wrapping it, just picking a smaller font instead.
+static GFont alarm_title_font(const char *text, int box_w, int box_h, GSize *out, bool single_line) {
+  const GRect probe = single_line ? GRect(0, 0, 2000, 200) : GRect(0, 0, box_w, 2000);
+  const GTextOverflowMode overflow = single_line ? GTextOverflowModeFill : GTextOverflowModeWordWrap;
+  GFont chosen = NULL;
+  for (unsigned i = 0; i < ALARM_TITLE_FONT_COUNT; i++) {
+    GFont f = fonts_get_system_font(ALARM_TITLE_FONT_KEYS[i]);
+    GSize sz = graphics_text_layout_get_content_size(text, f, probe, overflow, GTextAlignmentCenter);
     chosen = f; *out = sz;
-    if (sz.h <= box_h) { break; }
+    if (single_line ? sz.w <= box_w : sz.h <= box_h) { break; }
   }
   return chosen;
+}
+
+// refresh_alarm_clock_text (below, also used by the once-a-minute tick)
+// only needs to update the string -- font/frame are only recomputed by
+// layout_alarm_clock below, since they don't depend on the current time
+// (a minute tick never changes the string's length/width in practice).
+static void refresh_alarm_clock_text(void) {
+  if (!s_alarm_time) { return; }
+  int wday, hour, min;
+  now_wall(&wday, &hour, &min);
+  ac_format_time(s_alarm_clock_buf, sizeof(s_alarm_clock_buf), (uint8_t)hour, (uint8_t)min,
+      clock_is_24h_style());
+  text_layer_set_text(s_alarm_time, s_alarm_clock_buf);
+}
+
+// The clock's own font is fixed at one ladder step below the title's
+// largest possible size (index 0, BITHAM_42_BOLD) -- i.e. always
+// BITHAM_30_BLACK in practice, since the clock text (a short "HH:MM"/
+// "H:MM am") almost never needs to shrink further. Deliberately NOT tied to
+// whatever font the title's own shrink-to-fit actually lands on for a given
+// alarm: a long label shrinking the title must never also shrink the
+// clock -- confirmed as a real bug (a long label made the current-time
+// reading noticeably smaller too, which reads as "the current time depends
+// on the alarm", not right at all). The loop below only exists as a safety
+// net for a width the fixed font genuinely can't fit (never triggered by
+// label length, only by the clock's own text/box).
+#define ALARM_CLOCK_FONT_START_IDX 1
+
+// The current time, shown above the title, always live (regardless of
+// alarm type -- see trigger_alarm), in the same horizontal box/alignment as
+// the title (same box_w/x, center-aligned).
+static void layout_alarm_clock(int box_w) {
+  if (!s_alarm_time) { return; }
+  refresh_alarm_clock_text();
+
+  GFont cf = NULL;
+  GSize sz;
+  for (unsigned i = ALARM_CLOCK_FONT_START_IDX; i < ALARM_TITLE_FONT_COUNT; i++) {
+    cf = fonts_get_system_font(ALARM_TITLE_FONT_KEYS[i]);
+    sz = graphics_text_layout_get_content_size(s_alarm_clock_buf, cf, GRect(0, 0, box_w, 2000),
+        GTextOverflowModeWordWrap, GTextAlignmentCenter);
+    if (sz.w <= box_w) { break; }
+  }
+  const int clock_h = sz.h + 4;
+  text_layer_set_font(s_alarm_time, cf);
+  layer_set_frame(text_layer_get_layer(s_alarm_time), GRect(RING_EDGE_LABEL_W, 2, box_w, clock_h));
+
+  // "+N more" sits directly below the clock rather than at a fixed y --
+  // the clock's own height varies with its (title-font-derived) font size.
+  if (s_alarm_sub) {
+    GRect sb = layer_get_frame(text_layer_get_layer(s_alarm_sub));
+    layer_set_frame(text_layer_get_layer(s_alarm_sub), GRect(sb.origin.x, 2 + clock_h, sb.size.w, sb.size.h));
+  }
 }
 
 static void layout_alarm_title(void) {
@@ -1457,13 +1659,20 @@ static void layout_alarm_title(void) {
   const int down_top  = h * 78 / 100 - 18;
   const int band_top = up_bottom + 2;
   const int band_h   = down_top - 2 - band_top;
-  const int box_w = wd - 4;
+  // Reserved symmetrically (RING_EDGE_LABEL_W on both sides, not just the
+  // right one the rotated labels actually occupy) so the title/clock frame
+  // itself is centered on the screen -- centering *within* an asymmetric,
+  // flush-left box (the old approach) reads as visibly off-center relative
+  // to the watch face as a whole, even though it's centered within its own
+  // narrower box.
+  const int box_w = wd - 2 * RING_EDGE_LABEL_W;
   GSize sz;
-  GFont tf = alarm_title_font(s_alarm_title_buf, box_w, band_h, &sz);
+  GFont tf = alarm_title_font(s_alarm_title_buf, box_w, band_h, &sz, s_alarm_title_is_time);
   const int used_h = sz.h < band_h ? sz.h : band_h;
   const int title_y = band_top + (band_h - used_h) / 2;
   text_layer_set_font(s_alarm_title, tf);
-  layer_set_frame(text_layer_get_layer(s_alarm_title), GRect(2, title_y, box_w, used_h + 4));
+  layer_set_frame(text_layer_get_layer(s_alarm_title), GRect(RING_EDGE_LABEL_W, title_y, box_w, used_h + 4));
+  layout_alarm_clock(box_w);
 }
 
 // Applies s_alarm_blank (plus s_alarm_title_buf/s_alarm_sub_buf when not
@@ -1480,15 +1689,30 @@ static void alarm_window_apply_content(void) {
   if (!s_alarm_window) { return; }
   window_set_background_color(s_alarm_window, s_alarm_blank ? GColorBlack : GColorRed);
   if (s_alarm_sub) { text_layer_set_text(s_alarm_sub, s_alarm_blank ? "" : s_alarm_sub_buf); }
-  if (s_alarm_lbl_up) { text_layer_set_text(s_alarm_lbl_up, s_alarm_blank ? "" : "Snooze"); }
+  if (s_alarm_lbl_up) { layer_mark_dirty(s_alarm_lbl_up); }
+  // layout_alarm_title also lays out/refreshes s_alarm_time (the live clock)
+  // whenever not blank; blank mode clears it directly here, same as every
+  // other label.
   if (s_alarm_title) { text_layer_set_text(s_alarm_title, s_alarm_blank ? "" : s_alarm_title_buf); layout_alarm_title(); }
-  if (s_alarm_lbl_down) { text_layer_set_text(s_alarm_lbl_down, s_alarm_blank ? "" : "Stop x2"); }
+  if (s_alarm_blank && s_alarm_time) { text_layer_set_text(s_alarm_time, ""); }
+  if (s_alarm_lbl_down) { layer_mark_dirty(s_alarm_lbl_down); }
 }
 
 static void alarm_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
   const int h = b.size.h, wd = b.size.w;
+
+  // The live current time -- always shown, regardless of alarm type (see
+  // trigger_alarm) -- above the title, same horizontal box/alignment as it.
+  // Font/frame are set by layout_alarm_clock (called from layout_alarm_title,
+  // since it depends on the title's own chosen font); this initial frame is
+  // just a placeholder until that first runs.
+  s_alarm_time = text_layer_create(GRect(RING_EDGE_LABEL_W, 2, wd - 2 * RING_EDGE_LABEL_W, 28));
+  text_layer_set_background_color(s_alarm_time, GColorClear);
+  text_layer_set_text_color(s_alarm_time, GColorWhite);
+  text_layer_set_text_alignment(s_alarm_time, GTextAlignmentCenter);
+  layer_add_child(root, text_layer_get_layer(s_alarm_time));
 
   s_alarm_sub = text_layer_create(GRect(4, 2, wd - 8, 28));
   text_layer_set_background_color(s_alarm_sub, GColorClear);
@@ -1497,26 +1721,38 @@ static void alarm_window_load(Window *w) {
   text_layer_set_text_alignment(s_alarm_sub, GTextAlignmentCenter);
   layer_add_child(root, text_layer_get_layer(s_alarm_sub));
 
-  s_alarm_lbl_up = text_layer_create(GRect(0, h * 22 / 100 - 31, wd - 6, 34));
-  text_layer_set_background_color(s_alarm_lbl_up, GColorClear);
-  text_layer_set_text_color(s_alarm_lbl_up, GColorWhite);
-  text_layer_set_font(s_alarm_lbl_up, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
-  text_layer_set_text_alignment(s_alarm_lbl_up, GTextAlignmentRight);
-  layer_add_child(root, text_layer_get_layer(s_alarm_lbl_up));
+  // Plain Layers, not TextLayers: their draw procs render "Snooze"/"Stop x2"
+  // rotated 90 CCW along the right edge (see draw_edge_rotated_label). Sized
+  // to the full root bounds since the rotate trick needs to draw into both
+  // a scratch area and the real destination column within the same
+  // LayerUpdateProc, and a layer's GContext is clipped to its own frame.
+  //
+  // s_alarm_lbl_down is deliberately created/added (and therefore drawn)
+  // BEFORE s_alarm_lbl_up, even though "up" is the visually-first/topmost
+  // label -- confirmed empirically on-device: whichever of these two rotated
+  // labels is the very first one to run its
+  // graphics_capture_frame_buffer/graphics_draw_rotated_bitmap sequence in a
+  // given redraw pass silently draws nothing (no crash, no error, just an
+  // absent label), while the second one always works. A same-layer
+  // throwaway warm-up capture, and even a separate dummy layer doing a full
+  // real (off-screen) rotated draw before either real label, both failed to
+  // fix it -- only genuinely letting "Stop x2" run first does. Root cause
+  // not fully understood; if this ever needs revisiting, don't "clean up"
+  // this ordering back to up-then-down without re-verifying on-device.
+  s_alarm_lbl_down = layer_create(GRect(0, 0, wd, h));
+  layer_set_update_proc(s_alarm_lbl_down, alarm_lbl_down_update_proc);
+  layer_add_child(root, s_alarm_lbl_down);
 
-  s_alarm_title = text_layer_create(GRect(2, h / 2 - 36, wd - 4, 72));
+  s_alarm_title = text_layer_create(GRect(RING_EDGE_LABEL_W, h / 2 - 36, wd - 2 * RING_EDGE_LABEL_W, 72));
   text_layer_set_background_color(s_alarm_title, GColorClear);
   text_layer_set_text_color(s_alarm_title, GColorWhite);
   text_layer_set_text_alignment(s_alarm_title, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_alarm_title, GTextOverflowModeWordWrap);
   layer_add_child(root, text_layer_get_layer(s_alarm_title));
 
-  s_alarm_lbl_down = text_layer_create(GRect(0, h * 78 / 100 - 6, wd - 6, 34));
-  text_layer_set_background_color(s_alarm_lbl_down, GColorClear);
-  text_layer_set_text_color(s_alarm_lbl_down, GColorWhite);
-  text_layer_set_font(s_alarm_lbl_down, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
-  text_layer_set_text_alignment(s_alarm_lbl_down, GTextAlignmentRight);
-  layer_add_child(root, text_layer_get_layer(s_alarm_lbl_down));
+  s_alarm_lbl_up = layer_create(GRect(0, 0, wd, h));
+  layer_set_update_proc(s_alarm_lbl_up, alarm_lbl_up_update_proc);
+  layer_add_child(root, s_alarm_lbl_up);
 
   alarm_window_apply_content();
 }
@@ -1526,8 +1762,9 @@ static void alarm_window_unload(Window *w) {
   alarm_cancel_auto_dismiss();
   text_layer_destroy(s_alarm_title); s_alarm_title = NULL;
   text_layer_destroy(s_alarm_sub); s_alarm_sub = NULL;
-  text_layer_destroy(s_alarm_lbl_up); s_alarm_lbl_up = NULL;
-  text_layer_destroy(s_alarm_lbl_down); s_alarm_lbl_down = NULL;
+  text_layer_destroy(s_alarm_time); s_alarm_time = NULL;
+  layer_destroy(s_alarm_lbl_up); s_alarm_lbl_up = NULL;
+  layer_destroy(s_alarm_lbl_down); s_alarm_lbl_down = NULL;
 }
 
 static void trigger_alarm(int idx, int count) {
@@ -1562,17 +1799,15 @@ static void trigger_alarm(int idx, int count) {
   // from mode 1 left.
   s_alarm_blank = (a->auto_dismiss_mode == 2);
 
+  // Fallback title (no label set) is exactly what the main list shows for
+  // this alarm -- ml_format_cron_time for cron (e.g. "09:00" or "09:00+"),
+  // plain ac_format_time otherwise -- not the instant it happens to be
+  // ringing at (that's now shown separately, always, up top; see
+  // layout_alarm_clock below).
   char time_buf[16];
-  if (a->is_cron) {
-    // A cron alarm has no single fixed hour/minute to show -- its own
-    // fields are unused/stale (see alarm_calc.h's is_cron doc comment), so
-    // show the actual instant it's ringing at instead.
-    int wday, hour, min;
-    now_wall(&wday, &hour, &min);
-    ac_format_time(time_buf, sizeof(time_buf), (uint8_t)hour, (uint8_t)min, clock_is_24h_style());
-  } else {
-    ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style());
-  }
+  if (a->is_cron) { ml_format_cron_time(time_buf, sizeof(time_buf), a); }
+  else { ac_format_time(time_buf, sizeof(time_buf), a->hour, a->minute, clock_is_24h_style()); }
+  s_alarm_title_is_time = !a->name[0];
   if (a->name[0]) { snprintf(s_alarm_title_buf, sizeof(s_alarm_title_buf), "%s", a->name); }
   else { snprintf(s_alarm_title_buf, sizeof(s_alarm_title_buf), "%s", time_buf); }
   if (count > 1) { snprintf(s_alarm_sub_buf, sizeof(s_alarm_sub_buf), "+%d more", count - 1); }
@@ -4616,6 +4851,7 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
   if (s_cron_bottom_bar && top == s_cron_window) { layer_mark_dirty(s_cron_bottom_bar); }
   if (s_edit_bottom_bar && top == s_edit_window) { layer_mark_dirty(s_edit_bottom_bar); }
   if (s_signal_bottom_bar && top == s_signal_window) { layer_mark_dirty(s_signal_bottom_bar); }
+  if (s_alarm_time && top == s_alarm_window && !s_alarm_blank) { refresh_alarm_clock_text(); }
 }
 
 // ================================= AppMessage (phone settings) =================================
