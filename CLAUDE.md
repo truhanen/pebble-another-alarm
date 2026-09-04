@@ -38,6 +38,16 @@ aborts the build (`noEmitOnError`).
 Other Makefile targets: `make clean`, `make kill_emulator`, `make wipe_emulator`,
 `make build_and_install_emulator`, `make install_cloudpebble`.
 
+**Don't leave stale/overlapping `pebble build` (or `make build_and_install_*`)
+processes running.** waf serializes all builds behind one global lock file
+(`.lock-waf_darwin_build`) — a second build invoked while an earlier one (or
+a backgrounded `pebble build || pebble build` retry chain) is still alive
+doesn't run in parallel, it just queues behind the lock, which is what makes
+an unrelated later build look mysteriously slow or hung. Before kicking off
+a build, check for one already in flight (`ps aux | grep -i "pebble build\|waf"`)
+and let it finish or kill it rather than layering another on top; don't launch
+a build in the background and then forget about it.
+
 ## Emulator testing (headless)
 
 Before running `pebble` commands against the emulator, consult the
