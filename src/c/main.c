@@ -220,7 +220,22 @@ static void rebuild_order(void) {
 
 static void reload_ui(void) {
   rebuild_order();
-  if (s_menu) { menu_layer_reload_data(s_menu); }
+  if (s_menu) {
+    // menu_layer_reload_data() doesn't itself re-clamp the selected row --
+    // if the list just got shorter (an alarm deleted, or the test hooks'
+    // TestClearAlarms wiping and re-seeding a smaller list) and the
+    // previously-selected row no longer exists (row 0 = "+ New alarm",
+    // rows 1..s_count = alarms -- see ml_num_rows/ml_draw_row above), the
+    // stale index matches none of the rows MenuLayer actually draws, so
+    // nothing renders as selected at all until the user next presses
+    // up/down. Clamp it back to the new last row (the last alarm, or
+    // "+ New alarm" itself if the list is now empty) before reloading.
+    MenuIndex sel = menu_layer_get_selected_index(s_menu);
+    if (sel.row > (uint16_t)s_count) {
+      menu_layer_set_selected_index(s_menu, (MenuIndex){ 0, (uint16_t)s_count }, MenuRowAlignBottom, false);
+    }
+    menu_layer_reload_data(s_menu);
+  }
   if (s_main_hint_layer) { layer_mark_dirty(s_main_hint_layer); }
 }
 
