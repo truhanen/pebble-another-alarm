@@ -1238,134 +1238,116 @@ feature — see git history if curious):
     library", applying is "I'm done"); since the tune's own row just
     disappeared from the picker, its selection is also reset to row 0
     ("Off") rather than risk pointing past the now-shorter row count.
-- **Custom sound/vibe patterns**: a pattern is a space-separated list of
-  on-beats and (optional) breaks. Sound (Tune) and vibe (Vibration) have
-  DIFFERENT segment caps, on request — `AC_SOUND_PATTERN_MAX_SEGMENTS`
-  (32) and `AC_VIBE_PATTERN_MAX_SEGMENTS` (8), `alarm_calc.h` — where both
-  used to share one `AC_PATTERN_MAX_SEGMENTS` (16). Every buffer/parse call
-  sized off the old shared constant had to move to whichever of the two
-  actually applies at that call site (sound-only call sites — including
-  the custom-tune library, which is sound-only — use the 32 cap; vibe-only
-  call sites use the 8 cap); this also grew `Alarm.sound_pattern[]`/
-  `sound_pattern_note[]` and `CustomTune.pattern[]`/`pattern_note[]` while
-  shrinking `Alarm.vibe_pattern_custom[]`, which is a genuine **resize** of
-  already-existing fields (not an append) — see `STORE_SCHEMA`
-  17/`TUNE_STORE_SCHEMA` 2's own bump comments (`alarm_store.h`) for why
-  that's a hard break (wipes on migration) rather than the usual additive
-  case. `multitap_keyboard.c`'s own `BUFFER_CAP` (the vendored widget's
-  internal text-entry limit) also had to grow from 96 to 136 to actually
-  fit a 32-segment Tune pattern's worst case — `multitap_keyboard_set_max_
-  len()` silently ignores any caller-requested cap that isn't strictly less
-  than `BUFFER_CAP`, so `PATTERN_KEYBOARD_MAX_LEN` (`main.c`, bumped to
-  128 — shared by both keyboards, so sized for the larger of the two)
-  needed `BUFFER_CAP` to grow past it first. Each pattern token starts with
-  a duration DIGIT, one of `AC_NOTE_DURATION_DIGITS`
-  (`{1, 2, 3, 4, 5, 6, 7, 8}`, `alarm_calc.c`) — NOT any digit 1-9 ("0"/"9"
-  are plain ASCII digits but invalid duration digits, outside the 1-8
-  range). Each digit IS its own duration in hundreds of ms (digit ×
-  `AC_NOTE_DURATION_MS_PER_UNIT`, i.e. 1=100ms, 2=200ms, ..., 8=800ms —
-  every 100ms increment from 100-800ms, one per pattern-keyboard character
-  key) rather than an arbitrary index into a lookup table, so the digits
-  themselves are informative to read even outside the app — no separate ms
-  table is needed, so every alarm's "1" always means the same 100ms. (This
-  set used to be sparse — `{1,2,4,8}`, each double the last like real
-  rhythm notation, on only 4 keyboard keys — widened to the full contiguous
-  1-8 range on request, one digit per key; see the keyboard design point
-  below.) A break is the digit followed by `-` (e.g. `"1-"`); an on-beat for VIBE is
-  just the bare digit (e.g. `"2"`); an on-beat for SOUND must additionally
-  carry a note letter (e.g. `"1C"`) since sound has a pitch and vibe
-  doesn't — a bare digit is valid for vibe but rejected for sound, the one
-  real difference between the two grammars. A sound note letter may
-  optionally be followed by ONE real ABC-notation octave marker — `'`
-  (apostrophe) for an octave up, `,` (comma) for an octave down (e.g.
-  `"1C'"`, `"1C,"`); no marker means the base octave. Breaks are optional
-  BETWEEN on-beats: two on-tokens with nothing between them play back to
-  back with no gap (e.g. sound `"1C 2D' 1- 1C 2D,"`, vibe
-  `"2 1- 2 1- 2"`). Parsed by `ac_vibe_pattern_parse()`/
-  `ac_sound_pattern_parse()` (`alarm_calc.c`, host-testable, no SDK
-  dependency, sharing an internal tokenizer) into a packed byte per
-  segment (`AC_PATTERN_BREAK_BIT` = bit 7 set for a break; bits 0-6 = the
-  duration digit itself, via `AC_PATTERN_DURATION_MASK`) — sound
-  additionally fills a parallel `sound_pattern_note[]` value, encoded as
-  `octave*AC_NOTE_COUNT + <index into AC_NOTE_LETTER[]/AC_NOTE_MIDI[]>`
-  (meaningless on a break segment). `AC_NOTE_LETTER`/`AC_NOTE_MIDI` are
-  the 7 base-octave diatonic notes `C D E F G A B` (MIDI 96-107, one per
-  pattern-keyboard key 0-6); the octave field shifts that base pitch by
-  `12 * (octave - AC_NOTE_OCTAVE_SAME)` semitones, where `AC_NOTE_OCTAVE_SAME`
-  = 8 — the octave lives in this separate value rather than in a second
-  table of duplicate letters (an earlier version of this feature used
-  lowercase `c`/`d` on two spare keys for exactly one octave-up duplicate;
-  the `'`/`,` markers replaced that with full up/down coverage on every
-  note, at the cost of one extra keypress for a shifted note — see the
-  keyboard design point below for why that keypress moved to the
-  bottom-left key instead of staying on each note key's own cycle).
-  **Octave markers can stack**: `,` (down) may repeat up to
-  `AC_NOTE_OCTAVE_MAX_DOWN` (8) times in a row (e.g. `"1C,,,,,,,,"`), but
-  `'` (up) may only appear once (`AC_NOTE_OCTAVE_MAX_UP` = 1) — this asymmetry
-  isn't arbitrary, it's the exact range that keeps every one of the 7 base
-  notes' resulting MIDI value inside the valid 0-127 range: C(96) is the
-  binding constraint going down (`96 - 8*12 = 0` exactly; a 9th `,` would go
-  negative), and A(105)/B(107) are the binding constraint going up (2
-  octaves up would be 129/131, past 127). A run must be all the same
-  character — `"1C',"` (mixed) is rejected, same all-or-nothing philosophy
-  as every other malformed-token case in this grammar; there's no clamping
-  to the nearest valid value anywhere, a marker run past its cap is a parse
-  error, not silently truncated. `alarm_build_sound_notes()` (`main.c`) adds
-  a defensive `[0,127]` clamp on the final computed MIDI value anyway,
-  belt-and-suspenders since no validation existed there before this change.
-  Any malformed token
-  (bad digit, missing/invalid note letter, a bare digit for sound, a
-  trailing character that isn't `'`/`,`, more than the applicable cap's
-  segments) fails
-  all-or-nothing, same convention as `ac_cron_parse_field`. Unlike cron's
-  raw-text-plus-mask duplication, no raw string is persisted at all —
-  `ac_vibe_pattern_format()`/`ac_sound_pattern_format()` deterministically
-  reconstruct the canonical text (used for both display and re-editing)
-  from the stored bytes, an exact round trip since there's no lossy
-  truncation step in this grammar. `Alarm.vibe_pattern_kind` (0 = Preset,
-  use `vibe_pattern`; 1 = Custom, use `vibe_pattern_len`/
-  `vibe_pattern_custom[]`) still gates which representation is live for
-  vibe. **Sound no longer has an inline-Custom representation at all** —
-  `Alarm.sound_pattern_kind` only ever takes `0` (Preset, use
-  `sound_preset`, an index) or `2` (Library, use `custom_tune_id`); this
-  whole packed-byte grammar survives on the sound side only through
-  `CustomTune.pattern[]`/`pattern_note[]` (the tune library) and
-  `Alarm.vibe_pattern_custom[]` now, not through anything on `Alarm`
-  itself for sound — see the schema-19 paragraph below for why/how that
-  representation was retired. Schemas 12 through 18 were a single,
-  never-published dev cycle iterating on this signal-pattern byte encoding
-  (a raw duration scheme, then a packed bit7=break scheme, then sparse
-  duration digits, then ABC-notation octave markers, then stacked octave
-  markers — each changed what the same stored bits mean, so `store_load()`
-  reset the affected `*_kind`/`*_len` fields to their safe defaults on every
-  one of these bumps rather than reinterpreting old bytes under a new
-  meaning) — no published version was ever on schema 12-18, so this detail
-  now lives only in `STORE_SCHEMA`'s own condensed history comment
-  (`alarm_store.h`), not here.
-  **`STORE_SCHEMA` 19 removed `sound_pattern_len`/`sound_pattern[]`/
-  `sound_pattern_note[]` from `Alarm` entirely**, replacing them with the
-  plain `sound_preset` index described above — tracing every remaining
-  call site that could set `sound_pattern_kind==1` found exactly one
-  (the Tune-preset direct-commit path, which only ever copies a
-  `SOUND_PRESETS[]` entry's own bytes verbatim), so the byte arrays were
-  100% redundant with an index by this point, not just re-encoded again.
-  Unlike every earlier bump in this list (12 through 18, all pure
-  reinterpretations or resizes that kept the same fields in the same
-  relative order), this one removes fields from the *middle* of the
-  EXTENSION blob's tail (between `sound_pattern_kind` and
-  `vibe_pattern_kind`, and again between `vibe_pattern_custom[]` and
-  `custom_tune_id`), shifting every field after them — which is what
-  finally forced treating EXTENSION-blob trust as an exact-schema-match
-  question rather than an appendable-history one; see the "A schedule now
-  survives ANY future signal-only hard break" design point (near
-  `STORE_SCHEMA`'s own first appearance, above) for the resulting
-  mechanism. Selecting vibe's Custom row (sound no longer reaches the
-  keyboard at all — see above) and submitting an unparseable pattern does
-  NOT touch the alarm's persisted fields at all — `pattern_custom_done()`
-  just re-opens the pattern-select picker with its Custom row reading
-  "invalid" (a transient, unpersisted UI flag) instead of a formatted
-  pattern; a valid submission commits and exits straight back to the
-  Signal menu, skipping the picker. Applied at ring
+- **Custom sound/vibe patterns are a genuine ABC-notation subset** (reworked
+  by the "ABC notation" commit, `STORE_SCHEMA` 20 -- see below; this replaced
+  an earlier, ad-hoc "digit = fixed 100ms unit, `-` = break" grammar with
+  real ABC tokens throughout). A pattern is a space-separated sequence of
+  on-beats and (optional) rests, each carrying a duration expressed as a
+  **ratio** rather than a fixed digit. Sound (Tune) and vibe (Vibration)
+  still have DIFFERENT segment caps -- `AC_SOUND_PATTERN_MAX_SEGMENTS` (32)
+  and `AC_VIBE_PATTERN_MAX_SEGMENTS` (8), `alarm_calc.h` -- unchanged by this
+  rework.
+  - **Rest**: real ABC's own rest token, `z`, optionally followed by a
+    duration suffix (e.g. `"z"`, `"z/2"`) -- replacing the old digit+`-`
+    break spelling entirely; there is no other way to spell a rest now.
+  - **Duration**: an optional `[N]['/'D]` ratio suffix, where `N` and `D`
+    are each one of `AC_NOTE_RATIO_DIGITS` (`{1..8}`, `alarm_calc.c`/`.h`) --
+    "0"/"9" are plain ASCII digits but invalid ratio digits, same exclusion
+    the old grammar had for its duration digit. `N`/`D` are reduced to
+    lowest terms by their GCD before packing, so two spellings of the same
+    ratio (`"1"` and `"2/2"`) always produce the identical stored byte --
+    this matters because `vibe_preset_match()` (`main.c`) identifies a
+    preset by `memcmp`-ing raw bytes. Actual duration is
+    `round(AC_NOTE_DEFAULT_MS * N / D)` ms, via `ac_pattern_duration_ms()`
+    (`alarm_calc.c`) -- `AC_NOTE_DEFAULT_MS` is 100, so a bare on-beat/rest
+    still means exactly 100ms, matching the old grammar's own per-digit
+    unit; only sound's on-beat can spell a truly bare (letter-only) token,
+    since its note letter anchors the suffix -- vibe's on-beat token IS the
+    duration suffix in its entirety, so it can never be zero-length and
+    must always spell an explicit ratio (e.g. `"1"` for the same 100ms).
+    Packed as `(N-1)*8 + (D-1)` into bits 0-6 of the stored byte
+    (`AC_PATTERN_DURATION_MASK`); bit 7 (`AC_PATTERN_REST_BIT`) marks a
+    rest.
+  - **On-beat for VIBE** is just the (possibly bare) duration ratio itself,
+    e.g. `"2"`, `"1/2"`, `"3/4"` -- vibe has no pitch, so nothing precedes
+    the ratio.
+  - **On-beat for SOUND** is `[accidental]letter[octave-marker(s)][ratio]`:
+    an optional leading accidental (`^` sharp, `_` flat -- real ABC
+    notation, `AC_NOTE_ACCIDENTAL_SHARP`/`_FLAT`; no prefix means natural,
+    `AC_NOTE_ACCIDENTAL_NATURAL`), one of the 7 note letters `C D E F G A B`
+    (`AC_NOTE_LETTER`, MIDI 96-107 base octave via `AC_NOTE_MIDI`), then
+    optional octave marker(s) right after the letter -- `'` (apostrophe) up,
+    `,` (comma) down, real ABC-notation octave shift convention, e.g. `"C"`
+    = base, `"C'"` = up 1, `"C,,,"` = down 3 -- then the optional duration
+    suffix. **Octave markers can stack**: `,` may repeat up to
+    `AC_NOTE_OCTAVE_MAX_DOWN` (8) times, but `'` only once
+    (`AC_NOTE_OCTAVE_MAX_UP` = 1) -- this asymmetry keeps every one of the 7
+    notes' resulting MIDI value inside 0-127: C(96) is the binding
+    constraint going down (`96 - 8*12 = 0` exactly; a 9th `,` would go
+    negative), A(105)/B(107) the binding constraint going up (2 octaves up
+    would be 129/131). A run must be all the same character -- `"C',"`
+    (mixed) is rejected, same all-or-nothing philosophy as every other
+    malformed-token case in this grammar; a run past its own cap is a parse
+    error, never clamped. `alarm_build_sound_notes()` (`main.c`) adds a
+    defensive `[0,127]` clamp on the final computed MIDI value anyway,
+    belt-and-suspenders. A bare duration-only token (no accidental/letter)
+    is valid for vibe but always rejected for sound -- sound must always
+    name a pitch (or be a rest) -- the one structural difference between
+    the two grammars. Deliberately, every flat pitch is enharmonically
+    reachable as some other note's sharp, but both accidentals are
+    supported anyway -- a readability choice (spelling a pattern the way
+    it's actually thought of), not a reachability gap.
+  - Two on-tokens with nothing between them play back to back with no gap
+    (e.g. sound `"^C/2 z C3 _D"`, vibe `"1 z/2 1"`).
+  - Parsed by `ac_vibe_pattern_parse()`/`ac_sound_pattern_parse()`
+    (`alarm_calc.c`, host-testable, no SDK dependency, sharing an internal
+    tokenizer/duration-ratio parser) into a packed byte per segment; sound
+    additionally fills a parallel `sound_pattern_note[]` value, encoded
+    *arithmetically* (not bit-packed) as `(octave*AC_NOTE_COUNT +
+    note_index)*AC_NOTE_ACCIDENTAL_COUNT + accidental` (max 69*3+2=209,
+    comfortably inside a `uint8_t`) -- meaningless on a rest segment.
+    `AC_NOTE_OCTAVE_SAME` (8, chosen as `AC_NOTE_OCTAVE_MAX_DOWN`) is the
+    octave field's zero point; applied as `AC_NOTE_MIDI[base] + 12 *
+    (octave - AC_NOTE_OCTAVE_SAME)`.
+  - Any malformed token (bad ratio digit, missing/invalid note letter, a
+    bare duration-only token for sound, an octave-marker run past its cap
+    or mixing `'`/`,`, more than the applicable cap's segments, trailing
+    garbage after the ratio) fails all-or-nothing, same convention as
+    `ac_cron_parse_field`. Unlike cron's raw-text-plus-mask duplication, no
+    raw string is persisted at all -- `ac_vibe_pattern_format()`/
+    `ac_sound_pattern_format()` deterministically reconstruct the canonical
+    text (used for both display and re-editing) from the stored bytes, an
+    exact round trip since there's no lossy truncation step in this
+    grammar; a reduced ratio always formats back to its own lowest-terms
+    spelling (e.g. a byte originally parsed from `"2/2"` reformats as
+    bare), so re-opening a saved pattern for editing can show different
+    text than was typed, never different audio/vibration.
+  - `Alarm.vibe_pattern_kind` (0 = Preset, use `vibe_pattern`; 1 = Custom,
+    use `vibe_pattern_len`/`vibe_pattern_custom[]`) still gates which
+    representation is live for vibe. **Sound has no inline-Custom
+    representation** -- `Alarm.sound_pattern_kind` only ever takes `0`
+    (Preset, use `sound_preset`, an index) or `2` (Library, use
+    `custom_tune_id`); this whole packed-byte grammar survives on the sound
+    side only through `CustomTune.pattern[]`/`pattern_note[]` (the tune
+    library) and `Alarm.vibe_pattern_custom[]`, not through anything on
+    `Alarm` itself for sound (see `STORE_SCHEMA` 19's own removal of
+    `Alarm.sound_pattern[]`/`_len`/`_note[]`, still true under this
+    rework).
+  - **`STORE_SCHEMA` 20** is this ABC-notation rework itself -- a hard break
+    on the byte *encoding* only (old digit-duration/`-`-break bytes mean
+    something different under the new ratio/rest scheme, and sound's
+    `sound_pattern_note[]` encoding changed shape too), so `store_load()`
+    resets the affected `*_kind`/`*_len` fields to their safe defaults on
+    migration exactly like every prior signal-encoding bump (12-19) did --
+    it does **not** wipe the alarm's schedule (time/repeat/cron), per the
+    EXTENSION-blob-vs-MAIN-blob split described above (`ext_schema_is_
+    appendable()`). Selecting vibe's Custom row (sound no longer reaches
+    the keyboard at all) and submitting an unparseable pattern does NOT
+    touch the alarm's persisted fields at all -- `pattern_custom_done()`
+    just re-opens the pattern-select picker with its Custom row reading
+    "invalid" (a transient, unpersisted UI flag) instead of a formatted
+    pattern; a valid submission commits and exits straight back to the
+    Signal menu, skipping the picker. Applied at ring
   time by `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): sound builds
   one `SpeakerNote` per segment directly (each carries its own explicit
   duration/pitch, so consecutive on-beats need no special handling — they
@@ -1444,57 +1426,69 @@ feature — see git history if curious):
       real `alarm_play_audio()` call right below, so the gap calculation
       and the actual playback can never disagree about whether this cycle
       makes sound.
-- **The pattern-entry keyboard is a new `multitap_keyboard` mode**
+- **The pattern-entry keyboard is a `multitap_keyboard` mode**
   (`multitap_keyboard_set_pattern_mode()`), a sibling of cron's existing
-  numeric mode rather than a restyle of it: both lock the layout to
-  `PAGE_NUMBERS`, but numeric mode's character keys are plain digits 1-9
-  and its bottom-left key cycles `*`/`-`/`/`/`,`/repurposes space as `0`;
-  pattern mode's character keys instead pull from one of two small,
-  purpose-built tables selected by a second flag,
-  `pattern_notes_enabled` — `PATTERN_KEY_SOUND[9]` (the 3x3 character grid,
-  keys 0-8 row-major, split into a left duration column and a right
-  two-column note grid rather than sharing each key between a digit and a
-  letter: keys 0/3/6 (the left column) cycle duration digits grouped
-  top-to-bottom like a phone dialpad's own 1/4/7 column — "1"/"2"/"3",
-  "4"/"5"/"6", "7"/"8" (no "9", not a valid duration digit) — and keys
-  1/2/4/5/7/8 (the right two columns) hold the 7 note letters one per key
-  in reading order, C/D/E/F/G/A/B, except the last key (8), which cycles A
-  then B since 6 keys can't hold 7 letters one-each) for sound, or
-  `PATTERN_KEY_VIBE[9]`
-  (keys 0-7 each a bare duration digit "1".."8", no cycling; key 8
-  empty/no-op) for vibe, since vibe has no pitch to put on any key — and
-  its bottom-left key cycles `-`/`'`/`,`
-  (`PATTERN_SYMS`, 3 elements — the break marker plus the two real
-  ABC-notation octave markers, same multi-tap mechanism `CRON_SYMS`
-  already uses for its own 4-symbol cycle) while the space key stays a
-  literal space. Pushed via `multitap_keyboard_window_push_pattern(...,
-  notes_enabled)`, capped at 128 input chars (`PATTERN_KEYBOARD_MAX_LEN`,
-  `main.c`, shared by both keyboards so sized for the larger of the two) —
-  worst case `AC_SOUND_PATTERN_MAX_SEGMENTS` (32) segments of up to 3 chars
-  each (a digit, a note letter, and an optional octave marker -- or `-`
-  for a break); vibe's own `AC_VIBE_PATTERN_MAX_SEGMENTS` (8) cap needs far
-  less. The vendored widget's own `BUFFER_CAP` (`multitap_keyboard.c`) had
-  to grow from 96 to 136 to accommodate this. The
-  text field itself renders through the same shared `prv_draw_text_fitted()`
-  ladder every other mode uses, no different treatment for pattern mode —
-  an earlier version of this feature bolded on-beat tokens vs. regular
-  breaks via a separate `prv_draw_pattern_text()` renderer, patching the
-  widget's own draw routine to work around Pebble's lack of a rich-text/
-  span primitive, but that distinction turned out not to be needed and was
-  reverted; if a future feature needs per-token styling again, this is the
-  precedent for how invasive that gets (the most invasive change made to
-  this vendored widget when it existed — every other extension only ever
-  added a behavior flag, never touched drawing). An even earlier version
-  put the octave markers on each note key's own cycle (baked-in `C`/`C^`/
-  `Cv`-style variants, needing lowercase `c`/`d` duplicates on two spare
-  keys to reach a second octave at all) rather than on the bottom-left
-  key — moving them to their own key kept each note key's cycle short and
-  freed keys 7-8 entirely, at the cost of one more keypress-and-commit
-  step to shift a note's octave; that earlier approach also needed the
-  widget's own shift-casing explicitly disabled in pattern mode (to stop
-  auto-caps from silently uppercasing the lowercase duplicates) — with no
-  lowercase glyphs left anywhere in pattern mode now, that guard was dead
-  code and has been removed from `prv_render_glyph`/`prv_key_label`.
+  numeric mode rather than a restyle of it -- reworked alongside the ABC
+  grammar above so its glyphs now match ratio/rest/accidental/octave
+  tokens instead of the old digit+`-` scheme. Both cron's numeric mode and
+  pattern mode lock the layout, but numeric mode's character keys are plain
+  digits 1-9 and its bottom-left key cycles `*`/`-`/`/`/`,`; pattern mode's
+  character keys instead pull from one of two small, purpose-built tables
+  selected by a second flag, `pattern_notes_enabled`:
+  - **`PATTERN_KEY_SOUND[9]`** is SOUND's primary ("note layout") page, a
+    plain 3x3 grid, keys 0-8 row-major: the 7 note letters `C D E F G A B`
+    one per key (0-6), key 7 (bottom-center, above Space) cycling the
+    octave/accidental glyphs `'`/`,`/`^`/`_` (real ABC octave-up/down and
+    sharp/flat, one tap-cycle since they now share a key rather than the
+    bottom-left "Shift" key), and `z` (the rest token) last on key 8.
+    Duration digits are deliberately NOT on this grid -- they're reachable
+    two other ways: long-pressing any key inserts its keypad digit
+    regardless of that key's tap-time glyph, and pressing DOWN cycles to a
+    second, SOUND-only **numbers page** (`PATTERN_KEY_SOUND_NUMBERS[9]`,
+    reusing `N0`..`N7` -- plain "1".."8" one per key 0-7, key 8 left empty
+    since `AC_NOTE_RATIO_DIGITS` caps at 8). The bottom-left key cycles only
+    `/` (`PATTERN_SYMS`, now a single-symbol cycle -- it used to also carry
+    `-`/octave markers before key 7 was freed for them).
+  - **`PATTERN_KEY_VIBE[9]`** is VIBE's one and only page, a deliberately
+    different shape (not a smaller SOUND grid) -- vibe has no letters to
+    make room for, so every key gets exactly one glyph, no cycling at all:
+    digits 1-8 row-major on keys 0-7, then `z` last on key 8 (matching
+    SOUND's own `z` position). A plain tap always types the intended
+    character directly. The bottom-left key still cycles `/` only, same as
+    SOUND.
+  - Both SOUND and VIBE also cycle to a **navigation** sub-page via DOWN
+    (SOUND: notes -> numbers -> nav; VIBE: digits -> nav), whose keys 3/5
+    move the text cursor left/right instead of typing anything -- the same
+    `PAGE_NAV`/`prv_locked_page_count`/`prv_on_nav` mechanism the plain/
+    label keyboard and cron's numeric mode share (see below).
+  Pushed via `multitap_keyboard_window_push_pattern(..., notes_enabled)`,
+  capped at `PATTERN_KEYBOARD_MAX_LEN` (160, `main.c`, shared by both
+  keyboards so sized for the larger of the two) -- worst case
+  `AC_SOUND_PATTERN_MAX_SEGMENTS` (32) segments of up to several chars each
+  (accidental + letter + up to 8 octave markers + a `N/D` ratio); vibe's
+  own `AC_VIBE_PATTERN_MAX_SEGMENTS` (8) cap needs far less. The vendored
+  widget's own `BUFFER_CAP` (`multitap_keyboard.c`) must exceed this cap.
+  The text field itself renders through the same shared
+  `prv_draw_text_fitted()` ladder every other mode uses, no different
+  treatment for pattern mode -- an earlier version of this feature bolded
+  on-beat tokens vs. rests via a separate `prv_draw_pattern_text()`
+  renderer, patching the widget's own draw routine to work around Pebble's
+  lack of a rich-text/span primitive, but that distinction turned out not
+  to be needed and was reverted; if a future feature needs per-token
+  styling again, this is the precedent for how invasive that gets (the
+  most invasive change made to this vendored widget when it existed --
+  every other extension only ever added a behavior flag, never touched
+  drawing). An even earlier version put the octave markers on each note
+  key's own cycle (baked-in `C`/`C^`/`Cv`-style variants, needing
+  lowercase `c`/`d` duplicates on two spare keys to reach a second octave
+  at all) rather than on their own key -- moving them (and later the
+  accidentals too) to key 7 kept each note key's cycle to one glyph and
+  freed key 8 for `z`, at the cost of one more keypress-and-commit step to
+  shift a note's octave or add an accidental; that earlier approach also
+  needed the widget's own shift-casing explicitly disabled in pattern mode
+  (to stop auto-caps from silently uppercasing the lowercase duplicates) --
+  with no lowercase glyphs left anywhere in pattern mode now, that guard
+  was dead code and has been removed from `prv_render_glyph`/`prv_key_label`.
 - **Main list display**: the bold time slot (`ml_format_cron_time`) shows
   the hour/minute formatted via `ac_format_time` — same
   `clock_is_24h_style()`-aware `"HH:MM"`/`"H:MM am"` every non-cron alarm's
