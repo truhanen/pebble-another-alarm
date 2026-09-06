@@ -1741,13 +1741,6 @@ static void layout_alarm_clock(int screen_w, int screen_h) {
       ALARM_CLOCK_LEFT_MARGIN, screen_h - ALARM_CLOCK_BOTTOM_MARGIN - clock_h, box_w, clock_h));
 }
 
-// Top margin for the title band when the "+N more" sub-label has no text
-// to show (the common case) -- there's nothing else at the top of the
-// screen any more now that the live clock lives at the bottom-left instead
-// (see layout_alarm_clock), so this is just a small fixed gap to the top
-// edge rather than anything computed.
-#define ALARM_TITLE_TOP_MARGIN 4
-
 // TextLayer positions text using the font's own ascent/line-height metrics,
 // not tight glyph ink bounds, so a geometrically-centered frame's VISIBLE
 // ink ends up sitting measurably lower than true center -- confirmed via
@@ -1770,20 +1763,6 @@ static void layout_alarm_title(void) {
   GRect b = layer_get_bounds(window_get_root_layer(s_alarm_window));
   const int h = b.size.h, wd = b.size.w;
 
-  // band_top is always ALARM_TITLE_TOP_MARGIN, regardless of whether the
-  // "+N more" sub-label is currently showing (trigger_alarm sets
-  // s_alarm_sub_buf to "+N more" or clears it to "" before this ever runs --
-  // see its own call site) -- deliberately NOT reserving extra space for it
-  // here, so the title's own vertical centering is identical whether or not
-  // a sub-label happens to be visible above it. This used to shift band_top
-  // down whenever the sub-label had text, which meant the exact same title
-  // rendered noticeably lower whenever a second alarm happened to also be
-  // pending at the same time -- confirmed as an unwanted side effect (on
-  // request), not a deliberate layout decision worth keeping. The sub-label
-  // itself is unaffected by this -- it's still drawn at its own fixed
-  // position (alarm_window_load) above the title band.
-  const int band_top = ALARM_TITLE_TOP_MARGIN;
-
   // down_top used to be tied to a fixed fraction of the screen
   // (h * 78/100 - 18) specifically to leave clearance for
   // draw_edge_rotated_label's own transient scratch-draw-then-erase
@@ -1792,11 +1771,33 @@ static void layout_alarm_title(void) {
   // all; what down_top needs to clear now is the live clock, pinned to the
   // bottom-left corner (layout_alarm_clock) -- computed from the clock's
   // own actual top edge, same "derive from the real edge, not a stale
-  // fraction" fix band_top above already applies to the sub-label.
+  // fraction" fix band_top below already mirrors for the top.
   refresh_alarm_clock_text();
   const int clock_h = alarm_clock_frame_height();
   const int clock_top = h - ALARM_CLOCK_BOTTOM_MARGIN - clock_h;
   const int down_top  = clock_top - 4;
+
+  // band_top mirrors down_top's own reservation at the bottom (h - down_top)
+  // rather than a small fixed margin -- so the band the title centers
+  // within is symmetric around the screen's true vertical middle, instead
+  // of being skewed upward by the clock's own bottom-only reservation (on
+  // request: with a fixed small top margin, the clock ate space only from
+  // the bottom, pulling the whole band -- and therefore the centered title
+  // -- noticeably above the screen's actual center; confirmed via the same
+  // band_top/band_h/down_top logging used to derive ALARM_TITLE_VISUAL_SHIFT
+  // above). Also independent of whether the "+N more" sub-label is
+  // currently showing (trigger_alarm sets s_alarm_sub_buf to "+N more" or
+  // clears it to "" before this ever runs -- see its own call site) --
+  // deliberately NOT reserving extra space for it here, so the title's own
+  // vertical centering is identical whether or not a sub-label happens to
+  // be visible above it. This used to shift band_top down whenever the
+  // sub-label had text, which meant the exact same title rendered
+  // noticeably lower whenever a second alarm happened to also be pending at
+  // the same time -- confirmed as an unwanted side effect (on request), not
+  // a deliberate layout decision worth keeping. The sub-label itself is
+  // unaffected by either of this -- it's still drawn at its own fixed
+  // position (alarm_window_load) above the title band.
+  const int band_top = h - down_top;
   const int band_h   = down_top - 2 - band_top;
   // Title text defaults to the full screen width, centered, no margins at
   // all; only when it's long enough to wrap across multiple lines does it
@@ -1949,6 +1950,17 @@ static void trigger_alarm(int idx, int count) {
   if (idx < 0 || idx >= s_count) { return; }
   const Alarm *a = &s_alarms[idx];
   s_alarm_idx = idx;
+  // Force the backlight on, same as a real button press would -- otherwise
+  // an alarm firing while the watch's screen is already asleep (the normal
+  // idle-timeout case, not just a wakeup-driven relaunch) never lights it,
+  // leaving a ringing alarm silently invisible until the user manually
+  // wakes the screen themselves. This app previously never called any
+  // backlight API at all, relying entirely on whatever the platform
+  // happens to do on a wakeup-driven relaunch -- which doesn't cover the
+  // "already open, wakeup fires while foregrounded" path at all (see
+  // handle_wakeup_event's own history) and isn't guaranteed even on the
+  // relaunch path either.
+  light_enable_interaction();
   // auto_dismiss_mode==2 ("On, hide") follows the exact same ring-window +
   // one-shot-signal + fixed-timer flow as mode 1 now -- it used to skip
   // creating/pushing the ring window entirely and call alarm_do_stop()
