@@ -1463,12 +1463,29 @@ static void alarm_click_config(void *ctx) {
 #define RING_EDGE_RIGHT_MARGIN 0
 #define RING_EDGE_TOP_MARGIN 4
 #define RING_EDGE_BOTTOM_MARGIN 8
-#define RING_EDGE_LABEL_W 40
 
-// Only applies to the ring screen's title when it falls back to left
-// alignment (alarm_title_font's wrapped branch) -- the default centered,
-// full-width layout needs no left margin at all.
-#define ALARM_TITLE_LEFT_MARGIN 8
+// The rotated "Snooze"/"Stop x2" glyphs' own real on-screen width, post-
+// rotation -- confirmed by pixel-scanning an on-emulator screenshot of the
+// ring screen: with the column reserved at the old, much wider 40px, the
+// actual glyph ink never started earlier than 24px from the right edge, on
+// every ring screen checked (both labels, several different title texts).
+// That reported width is the rotated text's pre-rotation HEIGHT (sz.h + the
+// descender padding, see draw_edge_rotated_label) -- constant regardless of
+// the label string's own length, since it's a font line-height, not a
+// width -- so this isn't a per-string measurement that could drift with a
+// different alarm's text. Set to that measured 24px plus a small 2px safety
+// margin rather than the exact figure, in case of minor
+// rendering/anti-aliasing variance. Used both to bound the destination
+// column drawn into (draw_edge_rotated_label) and to shrink the title's own
+// box_w (layout_alarm_title) so its centered text never reaches into it.
+#define RING_EDGE_LABEL_W 26
+
+// Extra breathing room between the title's own wrapped box (wrap_w,
+// layout_alarm_title) and the label column above -- purely cosmetic, so the
+// wrapped title text never sits flush against "Snooze"/"Stop x2"'s own
+// glyphs. Not part of RING_EDGE_LABEL_W itself, which stays sized to
+// exactly what the rotated glyphs need -- this is title-side spacing only.
+#define RING_EDGE_LABEL_GAP 3
 
 // Pebble has no rotated-text primitive -- graphics_draw_text is horizontal
 // only, and there's no public API to get a GContext for an arbitrary
@@ -1504,16 +1521,16 @@ static void draw_edge_rotated_label(GContext *ctx, const char *text, GSize scree
   // down, which is too late: the glyph itself is already clipped by then.
   sz.h += 6;
 
-  // Scratch: drawn flush-left, well below the title's own band (layout_
-  // alarm_title caps the title layer's own frame bottom at down_top+2 at
-  // the very most, so this leaves a healthy ~25px of clearance from that
-  // worst case -- always clear of the destination column at the right
-  // edge, AND of the title/clock/"+N more" labels above it, sized exactly
-  // to the measured text so nothing beyond it is touched. (The top-left
-  // corner used to be a safe scratch spot too, until the live-clock label
-  // started living there -- don't move this back without checking what
-  // else now occupies the corner.)
-  const int scratch_y = screen.h * 78 / 100 - 18 + 27;
+  // Scratch: drawn flush-left, in the screen's top-left corner -- always
+  // clear of the destination column at the right edge, sized exactly to the
+  // measured text so nothing beyond it is touched. This used to instead sit
+  // well below the title's own band, back when the live clock lived in this
+  // same top-left corner; now that the clock has moved to the bottom-left
+  // (see layout_alarm_clock), THAT corner is the one a scratch box here
+  // would collide with, so this reverts to the original top-left spot --
+  // don't move this down again without checking what now occupies the
+  // bottom-left corner.
+  const int scratch_y = RING_EDGE_TOP_MARGIN;
   const GRect scratch = GRect(4, scratch_y, sz.w, sz.h);
   graphics_context_set_text_color(ctx, GColorWhite);
   graphics_draw_text(ctx, text, font, scratch, GTextOverflowModeFill,
@@ -1578,46 +1595,93 @@ static void alarm_lbl_down_update_proc(Layer *l, GContext *ctx) {
   draw_edge_rotated_label(ctx, "Stop x2", b.size, b.size.h / 2 - 6, false);
 }
 
-// The title always renders at this one fixed size -- no shrink-to-fit
-// ladder any more, now that the ring screen gives the main text plenty of
-// vertical room to wrap into instead (see layout_alarm_title/band_h). The
-// clock uses its own separate fixed size, ALARM_CLOCK_FONT_KEY below.
-#define ALARM_TITLE_FONT_KEY FONT_KEY_BITHAM_42_BOLD
+// Largest-to-smallest title font ladder, ported from pebble-another-timer's
+// own alarm_title_font (see that app's ALARM_TITLE_FONT_KEYS) -- the title
+// shrinks through these, largest first, until its wrapped layout fits
+// within the available band height, rather than clipping the biggest
+// font's overflow outright. The clock keeps its own separate fixed size
+// regardless (ALARM_CLOCK_FONT_KEY below) -- a long title must never also
+// shrink the clock, confirmed as a real bug the last time this app tied
+// the two together (see ALARM_CLOCK_FONT_KEY's own comment).
+static const char *const ALARM_TITLE_FONT_KEYS[] = {
+  FONT_KEY_BITHAM_42_BOLD,
+  FONT_KEY_BITHAM_30_BLACK,
+  FONT_KEY_GOTHIC_28_BOLD,
+  FONT_KEY_GOTHIC_24_BOLD,
+  FONT_KEY_GOTHIC_18_BOLD,
+};
+#define ALARM_TITLE_FONT_COUNT (int)(sizeof(ALARM_TITLE_FONT_KEYS) / sizeof(ALARM_TITLE_FONT_KEYS[0]))
 
 // `single_line` is for the fallback title text -- the alarm's own set time,
 // formatted exactly as the main list shows it (e.g. "09:00" or "09:00+",
 // see trigger_alarm) -- which has no spaces to wrap at, so word-wrapping it
 // would just hyphen-split a short time value mid-digit ("00:00+" ->
 // "00:00" / "-" / "+", confirmed on-device, clearly a bug, not a real fit
-// decision) -- it's always measured/rendered as one line at the fixed
-// title font, full screen width, centered.
+// decision; same fix ported from pebble-another-timer's own single_line
+// handling) -- it's always measured/rendered as one line, shrinking
+// through the ladder by single-line WIDTH fit rather than wrapped HEIGHT
+// fit. This is paired with layout_alarm_title switching the TextLayer's
+// own overflow mode to GTextOverflowModeFill for this case (see its own
+// comment) -- measuring "as if" single-line here would otherwise be
+// undermined by the layer still word-wrapping at render time regardless of
+// what was measured, which is exactly the latent bug this port fixes: this
+// function already assumed Fill-mode single-line measurement for the time
+// fallback, but the real TextLayer's overflow mode was only ever set once,
+// unconditionally, to GTextOverflowModeWordWrap at window-load time.
 //
 // Non-single-line layout: default is centered, full screen width, no
-// margins at all -- only once the text is long enough to actually wrap
-// across multiple lines (at the one fixed title font -- no shrink-to-fit
-// any more, see ALARM_TITLE_FONT_KEY) does it fall back to the narrower
-// `wrap_w` (the area left of the right-edge Snooze/Stop label column) and
-// switch to left alignment, per spec.
-static GFont alarm_title_font(const char *text, int full_w, int wrap_w,
+// margins at all; only once the text is long enough to actually wrap
+// across multiple lines AT THE CURRENT LADDER STEP does it fall back to
+// the narrower `wrap_w` (the area left of the right-edge Snooze/Stop label
+// column) -- still centered, just within that narrower box, so every
+// wrapped line reads centered rather than ragged-left -- re-checked at
+// every font size the ladder tries, not just the largest.
+static GFont alarm_title_font(const char *text, int full_w, int wrap_w, int max_h,
     GSize *out, GTextAlignment *out_align, int *out_box_w, bool single_line) {
-  GFont f = fonts_get_system_font(ALARM_TITLE_FONT_KEY);
   if (single_line) {
-    GSize sz = graphics_text_layout_get_content_size(
-        text, f, GRect(0, 0, 2000, 200), GTextOverflowModeFill, GTextAlignmentCenter);
+    const GRect probe = GRect(0, 0, 2000, 200);
+    GFont chosen = NULL;
+    GSize sz = {0};
+    for (int i = 0; i < ALARM_TITLE_FONT_COUNT; i++) {
+      GFont f = fonts_get_system_font(ALARM_TITLE_FONT_KEYS[i]);
+      sz = graphics_text_layout_get_content_size(text, f, probe, GTextOverflowModeFill, GTextAlignmentCenter);
+      chosen = f;
+      if (sz.w <= full_w) { break; }   // largest font whose single line fits full_w -> use it
+    }
     *out = sz; *out_align = GTextAlignmentCenter; *out_box_w = full_w;
-    return f;
+    return chosen;
   }
-  GSize natural = graphics_text_layout_get_content_size(
-      text, f, GRect(0, 0, 2000, 200), GTextOverflowModeFill, GTextAlignmentCenter);
-  if (natural.w <= full_w) {
-    *out = natural; *out_align = GTextAlignmentCenter; *out_box_w = full_w;
-  } else {
-    const int left_wrap_w = wrap_w - ALARM_TITLE_LEFT_MARGIN;
-    GSize wrapped = graphics_text_layout_get_content_size(
-        text, f, GRect(0, 0, left_wrap_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentLeft);
-    *out = wrapped; *out_align = GTextAlignmentLeft; *out_box_w = left_wrap_w;
+  GFont chosen = NULL;
+  GSize sz = {0};
+  GTextAlignment align = GTextAlignmentCenter;
+  int box_w = full_w;
+  for (int i = 0; i < ALARM_TITLE_FONT_COUNT; i++) {
+    GFont f = fonts_get_system_font(ALARM_TITLE_FONT_KEYS[i]);
+    GSize natural = graphics_text_layout_get_content_size(
+        text, f, GRect(0, 0, 2000, 200), GTextOverflowModeFill, GTextAlignmentCenter);
+    if (natural.w <= full_w) {
+      sz = natural; align = GTextAlignmentCenter; box_w = full_w;
+    } else {
+      GSize wrapped = graphics_text_layout_get_content_size(
+          text, f, GRect(0, 0, wrap_w, 2000), GTextOverflowModeWordWrap, GTextAlignmentCenter);
+      // graphics_text_layout_get_content_size underestimates the height
+      // actually needed to render without clipping -- the same platform
+      // quirk draw_edge_rotated_label's own comment documents (confirmed
+      // on-device there: "Stop x2"'s descender got clipped until it padded
+      // sz.h by 6). Applied here too so the fits-vs-overflow decision below,
+      // and the box height eventually handed to the real TextLayer, aren't
+      // built on an undercount.
+      wrapped.h += 6;
+      sz = wrapped; align = GTextAlignmentCenter; box_w = wrap_w;
+    }
+    chosen = f;
+    if (sz.h <= max_h) { break; }   // largest font that fits -> use it (an overlong single word may
+                                    // still get hyphen-split by word-wrap at any of these sizes --
+                                    // accepted as a minor cosmetic wart, same as
+                                    // pebble-another-timer's own comment)
   }
-  return f;
+  *out = sz; *out_align = align; *out_box_w = box_w;
+  return chosen;
 }
 
 // refresh_alarm_clock_text (below, also used by the once-a-minute tick)
@@ -1633,65 +1697,146 @@ static void refresh_alarm_clock_text(void) {
   text_layer_set_text(s_alarm_time, s_alarm_clock_buf);
 }
 
-// The clock's own font is a fixed size, one step below the title's own
-// fixed size (ALARM_TITLE_FONT_KEY) -- deliberately NOT tied to whatever
-// width the title's text happens to need for a given alarm: a long label
-// must never also shrink the clock -- confirmed as a real bug (a long
-// label made the current-time reading noticeably smaller too, which reads
-// as "the current time depends on the alarm", not right at all).
-#define ALARM_CLOCK_FONT_KEY FONT_KEY_BITHAM_30_BLACK
+// The clock's own font is the largest Gothic system font available --
+// deliberately Gothic rather than the title's own Bitham ladder, and
+// deliberately NOT tied to whatever width the title's text happens to need
+// for a given alarm: a long label must never also shrink the clock --
+// confirmed as a real bug (a long label made the current-time reading
+// noticeably smaller too, which reads as "the current time depends on the
+// alarm", not right at all).
+#define ALARM_CLOCK_FONT_KEY FONT_KEY_GOTHIC_28_BOLD
 
-// The current time, shown above the title, always live (regardless of
-// alarm type -- see trigger_alarm), in the same horizontal box/alignment as
-// the title (same box_w/x, center-aligned).
-static void layout_alarm_clock(int box_w) {
+// Gap between the clock's own text and the screen's left/bottom edges --
+// it's pinned to the bottom-left corner, clear of the right-edge Snooze/
+// Stop label column (see RING_EDGE_LABEL_W).
+#define ALARM_CLOCK_LEFT_MARGIN 5
+#define ALARM_CLOCK_BOTTOM_MARGIN 2
+
+// Height the clock's own TextLayer needs -- measured as a single line (the
+// clock text, e.g. "9:05 am", has no spaces to wrap at) -- shared with
+// layout_alarm_title (below) so it can reserve exactly this much space at
+// the bottom of the screen without duplicating this measurement. Assumes
+// s_alarm_clock_buf is already current (see refresh_alarm_clock_text).
+static int alarm_clock_frame_height(void) {
+  GFont cf = fonts_get_system_font(ALARM_CLOCK_FONT_KEY);
+  GSize sz = graphics_text_layout_get_content_size(s_alarm_clock_buf, cf, GRect(0, 0, 2000, 200),
+      GTextOverflowModeFill, GTextAlignmentLeft);
+  return sz.h + 4;
+}
+
+// The current time -- always live, regardless of alarm type (see
+// trigger_alarm) -- pinned to the bottom-left corner, left-aligned, in the
+// largest Gothic system font, deliberately apart from the title's own
+// centered band above it.
+static void layout_alarm_clock(int screen_w, int screen_h) {
   if (!s_alarm_time) { return; }
   refresh_alarm_clock_text();
 
   GFont cf = fonts_get_system_font(ALARM_CLOCK_FONT_KEY);
-  GSize sz = graphics_text_layout_get_content_size(s_alarm_clock_buf, cf, GRect(0, 0, box_w, 2000),
-      GTextOverflowModeWordWrap, GTextAlignmentCenter);
-  const int clock_h = sz.h + 4;
+  const int clock_h = alarm_clock_frame_height();
   text_layer_set_font(s_alarm_time, cf);
-  layer_set_frame(text_layer_get_layer(s_alarm_time), GRect(RING_EDGE_LABEL_W, 2, box_w, clock_h));
-
-  // "+N more" sits directly below the clock rather than at a fixed y --
-  // the clock's own height varies with its (title-font-derived) font size.
-  if (s_alarm_sub) {
-    GRect sb = layer_get_frame(text_layer_get_layer(s_alarm_sub));
-    layer_set_frame(text_layer_get_layer(s_alarm_sub), GRect(sb.origin.x, 2 + clock_h, sb.size.w, sb.size.h));
-  }
+  text_layer_set_text_alignment(s_alarm_time, GTextAlignmentLeft);
+  const int box_w = screen_w - RING_EDGE_LABEL_W - ALARM_CLOCK_LEFT_MARGIN;
+  layer_set_frame(text_layer_get_layer(s_alarm_time), GRect(
+      ALARM_CLOCK_LEFT_MARGIN, screen_h - ALARM_CLOCK_BOTTOM_MARGIN - clock_h, box_w, clock_h));
 }
+
+// Top margin for the title band when the "+N more" sub-label has no text
+// to show (the common case) -- there's nothing else at the top of the
+// screen any more now that the live clock lives at the bottom-left instead
+// (see layout_alarm_clock), so this is just a small fixed gap to the top
+// edge rather than anything computed.
+#define ALARM_TITLE_TOP_MARGIN 4
+
+// TextLayer positions text using the font's own ascent/line-height metrics,
+// not tight glyph ink bounds, so a geometrically-centered frame's VISIBLE
+// ink ends up sitting measurably lower than true center -- confirmed via
+// on-emulator screenshot pixel-scanning (same technique, and the same
+// underlying font-metric quirk, as pebble-another-timer's own
+// ALARM_TITLE_BLOCK_VISUAL_SHIFT): for a single-line "Test" title at
+// BITHAM_42_BOLD, the geometrically-centered content box left a 13px gap
+// above the visible ink and only 1px below it, for an identical zone --
+// this shifts the whole centered block up by half that measured 12px
+// discrepancy to compensate. Measured once for the common single-line
+// case; a wrapped multi-line title showed a smaller (but same-direction)
+// asymmetry in the same test (13px above / 7px below), so this constant is
+// a good match for the common case with a small, imperceptible-in-practice
+// residual for wrapped titles -- not a per-font-in-the-ladder table, same
+// tradeoff timer's own version accepts.
+#define ALARM_TITLE_VISUAL_SHIFT (-6)
 
 static void layout_alarm_title(void) {
   if (!s_alarm_title || !s_alarm_window) { return; }
   GRect b = layer_get_bounds(window_get_root_layer(s_alarm_window));
   const int h = b.size.h, wd = b.size.w;
-  const int up_bottom = h * 22 / 100 - 16 + 34;
-  const int down_top  = h * 78 / 100 - 18;
-  const int band_top = up_bottom + 2;
+
+  // band_top is always ALARM_TITLE_TOP_MARGIN, regardless of whether the
+  // "+N more" sub-label is currently showing (trigger_alarm sets
+  // s_alarm_sub_buf to "+N more" or clears it to "" before this ever runs --
+  // see its own call site) -- deliberately NOT reserving extra space for it
+  // here, so the title's own vertical centering is identical whether or not
+  // a sub-label happens to be visible above it. This used to shift band_top
+  // down whenever the sub-label had text, which meant the exact same title
+  // rendered noticeably lower whenever a second alarm happened to also be
+  // pending at the same time -- confirmed as an unwanted side effect (on
+  // request), not a deliberate layout decision worth keeping. The sub-label
+  // itself is unaffected by this -- it's still drawn at its own fixed
+  // position (alarm_window_load) above the title band.
+  const int band_top = ALARM_TITLE_TOP_MARGIN;
+
+  // down_top used to be tied to a fixed fraction of the screen
+  // (h * 78/100 - 18) specifically to leave clearance for
+  // draw_edge_rotated_label's own transient scratch-draw-then-erase
+  // rectangle -- that scratch box has since moved to the screen's
+  // top-left corner (see its own comment), so it's no longer down here at
+  // all; what down_top needs to clear now is the live clock, pinned to the
+  // bottom-left corner (layout_alarm_clock) -- computed from the clock's
+  // own actual top edge, same "derive from the real edge, not a stale
+  // fraction" fix band_top above already applies to the sub-label.
+  refresh_alarm_clock_text();
+  const int clock_h = alarm_clock_frame_height();
+  const int clock_top = h - ALARM_CLOCK_BOTTOM_MARGIN - clock_h;
+  const int down_top  = clock_top - 4;
   const int band_h   = down_top - 2 - band_top;
   // Title text defaults to the full screen width, centered, no margins at
   // all; only when it's long enough to wrap across multiple lines does it
   // fall back to `wrap_w` -- the area left of the right-edge Snooze/Stop
-  // label column -- and switch to left alignment (see alarm_title_font).
-  // The clock/"+N more" labels above stay on their own separate, always-
-  // symmetric box (clock_box_w below) regardless of what the title picks.
+  // label column -- staying centered within that narrower box too (see
+  // alarm_title_font).
   const int full_w = wd;
-  const int wrap_w = wd - RING_EDGE_LABEL_W;
+  const int wrap_w = wd - RING_EDGE_LABEL_W - RING_EDGE_LABEL_GAP;
   GSize sz;
   GTextAlignment align;
   int box_w;
-  GFont tf = alarm_title_font(s_alarm_title_buf, full_w, wrap_w, &sz, &align, &box_w,
+  GFont tf = alarm_title_font(s_alarm_title_buf, full_w, wrap_w, band_h, &sz, &align, &box_w,
       s_alarm_title_is_time);
+  // Fits (now the common case, since alarm_title_font already shrunk the
+  // font to fit band_h wherever a smaller size could manage it): centered
+  // dead-center (50%) in the band. Doesn't fit even at the ladder's
+  // smallest font
+  // (used_h clamps to band_h): title_y collapses to band_top -- top-aligned,
+  // so the visible lines are always the FIRST ones, clipped at the bottom
+  // rather than symmetrically or from the top -- and frame_h stays exactly
+  // band_h, not band_h+4, so the title layer's own frame never spills past
+  // down_top into the clock below it.
   const int used_h = sz.h < band_h ? sz.h : band_h;
-  const int title_y = band_top + (band_h - used_h) / 2;
-  const int title_x = align == GTextAlignmentLeft ? ALARM_TITLE_LEFT_MARGIN : 0;
+  const int frame_h = sz.h < band_h ? sz.h + 4 : band_h;
+  int title_y = band_top + (band_h - used_h) / 2 + ALARM_TITLE_VISUAL_SHIFT;
+  if (title_y < band_top) { title_y = band_top; }   // guard: don't let the shift push the frame above the band
   text_layer_set_font(s_alarm_title, tf);
   text_layer_set_text_alignment(s_alarm_title, align);
-  layer_set_frame(text_layer_get_layer(s_alarm_title), GRect(title_x, title_y, box_w, used_h + 4));
-  const int clock_box_w = wd - 2 * RING_EDGE_LABEL_W;
-  layout_alarm_clock(clock_box_w);
+  // The time-format fallback (no name set) must never word-wrap -- see the
+  // single_line branch of alarm_title_font -- so the layer's own overflow
+  // mode has to track s_alarm_title_is_time here too, ported from
+  // pebble-another-timer's own layout_alarm_title; otherwise it would still
+  // hyphen-split at render time regardless of what was measured. This app
+  // previously set GTextOverflowModeWordWrap unconditionally, once, at
+  // window-load time (alarm_window_load) and never revisited it -- a latent
+  // version of exactly the bug this line fixes.
+  text_layer_set_overflow_mode(s_alarm_title,
+      s_alarm_title_is_time ? GTextOverflowModeFill : GTextOverflowModeWordWrap);
+  layer_set_frame(text_layer_get_layer(s_alarm_title), GRect(0, title_y, box_w, frame_h));
+  layout_alarm_clock(wd, h);
 }
 
 // Applies s_alarm_blank (plus s_alarm_title_buf/s_alarm_sub_buf when not
@@ -1723,14 +1868,14 @@ static void alarm_window_load(Window *w) {
   const int h = b.size.h, wd = b.size.w;
 
   // The live current time -- always shown, regardless of alarm type (see
-  // trigger_alarm) -- above the title, same horizontal box/alignment as it.
-  // Font/frame are set by layout_alarm_clock (called from layout_alarm_title,
-  // since it depends on the title's own chosen font); this initial frame is
-  // just a placeholder until that first runs.
-  s_alarm_time = text_layer_create(GRect(RING_EDGE_LABEL_W, 2, wd - 2 * RING_EDGE_LABEL_W, 28));
+  // trigger_alarm) -- pinned to the bottom-left corner. Font/frame are set
+  // by layout_alarm_clock (called from layout_alarm_title, since the title's
+  // own band has to reserve room above it); this initial frame is just a
+  // placeholder until that first runs.
+  s_alarm_time = text_layer_create(GRect(ALARM_CLOCK_LEFT_MARGIN, h - 32, wd - RING_EDGE_LABEL_W - ALARM_CLOCK_LEFT_MARGIN, 28));
   text_layer_set_background_color(s_alarm_time, GColorClear);
   text_layer_set_text_color(s_alarm_time, GColorWhite);
-  text_layer_set_text_alignment(s_alarm_time, GTextAlignmentCenter);
+  text_layer_set_text_alignment(s_alarm_time, GTextAlignmentLeft);
   layer_add_child(root, text_layer_get_layer(s_alarm_time));
 
   s_alarm_sub = text_layer_create(GRect(4, 2, wd - 8, 28));
@@ -1762,6 +1907,21 @@ static void alarm_window_load(Window *w) {
   layer_set_update_proc(s_alarm_lbl_down, alarm_lbl_down_update_proc);
   layer_add_child(root, s_alarm_lbl_down);
 
+  s_alarm_lbl_up = layer_create(GRect(0, 0, wd, h));
+  layer_set_update_proc(s_alarm_lbl_up, alarm_lbl_up_update_proc);
+  layer_add_child(root, s_alarm_lbl_up);
+
+  // Added (and therefore drawn) LAST, after both rotated edge labels above --
+  // deliberately, so the title always wins any pixel both it and a label's
+  // own transient scratch-draw-then-erase (draw_edge_rotated_label) happen
+  // to touch in the same frame, instead of needing that scratch area to stay
+  // clear of the title's own growing band (see layout_alarm_title's down_top
+  // comment). This only protects the SCRATCH mechanism, not genuine content
+  // overlap -- the title's own final rendered text and the labels' own final
+  // rotated position are still confined to disjoint horizontal columns
+  // (RING_EDGE_LABEL_W), so this reorder changes nothing about how anything
+  // actually looks; it only removes a rendering-order hazard.
+  //
   // Placeholder frame/alignment only -- layout_alarm_title (called from
   // alarm_window_apply_content below) immediately picks the real frame and
   // alignment (full-width-centered, or wrap_w-left if the text wraps).
@@ -1771,10 +1931,6 @@ static void alarm_window_load(Window *w) {
   text_layer_set_text_alignment(s_alarm_title, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_alarm_title, GTextOverflowModeWordWrap);
   layer_add_child(root, text_layer_get_layer(s_alarm_title));
-
-  s_alarm_lbl_up = layer_create(GRect(0, 0, wd, h));
-  layer_set_update_proc(s_alarm_lbl_up, alarm_lbl_up_update_proc);
-  layer_add_child(root, s_alarm_lbl_up);
 
   alarm_window_apply_content();
 }
