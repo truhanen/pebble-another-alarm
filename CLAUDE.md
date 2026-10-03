@@ -138,11 +138,12 @@ than trusting a mental model of the numbering.
 | `TestTuneName` | 10042 | string | |
 | `TestTuneCustomPattern` | 10043 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into the tune's own `pattern`/`pattern_note`/`pattern_len` (`CustomTune`, unaffected by sound's own `kind==1` retirement — the tune library was always a separate representation). Logs a warning (left unchanged) if unparseable. `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
 | `TestAlarmTuneId` | 10044 | int | Links an alarm directly to a tune by id — sets `custom_tune_id` and forces `sound_pattern_kind = 2`, skipping the Tune picker → Custom tunes → Custom tune → Apply chain for test setup. |
+| `TestBlockedWakeupOffsets` | 10045 | string | Comma-separated list of signed integers, e.g. `"-1,0,1"` — minute offsets, relative to whichever target `rearm_wakeup()` is currently trying to arm, to fake as already occupied by another app's wakeup. Not an `Alarm` field at all (applies globally to whatever `rearm_wakeup()` next tries to arm, not to one specific alarm) — see the wakeup-conflict-handling design point below for the mechanism this exercises. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
 Applying any field calls `persist_all(); rearm_wakeup(); reload_ui();`, same
-as every other alarm-mutating code path. The `Test*Tune*` keys are the one
+as every other alarm-mutating code path. The `Test*Tune*` keys are one
 exception — they call `persist_tunes()` (not `persist_all()`), since the
 tune library is a separate persisted table from `s_alarms`; see "Custom-tune
 library" below.
@@ -251,6 +252,92 @@ in this app at all, so every message key is now just an ordinary scalar at
   before cancelling the old" ordering as timer's `rearm_wakeup`, so a
   transiently-refused reschedule can never leave the app with zero wakeups
   armed. Call `rearm_wakeup()` after every mutation.
+- **Wakeup-schedule-conflict handling**: Pebble's `wakeup_schedule()` refuses
+  a new wakeup within ~60s of any other already-scheduled wakeup on the
+  device (including other apps') — a real, regularly-hit condition, not an
+  edge case. `rearm_wakeup()` used to handle this by retrying the exact same
+  minute every 60s for up to 5 attempts and silently giving up — exactly the
+  anti-pattern `pebble-another-timer`'s own `rearm_wakeup()` deliberately
+  moved away from after reverting an identical mistake. Fixed instead by a
+  small, silent, fully automatic adjustment, deliberately simpler than
+  Timer's accept/decline conflict-resolution prompt (this app's own bar: an
+  alarm missing its exact minute by a little is fine; oversleeping or never
+  ringing at all is not):
+  - On the exact-time attempt failing, `wakeup_find_nearby_slot()` scans
+    **backward** minute-by-minute for up to 15 attempts (stopping early if a
+    candidate would fall at-or-before "now"), then **forward** for up to 5 —
+    backward is tried first and given far more room, since oversleeping is
+    worse than waking a little early. Whichever minute the first successful
+    `wakeup_schedule()` call lands on becomes that occurrence's real fire
+    time outright, with no user prompt at all.
+  - Every `wakeup_schedule()` call is tagged with the target alarm's own
+    persistent `id` as its wakeup *cookie* (previously always `0` and never
+    read back) — this is what makes "fire exactly at the resolved minute"
+    work without any new persisted field on `Alarm`: when that wakeup
+    actually fires, `handle_wakeup_event()`/`init()`'s `wakeup_get_launch_
+    event()` path resolve the cookie back to an alarm index
+    (`find_alarm_index_by_id()`/`resolve_forced_due_idx()`) and pass it into
+    `sweep_due_alarms()` as `forced_idx` — that one alarm fires
+    unconditionally, bypassing its own mask/time check entirely (which could
+    otherwise say "not yet due" if adjusted early, or no longer match at all
+    for a cron alarm if adjusted late), while every other alarm is still
+    checked the ordinary way.
+  - **Cron's dedup bookkeeping needs the ORIGINAL target, not the actual
+    fire time** — the one genuinely subtle part of this feature. Stamping
+    `cron_last_fired_min` to the adjusted (early or late) minute, rather
+    than the real un-adjusted target, breaks a dense pattern's own
+    next-occurrence math: an early adjustment would make the next
+    computation immediately re-target the *same* occurrence that just
+    rang (a near-duplicate ring minutes later), and a late adjustment risks
+    landing on or past the pattern's own next legitimate match (silently
+    swallowing it). Fixed by always stamping the original target's own
+    epoch minute instead — re-deriving "what's after the original target"
+    then correctly lands on the real next occurrence either way. This is
+    the one piece that genuinely needs small persisted state surviving an
+    app relaunch (an in-memory value wouldn't survive one, and alarms
+    commonly fire via exactly that kind of relaunch): two new top-level
+    scalar persist keys, `PERSIST_KEY_ARMED_CRON_ALARM_ID`/
+    `PERSIST_KEY_ARMED_CRON_TARGET_MIN` (`alarm_store.h`/`.c`) — mirroring
+    the scope of the existing single `PERSIST_KEY_WAKEUPID` scalar, **not**
+    a change to `Alarm`'s own struct/`STORE_SCHEMA`. `resolve_forced_due_idx()`
+    refuses to force-fire a cron alarm at all if the stored armed-alarm-id
+    doesn't match (stale/corrupted state), falling back to the ordinary
+    scan rather than risk stamping a wrong value.
+  - **The rare case where nothing in the whole −15..+5 window is free**
+    (every minute also blocked) is the one condition this feature still
+    surfaces to the user at all: `notify_wakeup_unschedulable()` reuses
+    `confirm_window_push()`/`confirm_window` with a small additive
+    extension (`label1 == NULL` means a single acknowledgement row instead
+    of a real 2-choice prompt) rather than a new window class. It's a pure
+    "OK" dismissal — nothing the user picks changes any alarm data, the
+    alarm's previous wakeup (if any) is left untouched rather than
+    cancelled, and the push is deferred by one event-loop tick
+    (`app_timer_register(0, ...)`) so it never interrupts an in-progress
+    ring-dismiss sequence or any other window push already under way in the
+    same call chain (`rearm_wakeup()` can run mid `alarm_do_stop()`/
+    `alarm_snooze()`, while the ring window is still on the stack).
+  - **Deliberately no exit-guard sentinel window**, unlike Timer's — that
+    mechanism exists there to protect a "keep app in foreground" mode and a
+    generic idle-timeout auto-exit path, neither of which this app has:
+    every conflict here resolves synchronously within a single
+    `rearm_wakeup()` call, and the only real topology risk (the rare notice
+    ending up as the sole window on the stack) is fixed by `init()`'s own
+    push ordering — the main window is always pushed before the first
+    `rearm_wakeup()` call that could trigger it.
+  - **Test-only `TestBlockedWakeupOffsets` hook** (see the Test hooks table
+    above) fakes `wakeup_schedule()` failing within Pebble's real ~60s
+    exclusion window of a configured offset, mirroring
+    `pebble-another-timer`'s own `TestBlockedSystemWakeupMinuteOffsetsPos`/
+    `Neg` mechanism (collapsed to one signed-offset list here, matching this
+    app's single ordered backward-then-forward search rather than timer's
+    two-sided one) — lets a harness exercise the adjustment and the rare
+    notice deterministically, without a second real app occupying an actual
+    OS wakeup slot (unlike timer's `tests/wakeup_test_app/` companion app,
+    which this project has no equivalent of). Its parser is hand-rolled
+    rather than `strtok`-based — pulling in `strtok` for this one hook
+    measurably ate into this app's already-tight `APP_TEST_HOOKS=1`
+    `virtual_size` budget (see the cursor-navigation feature's own history
+    further down for why that budget matters).
 - **`wakeup_service_subscribe(handle_wakeup_event)`** (in `init()`) is a real
   bug fix, not boilerplate: `wakeup_get_launch_event()` only covers a wakeup
   that had to *relaunch* the app because it wasn't running. If the app was

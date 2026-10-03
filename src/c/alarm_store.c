@@ -208,6 +208,24 @@ void store_save_wakeup_id(int32_t id) {
   persist_write_int(PERSIST_KEY_WAKEUPID, id);
 }
 
+uint32_t store_load_armed_cron_alarm_id(void) {
+  if (!persist_exists(PERSIST_KEY_ARMED_CRON_ALARM_ID)) { return 0; }
+  return (uint32_t)persist_read_int(PERSIST_KEY_ARMED_CRON_ALARM_ID);
+}
+
+void store_save_armed_cron_alarm_id(uint32_t id) {
+  persist_write_int(PERSIST_KEY_ARMED_CRON_ALARM_ID, (int32_t)id);
+}
+
+int32_t store_load_armed_cron_target_min(void) {
+  if (!persist_exists(PERSIST_KEY_ARMED_CRON_TARGET_MIN)) { return 0; }
+  return persist_read_int(PERSIST_KEY_ARMED_CRON_TARGET_MIN);
+}
+
+void store_save_armed_cron_target_min(int32_t epoch_min) {
+  persist_write_int(PERSIST_KEY_ARMED_CRON_TARGET_MIN, epoch_min);
+}
+
 int store_load_first_day_of_week(void) {
   if (!persist_exists(PERSIST_KEY_FIRST_DAY_OF_WEEK)) { return 1; }   // default Monday
   return persist_read_int(PERSIST_KEY_FIRST_DAY_OF_WEEK);
