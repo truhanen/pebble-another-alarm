@@ -295,6 +295,12 @@ test('tunes: validation tag and delete', async () => {
   assert.ok((await page.locator('.tu-err').innerText()).includes('Invalid'), "mixed octave markers are invalid");
   await page.fill('.tu-pat', 'C z E2 ^G/2');
   assert.strictEqual(await page.locator('.tu-err').innerText(), '');
+  // the watch's 160-character cap
+  const base = new Array(22).fill("^C'7/8").join(' ');
+  await page.fill('.tu-pat', base + " ^C'7/8");
+  assert.strictEqual(await page.locator('.tu-err').innerText(), '', '160 characters is fine');
+  await page.fill('.tu-pat', base + ' ^C,,7/8');
+  assert.ok((await page.locator('.tu-err').innerText()).includes('160'), '161 characters is flagged');
   await page.locator('.tu-del').click();
   assert.strictEqual(await page.locator('.tu-row').count(), 0);
 });
@@ -983,4 +989,28 @@ test('weekday chips stay on one row inside the Schedule panel at narrow phone wi
     assert.ok(w >= 30, `chips stay tappable at ${width}px (${Math.round(w)}px wide)`);
     await page.close();
   }
+});
+
+test('the on/off switch and the option chips keep their whole tap area (no reliance on the inset shorthand)', async () => {
+  const { page } = await open();
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  const covers = async (sel) => page.locator(sel).first().evaluate((input) => {
+    const box = input.getBoundingClientRect();
+    const parent = input.parentElement.getBoundingClientRect();
+    return { dx: Math.abs(box.left - parent.left), dy: Math.abs(box.top - parent.top),
+             dw: Math.abs(box.width - parent.width), dh: Math.abs(box.height - parent.height) };
+  });
+  for (const sel of ['.al-card .al-switch input', '.al-card .al-chip input']) {
+    const c = await covers(sel);
+    assert.ok(c.dx <= 1 && c.dy <= 1 && c.dw <= 1 && c.dh <= 1, `${sel} must cover its whole control: ${JSON.stringify(c)}`);
+  }
+  // and the covering input really is what a tap hits
+  const hit = await page.locator('.al-card .al-chip').first().evaluate((chip) => {
+    chip.scrollIntoView({ block: 'center' });   // elementFromPoint only sees what is inside the viewport
+    const b = chip.getBoundingClientRect();
+    const el = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    return el && el.tagName;
+  });
+  assert.strictEqual(hit, 'INPUT');
 });

@@ -5427,7 +5427,14 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
 #define ALARM_REC_MIN_FIELDS 15
 #define SNAPSHOT_DEBOUNCE_MS 1500
 #define SNAPSHOT_LAUNCH_DELAY_MS 3000
-#define SNAPSHOT_TUNE_TEXT_MAX 200
+// A sound pattern can hold up to AC_SOUND_PATTERN_MAX_SEGMENTS (32) tokens of up
+// to 13 characters ("^C,,,,,,,,7/8") plus separators: 447 characters worst case.
+// The snapshot formats into a buffer this big so a stored pattern is never cut.
+#define SNAPSHOT_TUNE_TEXT_MAX 450
+// Both AppMessage buffers are 8200 bytes; leave room for the dictionary framing.
+// A snapshot that would exceed this stops at the last complete record (the page
+// just sees a shorter list; it never deletes what it doesn't see).
+#define SNAPSHOT_MAX_BYTES 8000
 
 // Splits `s` in place at `sep`, returning the next piece and advancing *s
 // (NULL once exhausted).
@@ -5449,6 +5456,10 @@ static void copy_name(char *dst, const char *src) {
 static AppTimer *s_snapshot_timer;
 static int s_snapshot_stage;   // 0 idle, 1 vibrations in flight, 2 tunes in flight, 3 alarms in flight
 
+static size_t snap_cap(size_t estimate) {
+  return (estimate > SNAPSHOT_MAX_BYTES ? SNAPSHOT_MAX_BYTES : estimate) + 1;
+}
+
 // Advances `used` by a snprintf() result; false if it was truncated/failed.
 // (vsnprintf isn't available in the Pebble SDK, so callers snprintf directly.)
 static bool snap_advance(int w, size_t cap, size_t *used) {
@@ -5468,41 +5479,51 @@ static void snap_clean_name(char *out, const char *name) {
 }
 
 static char *build_vibe_snapshot(void) {
-  size_t cap = (size_t)s_vibe_count * (16 + NAME_LEN + SNAPSHOT_TUNE_TEXT_MAX) + 1;
+  size_t cap = snap_cap((size_t)s_vibe_count * (16 + NAME_LEN + 40));
   char *buf = malloc(cap);
   if (!buf) { return NULL; }
   size_t used = 0;
   buf[0] = '\0';
   for (int i = 0; i < s_vibe_count; i++) {
     const CustomVibe *v = &s_vibes[i];
-    char name[NAME_LEN + 1], pat[SNAPSHOT_TUNE_TEXT_MAX];
+    char name[NAME_LEN + 1], pat[64];   // 8 segments of up to 3 characters + spaces
     snap_clean_name(name, v->name);
     ac_vibe_pattern_format(pat, sizeof(pat), v->pattern, v->pattern_len);
+    size_t before = used;
     if (!snap_advance(snprintf(buf + used, cap - used, "%s%lu%c%s%c%s", used ? "\x1e" : "",
-                               (unsigned long)v->id, LIST_US, name, LIST_US, pat), cap, &used)) { break; }
+                               (unsigned long)v->id, LIST_US, name, LIST_US, pat), cap, &used)) {
+      buf[before] = '\0';
+      break;
+    }
   }
   return buf;
 }
 
 static char *build_tune_snapshot(void) {
-  size_t cap = (size_t)s_tune_count * (16 + NAME_LEN + SNAPSHOT_TUNE_TEXT_MAX) + 1;
+  size_t cap = snap_cap((size_t)s_tune_count * (16 + NAME_LEN + SNAPSHOT_TUNE_TEXT_MAX));
   char *buf = malloc(cap);
-  if (!buf) { return NULL; }
+  char *pat = malloc(SNAPSHOT_TUNE_TEXT_MAX);   // heap, not stack: 450 bytes
+  if (!buf || !pat) { free(buf); free(pat); return NULL; }
   size_t used = 0;
   buf[0] = '\0';
   for (int i = 0; i < s_tune_count; i++) {
     const CustomTune *t = &s_tunes[i];
-    char name[NAME_LEN + 1], pat[SNAPSHOT_TUNE_TEXT_MAX];
+    char name[NAME_LEN + 1];
     snap_clean_name(name, t->name);
-    ac_sound_pattern_format(pat, sizeof(pat), t->pattern, t->pattern_note, t->pattern_len);
+    ac_sound_pattern_format(pat, SNAPSHOT_TUNE_TEXT_MAX, t->pattern, t->pattern_note, t->pattern_len);
+    size_t before = used;
     if (!snap_advance(snprintf(buf + used, cap - used, "%s%lu%c%s%c%s", used ? "\x1e" : "",
-                               (unsigned long)t->id, LIST_US, name, LIST_US, pat), cap, &used)) { break; }
+                               (unsigned long)t->id, LIST_US, name, LIST_US, pat), cap, &used)) {
+      buf[before] = '\0';
+      break;
+    }
   }
+  free(pat);
   return buf;
 }
 
 static char *build_alarm_snapshot(void) {
-  size_t cap = (size_t)s_count * (120 + NAME_LEN + 6 * CRON_FIELD_LEN) + 1;
+  size_t cap = snap_cap((size_t)s_count * (120 + NAME_LEN + 6 * CRON_FIELD_LEN));
   char *buf = malloc(cap);
   if (!buf) { return NULL; }
   size_t used = 0;
@@ -5528,6 +5549,7 @@ static char *build_alarm_snapshot(void) {
         : (a->vibe_pattern < VIBE_PRESET_COUNT ? a->vibe_pattern : 0);
     // For a cron alarm repeat_days holds the dow mask, which the cron string
     // already carries -- send 0 so the page doesn't read it as weekdays.
+    size_t before = used;
     if (!snap_advance(snprintf(buf + used, cap - used,
         "%s%lu%c%s%c%d%c%d%c%d%c%d%c%d%c%s%c%d%c%d%c%d%c%d%c%lu%c%d%c%d%c%lu%c%d",
         used ? "\x1e" : "", (unsigned long)a->id, LIST_US, name, LIST_US,
@@ -5537,7 +5559,10 @@ static char *build_alarm_snapshot(void) {
         (int)a->snooze_minutes, LIST_US, (int)a->snooze_max, LIST_US,
         a->vibration_enabled ? 1 : 0, LIST_US, a->sound_enabled ? 1 : 0, LIST_US,
         (unsigned long)tune_id, LIST_US, (int)a->auto_dismiss_mode, LIST_US,
-        a->increasing_volume ? 1 : 0, LIST_US, (unsigned long)vibe_id, LIST_US, vibe_preset), cap, &used)) { break; }
+        a->increasing_volume ? 1 : 0, LIST_US, (unsigned long)vibe_id, LIST_US, vibe_preset), cap, &used)) {
+      buf[before] = '\0';
+      break;
+    }
   }
   return buf;
 }
@@ -5602,7 +5627,11 @@ static void apply_tune_config(const char *text) {
     }
     if (!pat || !*name) { continue; }
     uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], plen;
-    if (!ac_sound_pattern_parse(pat, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &plen)) {
+    // The watch's own keyboard caps a pattern at PATTERN_KEYBOARD_MAX_LEN
+    // characters; accepting longer ones from the phone would let a tune exist
+    // here that the watch can't edit and that bloats every snapshot.
+    if (strlen(pat) > PATTERN_KEYBOARD_MAX_LEN ||
+        !ac_sound_pattern_parse(pat, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &plen)) {
       APP_LOG(APP_LOG_LEVEL_WARNING, "TuneConfig: invalid pattern for tune %lu", (unsigned long)id);
       continue;
     }

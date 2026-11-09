@@ -23,7 +23,9 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   }
 
   function validPattern(text: string): boolean {
-    const toks = ('' + text).replace(/^ +| +$/g, '').split(/ +/);   // the watch splits on spaces only
+    const trimmed = ('' + text).replace(/^ +| +$/g, '');   // the watch splits on spaces only
+    if (trimmed.length > 160) { return false; }   // the watch's keyboard cap; it rejects longer ones
+    const toks = trimmed.split(/ +/);
     if (toks.length === 0 || toks[0] === '' || toks.length > 32) { return false; }
     // Regex LITERALS on purpose. Clay injects this source with
     // String.replace(), so a dollar sign followed by a quote anywhere in this
@@ -51,7 +53,7 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   function refreshValidity(row: HTMLElement): void {
     const pat = (row.querySelector('.tu-pat') as HTMLInputElement).value;
     const err = row.querySelector('.tu-err') as HTMLElement;
-    err.textContent = (pat.trim() === '' || validPattern(pat)) ? '' : 'Invalid pattern (will not be saved)';
+    err.textContent = (pat.trim() === '' || validPattern(pat)) ? '' : 'Invalid pattern: up to 32 notes and 160 characters (will not be saved)';
   }
 
   function currentValue(): any[] {

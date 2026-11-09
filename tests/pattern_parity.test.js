@@ -33,6 +33,9 @@ function corpus(tokens, maxTokens) {
   // the exact segment-cap boundaries
   out.push(new Array(8).fill('1').join(' '), new Array(9).fill('1').join(' '));
   out.push(new Array(32).fill('C').join(' '), new Array(33).fill('C').join(' '));
+  // the character-length boundary the phone adds on top of the watch's parser
+  const base = new Array(22).fill("^C'7/8").join(' ');   // 153 characters
+  out.push(base + " ^C'7/8", base + ' ^C,,7/8');          // 160 and 161 characters, both fine for the parser
   return out;
 }
 
@@ -47,7 +50,10 @@ test('phone validators agree with the watch parser', { skip: !hasGcc && 'gcc not
     const res = execFileSync(bin, { input }).toString().trim().split('\n');
     assert.strictEqual(res.length, texts.length);
     const bad = [];
-    texts.forEach((t, i) => { if ((res[i] === '1') !== validator(t)) { bad.push(JSON.stringify(t) + ' watch=' + res[i]); } });
+    // The parser has no character limit; tunes also have the 160-character cap
+    // the phone enforces (and the watch's own keyboard, and its push handler).
+    const expected = (t, watchOk) => watchOk && (kind !== 'S' || t.replace(/^ +| +$/g, '').length <= L.PATTERN_MAX_CHARS);
+    texts.forEach((t, i) => { if (expected(t, res[i] === '1') !== validator(t)) { bad.push(JSON.stringify(t) + ' watch=' + res[i]); } });
     assert.deepStrictEqual(bad, [], `${kind}: validators disagree with the watch on ${bad.length} patterns`);
   };
   check('S', corpus(SOUND_TOKENS, 6), L.validTunePattern);
@@ -55,3 +61,11 @@ test('phone validators agree with the watch parser', { skip: !hasGcc && 'gcc not
 });
 
 module.exports = { corpus, SOUND_TOKENS, VIBE_TOKENS };
+
+test('the 160-character tune cap sits exactly where documented', () => {
+  const base = new Array(22).fill("^C'7/8").join(' ');
+  assert.strictEqual((base + " ^C'7/8").length, 160);
+  assert.ok(L.validTunePattern(base + " ^C'7/8"), '160 characters is allowed');
+  assert.ok(!L.validTunePattern(base + ' ^C,,7/8'), '161 characters is not');
+  assert.ok(L.validTunePattern(' ' + base + " ^C'7/8 "), 'surrounding spaces are not counted');
+});

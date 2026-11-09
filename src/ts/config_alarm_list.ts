@@ -180,7 +180,9 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
   // Same grammar as config_tune_list.ts / list_config.ts (regex literals on
   // purpose, see the note at the top of this file).
   function validTune(text: string): boolean {
-    const toks = ('' + text).replace(/^ +| +$/g, '').split(/ +/);   // the watch splits on spaces only
+    const trimmed = ('' + text).replace(/^ +| +$/g, '');   // the watch splits on spaces only
+    if (trimmed.length > 160) { return false; }   // the watch's keyboard cap; it rejects longer ones
+    const toks = trimmed.split(/ +/);
     if (toks.length === 0 || toks[0] === '' || toks.length > 32) { return false; }
     const note = /^[\^_]?[C-GAB](?:'|,{1,8})?(?:[1-8](?:\/[1-8])?|\/[1-8])?$/;
     const rest = /^z(?:[1-8](?:\/[1-8])?|\/[1-8])?$/;
@@ -695,8 +697,8 @@ const alarmListComponent = {
     '.al-card.open .al-chev{transform:rotate(90deg)}' +
     // on/off switch
     '.al-switch{position:relative;display:inline-block;width:2.6rem;height:1.5rem;flex:0 0 auto;margin:0}' +
-    '.al-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}' +
-    '.al-slider{position:absolute;inset:0;background:#777;border-radius:1.5rem;transition:background 0.15s}' +
+    '.al-switch input{position:absolute;opacity:0;top:0;left:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}' +
+    '.al-slider{position:absolute;top:0;right:0;bottom:0;left:0;background:#777;border-radius:1.5rem;transition:background 0.15s}' +
     '.al-slider:before{content:"";position:absolute;width:1.1rem;height:1.1rem;left:0.2rem;top:0.2rem;background:#fff;border-radius:50%;transition:transform 0.15s}' +
     '.al-switch input:checked + .al-slider{background:#ff4700}' +
     '.al-switch input:checked + .al-slider:before{transform:translateX(1.1rem)}' +
@@ -717,7 +719,7 @@ const alarmListComponent = {
     // chips (weekdays, signal toggles)
     '.al-chips{display:flex;flex-wrap:wrap;gap:0.4rem;margin:0.6rem 0}' +
     '.al-chip{position:relative;display:inline-block;margin:0;padding:0}' +
-    '.al-chip input{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}' +
+    '.al-chip input{position:absolute;opacity:0;top:0;left:0;width:100%;height:100%;margin:0;cursor:pointer}' +
     '.al-chip span{display:inline-block;padding:0.4rem 0.7rem;border-radius:999px;background:#666;color:#ddd;font-size:0.9rem;min-width:1.6rem;text-align:center}' +
     // Seven weekday chips share one row at any width.
     '.al-days{flex-wrap:nowrap;gap:0.3rem}' +

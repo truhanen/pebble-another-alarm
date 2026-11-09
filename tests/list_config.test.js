@@ -106,3 +106,24 @@ test('cronNext finds the next matching minute', () => {
   assert.strictEqual(L.cronNext('0 0 30 2 *', now), null, 'Feb 30 never matches');
   assert.strictEqual(L.cronNext('nope', now), null);
 });
+
+test('names are cut at 31 UTF-8 bytes on a character boundary (the watch stores bytes)', () => {
+  assert.strictEqual(L.sanitizeName('x'.repeat(40)).length, 31);
+  const accented = L.sanitizeName('\u00e9'.repeat(40));            // 2 bytes each
+  assert.strictEqual(Buffer.byteLength(accented), 30);
+  assert.strictEqual(accented.length, 15);
+  const emoji = L.sanitizeName('\u{1F600}'.repeat(20));            // 4 bytes each
+  assert.strictEqual(Buffer.byteLength(emoji), 28);
+  assert.ok(!/[\ud800-\udbff]$/.test(emoji), 'never ends on half a surrogate pair');
+  assert.strictEqual(L.sanitizeName('a\u0001b'), 'a b', 'control characters are replaced');
+  assert.strictEqual(L.sanitizeName(undefined), '');
+});
+
+test('a pattern over 160 characters is dropped from a tunes push, 160 is kept', () => {
+  const base = new Array(22).fill("^C'7/8").join(' ');
+  const ok = base + " ^C'7/8";
+  const rec = (id, pat) => ({ id: id, name: 'T', pattern: pat });
+  const s = L.tunesToString([rec(70000, ok), rec(70001, base + ' ^C,,7/8')]);
+  assert.strictEqual(s.split('\x1e').length, 1);
+  assert.ok(s.startsWith('70000'));
+});

@@ -28,6 +28,10 @@ export const MAX_VIBES = 20;
 export const NAME_MAX = 31;
 export const CRON_FIELD_MAX = 27;
 export const SOUND_SEGMENTS_MAX = 32;
+// The watch's keyboard caps a tune pattern at this many characters, and it keeps
+// every snapshot well inside the 8200-byte AppMessage buffers; the watch rejects
+// longer ones from a push, so the page must too.
+export const PATTERN_MAX_CHARS = 160;
 export const VIBE_SEGMENTS_MAX = 8;
 
 export interface TuneRec { id: number; name: string; pattern: string; }
@@ -56,9 +60,25 @@ export function genId(): number {
   return PHONE_ID_MIN + Math.floor(Math.random() * 0x3fff0000);
 }
 
+// Names are stored on the watch in a 31-BYTE buffer, so cut at 31 UTF-8 bytes
+// (on a character boundary), not 31 UTF-16 units: a few emoji or accented
+// letters would otherwise be sliced mid-character on the watch.
 export function sanitizeName(s: string): string {
   // eslint-disable-next-line no-control-regex
-  return String(s || '').replace(/[\x00-\x1f]/g, ' ').slice(0, NAME_MAX);
+  const clean = String(s || '').replace(/[\x00-\x1f]/g, ' ');
+  let out = '';
+  let bytes = 0;
+  for (let i = 0; i < clean.length; i++) {
+    let ch = clean.charAt(i);
+    const c = clean.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < clean.length) { ch += clean.charAt(++i); }   // surrogate pair
+    const cp = ch.length === 2 ? 0x10000 : c;
+    const n = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (bytes + n > NAME_MAX) { break; }
+    out += ch;
+    bytes += n;
+  }
+  return out;
 }
 
 // ---- cron ----
@@ -146,7 +166,9 @@ export function cronNext(text: string, now: Date): Date | null {
 // `[^|_]LETTER[,,,|']  [N][/D]` notes, N/D in 1-8.
 export function validTunePattern(text: string): boolean {
   // The watch's parser splits on plain spaces only (a tab is not a separator).
-  const toks = String(text || '').replace(/^ +| +$/g, '').split(/ +/);
+  const trimmed = String(text || '').replace(/^ +| +$/g, '');
+  if (trimmed.length > PATTERN_MAX_CHARS) { return false; }
+  const toks = trimmed.split(/ +/);
   if (toks.length === 0 || toks[0] === '' || toks.length > SOUND_SEGMENTS_MAX) { return false; }
   const ratio = '(?:[1-8](?:\\/[1-8])?|\\/[1-8])?';
   const note = new RegExp('^[\\^_]?[C-GAB](?:\'|,{1,8})?' + ratio + '$');
