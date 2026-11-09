@@ -290,6 +290,16 @@ library" below.
     away mid-edit and a new alarm stays last until collapsed. Clay's global
     `label` CSS adds padding to any `<label>`, so custom chips/switches must
     reset `padding`.
+  - **Alarm card panels** (`config_alarm_list.ts`): An expanded card's settings are grouped into three labelled panels below the
+    Label field (`.al-group`, white caption, outlined and tinted differently from
+    the card): **Schedule** (everything that decides when it fires: Basic/Cron
+    selector, cron help, time + weekday chips or the cron field, and a footer line
+    `.al-next` giving the schedule in words plus when it next rings — "Mon–Fri at
+    06:30 · Next: tomorrow 06:30" for Basic, "Next: today 15:40" for Cron,
+    "… · disabled"/"Disabled" when the alarm is off), **Signal** (vibration/sound/
+    increasing chips, Vibration and Tune selects) and **Snooze and dismiss**
+    (snooze minutes, max snoozes, auto-dismiss). The caption says "and", not
+    "&": the page font draws a capital ampersand like a ® mark.
   - **Vibration patterns** section (`vibeList`, `config_vibe_list.ts`, between
     Tunes and Other): named custom vibration patterns, `VibeConfig` on the wire
     (same record shape/tombstones as tunes; sent before tunes and alarms).

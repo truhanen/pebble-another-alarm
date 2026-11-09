@@ -149,6 +149,18 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
     }
     return null;
   }
+  // Next time a Basic alarm rings: its time on the first matching weekday
+  // (any day when none is ticked = "once": today if still ahead, else tomorrow),
+  // strictly after `now`. days is the bitmask, bit 0 = Sunday.
+  function nextBasic(hour: number, minute: number, days: number, now: Date): Date | null {
+    for (let d = 0; d <= 7; d++) {
+      const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+      if (days !== 0 && ((days >> day.getDay()) & 1) === 0) { continue; }
+      const c = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute);
+      if (c.getTime() > now.getTime()) { return c; }
+    }
+    return null;
+  }
   function fmtNext(d: Date, now: Date): string {
     const a = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const b = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -280,34 +292,46 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       '<div class="al-body">' +
         '<div class="al-field"><span class="al-lbl">Label</span>' +
           '<input class="al-name" type="text" maxlength="31" placeholder="Label" value="' + esc(a.name) + '"></div>' +
-        '<div class="al-seg-wrap" role="radiogroup">' +
-          '<button type="button" class="al-seg' + (isCron ? '' : ' on') + '" data-v="0" role="radio">Basic</button>' +
-          '<button type="button" class="al-seg' + (isCron ? ' on' : '') + '" data-v="1" role="radio">Cron</button></div>' +
-        '<details class="al-cronhelpbox"' + (helpOpen[a.id] ? ' open' : '') + '><summary>Cron help</summary>' +
-          '<div class="al-cronhelptext">' + cronHelpHtml + '</div></details>' +
-        '<div class="al-basic">' +
-          '<input class="al-time" type="time" value="' + pad2(a.hour) + ':' + pad2(a.minute) + '">' +
-          '<div class="al-chips al-days">' + days + '</div>' +
-        '</div>' +
-        '<div class="al-cron">' +
-          '<input class="al-cronin" type="text" spellcheck="false" placeholder="*/20 9-17 * * 1-5" value="' + esc(a.cron) + '">' +
+        // Schedule: everything that decides WHEN the alarm fires, in one panel
+        '<div class="al-group al-g-sched"><div class="al-gcap">Schedule</div>' +
+          '<div class="al-seg-wrap" role="radiogroup">' +
+            '<button type="button" class="al-seg' + (isCron ? '' : ' on') + '" data-v="0" role="radio">Basic</button>' +
+            '<button type="button" class="al-seg' + (isCron ? ' on' : '') + '" data-v="1" role="radio">Cron</button></div>' +
+          '<details class="al-cronhelpbox"' + (helpOpen[a.id] ? ' open' : '') + '><summary>Cron help</summary>' +
+            '<div class="al-cronhelptext">' + cronHelpHtml + '</div></details>' +
+          '<div class="al-basic">' +
+            '<input class="al-time" type="time" value="' + pad2(a.hour) + ':' + pad2(a.minute) + '">' +
+            '<div class="al-chips al-days">' + days + '</div>' +
+          '</div>' +
+          '<div class="al-cron">' +
+            '<input class="al-cronin" type="text" spellcheck="false" placeholder="*/20 9-17 * * 1-5" value="' + esc(a.cron) + '">' +
+            '<div class="al-err"></div>' +
+          '</div>' +
+          // the schedule in words, plus when it next rings
           '<div class="al-next"></div>' +
-          '<div class="al-err"></div>' +
         '</div>' +
-        '<div class="al-chips al-opts">' +
-          chip('al-vib', 'Vibration', !!a.vibration) + chip('al-snd', 'Sound', !!a.sound) +
-          chip('al-inc', 'Increasing', !!a.increasingVolume) +
+        // Signal: HOW it rings
+        '<div class="al-group al-g-signal"><div class="al-gcap">Signal</div>' +
+          '<div class="al-chips al-opts">' +
+            chip('al-vib', 'Vibration', !!a.vibration) + chip('al-snd', 'Sound', !!a.sound) +
+            chip('al-inc', 'Increasing', !!a.increasingVolume) +
+          '</div>' +
+          '<div class="al-grid">' +
+            '<span class="al-lbl">Vibration</span><div><select class="al-vibsel" data-preset="' + a.vibePreset + '">' +
+              vibeOptions(a.vibeId, a.vibePreset) + '</select></div>' +
+            '<span class="al-lbl">Tune</span><div><select class="al-tune">' + tuneOptions(a.tuneId) + '</select></div>' +
+          '</div>' +
         '</div>' +
-        '<div class="al-grid">' +
-          '<span class="al-lbl">Vibration</span><div><select class="al-vibsel" data-preset="' + a.vibePreset + '">' +
-            vibeOptions(a.vibeId, a.vibePreset) + '</select></div>' +
-          '<span class="al-lbl">Tune</span><div><select class="al-tune">' + tuneOptions(a.tuneId) + '</select></div>' +
-          '<span class="al-lbl">Snooze (min)</span><div><input class="al-sm" type="number" min="0" max="120" value="' +
-            a.snoozeMinutes + '"><span class="al-note al-sm-note"></span></div>' +
-          '<span class="al-lbl">Max snoozes</span><div><input class="al-sx" type="number" min="0" max="20" value="' +
-            a.snoozeMax + '"><span class="al-note al-sx-note"></span></div>' +
-          '<span class="al-lbl">Auto-dismiss</span><div><select class="al-ad">' +
-            opt(0, 'Off', a.autoDismiss) + opt(1, 'On', a.autoDismiss) + opt(2, 'On, hide', a.autoDismiss) + '</select></div>' +
+        // Snooze and dismiss: what happens after it rings
+        '<div class="al-group al-g-snooze"><div class="al-gcap">Snooze and dismiss</div>' +
+          '<div class="al-grid">' +
+            '<span class="al-lbl">Snooze (min)</span><div><input class="al-sm" type="number" min="0" max="120" value="' +
+              a.snoozeMinutes + '"><span class="al-note al-sm-note"></span></div>' +
+            '<span class="al-lbl">Max snoozes</span><div><input class="al-sx" type="number" min="0" max="20" value="' +
+              a.snoozeMax + '"><span class="al-note al-sx-note"></span></div>' +
+            '<span class="al-lbl">Auto-dismiss</span><div><select class="al-ad">' +
+              opt(0, 'Off', a.autoDismiss) + opt(1, 'On', a.autoDismiss) + opt(2, 'On, hide', a.autoDismiss) + '</select></div>' +
+          '</div>' +
         '</div>' +
         '<div class="al-foot"><button type="button" class="al-del">Delete alarm</button></div>' +
       '</div>' +
@@ -425,20 +449,31 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
 
     const err = q(r, '.al-err');
     const next = q(r, '.al-next');
+    const on = q(r, '.al-en').checked;
     err.textContent = '';
     next.textContent = '';
+    const now = new Date();
     if (isCron) {
       if (masks === null) {
         err.textContent = 'Invalid cron pattern (this alarm will not be saved)';
         r.classList.add('bad');
       } else {
         r.classList.remove('bad');
-        const now = new Date();
         const n = nextCron(masks, now);
-        next.textContent = n ? 'Next: ' + fmtNext(n, now) : 'Next: never (nothing within a year)';
+        next.textContent = !on ? 'Disabled' : n ? 'Next: ' + fmtNext(n, now) : 'Next: never (nothing within a year)';
       }
     } else {
       r.classList.remove('bad');
+      const t = (q(r, '.al-time').value || '07:00').split(':');
+      let days = 0;
+      const ds = r.querySelectorAll('.al-d');
+      for (let d = 0; d < ds.length; d++) {
+        if ((ds[d] as HTMLInputElement).checked) { days |= 1 << parseInt((ds[d] as HTMLElement).getAttribute('data-d') || '0', 10); }
+      }
+      const h = num(t[0], 0, 23, 7), m = num(t[1], 0, 59, 0);
+      const words = daysSummary(days) + ' at ' + pad2(h) + ':' + pad2(m);
+      const n = nextBasic(h, m, days, now);
+      next.textContent = !on ? words + ' \u00b7 disabled' : n ? words + ' \u00b7 Next: ' + fmtNext(n, now) : words;
     }
     const sm = parseInt(q(r, '.al-sm').value, 10);
     q(r, '.al-sm-note').textContent = sm === 0 ? 'snooze off' : '';
@@ -644,6 +679,9 @@ const alarmListComponent = {
     '.al-rootc{padding:0.75rem 0.75rem 0.5rem 0.75rem;box-sizing:border-box}' +
     '.al-card{background:#444;border-radius:0.6rem;margin:0 0 0.7rem 0;overflow:hidden;border:1px solid #555}' +
     '.al-card.bad{border-color:#ff6b6b}' +
+    // labelled panels (white captions): Schedule / Signal / Snooze and dismiss
+    '.al-group{background:#3a3a3a;border:1px solid #5a5a5a;border-radius:0.5rem;padding:0.5rem 0.65rem 0.45rem 0.65rem;margin:0.8rem 0 0 0}' +
+    '.al-gcap{color:#fff;font-size:0.72rem;font-weight:bold;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 0.5rem 0}' +
     // collapsed summary row
     '.al-sum{display:flex;align-items:center;padding:0.65rem 0.8rem;cursor:pointer;gap:0.6rem}' +
     '.al-sum-text{flex:1 1 auto;min-width:0}' +
@@ -688,7 +726,12 @@ const alarmListComponent = {
     '.al-chip input:checked + span{background:#ff4700;color:#fff}' +
     // cron block
     '.al-cronin{width:100%;font-family:monospace}' +
-    '.al-next{color:#9fd8a0;font-size:0.85rem;margin:0.35rem 0 0 0}' +
+    // the schedule footer: the schedule in words + when it next rings
+    '.al-next{color:#9fd8a0;font-size:0.85rem;margin:0.6rem 0 0 0;padding-top:0.45rem;border-top:1px dashed #666}' +
+    '.al-next:empty{display:none}' +
+    '.al-group .al-chips{margin:0 0 0.4rem 0}' +
+    '.al-group .al-days{margin:0.6rem 0 0.2rem 0}' +
+    '.al-group .al-grid{margin:0.1rem 0 0.1rem 0}' +
     '.al-err{color:#ff6b6b;font-size:0.85rem;margin:0.35rem 0 0 0}' +
     '.al-cronhelpbox{margin:0 0 0.7rem 0;background:#3c3c3c;border:1px solid #555;border-radius:0.5rem}' +
     '.al-cronhelpbox summary{cursor:pointer;padding:0.5rem 0.8rem;color:#ddd;font-size:0.9rem}' +

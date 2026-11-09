@@ -889,3 +889,98 @@ test('content in every section keeps a margin from the section outline (sides an
     await heading(page, name).click();   // close before the next one
   }
 });
+
+// ---- grouped panels: Schedule / Signal / Snooze and dismiss ----
+
+test('an alarm card groups its settings into Schedule, Signal and Snooze-and-dismiss panels', async () => {
+  const { page } = await open();
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  const caps = await page.locator('.al-group .al-gcap').allInnerTexts();
+  assert.deepStrictEqual(caps.map((c) => c.toLowerCase()), ['schedule', 'signal', 'snooze and dismiss']);
+
+  const inGroup = async (group, sel) => page.locator(`.al-g-${group} ${sel}`).count();
+  // everything that decides WHEN is in Schedule ...
+  for (const sel of ['.al-seg-wrap', '.al-time', '.al-days', '.al-cronin', '.al-cronhelpbox', '.al-next']) {
+    assert.strictEqual(await inGroup('sched', sel), 1, sel + ' belongs to Schedule');
+  }
+  // ... HOW it rings in Signal ...
+  for (const sel of ['.al-vib', '.al-snd', '.al-inc', '.al-vibsel', '.al-tune']) {
+    assert.strictEqual(await inGroup('signal', sel), 1, sel + ' belongs to Signal');
+  }
+  // ... and what happens afterwards in Snooze and dismiss
+  for (const sel of ['.al-sm', '.al-sx', '.al-ad']) {
+    assert.strictEqual(await inGroup('snooze', sel), 1, sel + ' belongs to Snooze and dismiss');
+  }
+  // the label sits above the panels, outside all of them
+  assert.strictEqual(await page.locator('.al-group .al-name').count(), 0);
+  const label = await page.locator('.al-name').boundingBox();
+  const first = await page.locator('.al-g-sched').boundingBox();
+  assert.ok(label.y + label.height <= first.y, 'label above the first panel');
+  // panels are stacked in order and visually bounded (a border and a distinct background)
+  const boxes = await page.locator('.al-group').evaluateAll((els) => els.map((e) => {
+    const b = e.getBoundingClientRect(); const c = getComputedStyle(e);
+    return { top: b.top, bottom: b.bottom, border: c.borderTopWidth, bg: c.backgroundColor };
+  }));
+  assert.ok(boxes[0].bottom <= boxes[1].top && boxes[1].bottom <= boxes[2].top, 'stacked top to bottom');
+  assert.ok(boxes.every((b) => b.border === '1px'), 'each panel has an outline');
+  const capColors = await page.locator('.al-gcap').evaluateAll((els) => els.map((e) => getComputedStyle(e).color));
+  assert.deepStrictEqual(capColors, ['rgb(255, 255, 255)', 'rgb(255, 255, 255)', 'rgb(255, 255, 255)'], 'panel headers are white');
+  const cardBg = await page.locator('.al-card').evaluate((e) => getComputedStyle(e).backgroundColor);
+  assert.ok(boxes.every((b) => b.bg !== cardBg), 'panels are tinted differently from the card');
+});
+
+test('the Schedule panel ends with the schedule in words and when it next rings', async () => {
+  const phone = loadPhone();
+  const html = openConfigPage(phone);
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.clock.install({ time: new Date(2026, 10, 9, 10, 5, 0) });   // Monday 10:05
+  await page.setContent(html);
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  const set = async (time, days) => {
+    await page.fill('.al-time', time);
+    for (const d of ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']) {
+      const chip = page.locator('.al-days .al-chip', { hasText: d });
+      const on = await chip.locator('input').isChecked();
+      if (on !== days.includes(d)) { await chip.click(); }
+    }
+  };
+  const foot = () => page.locator('.al-next').innerText();
+  await set('06:30', ['Mo', 'Tu', 'We', 'Th', 'Fr']);
+  assert.strictEqual(await foot(), 'Mon\u2013Fri at 06:30 \u00b7 Next: tomorrow 06:30');
+  await set('11:00', []);
+  assert.strictEqual(await foot(), 'Once at 11:00 \u00b7 Next: today 11:00');
+  await set('09:00', []);
+  assert.strictEqual(await foot(), 'Once at 09:00 \u00b7 Next: tomorrow 09:00');
+  await set('08:00', ['Su']);
+  assert.strictEqual(await foot(), 'Sun at 08:00 \u00b7 Next: Sun 08:00');
+  await set('08:00', ['Sa', 'Su']);
+  assert.strictEqual(await foot(), 'Weekends at 08:00 \u00b7 Next: Sat 08:00');
+  // disabled: no promise of a next ring
+  await page.locator('.al-card .al-switch').click();
+  assert.strictEqual(await foot(), 'Weekends at 08:00 \u00b7 disabled');
+  await page.locator('.al-card .al-switch').click();
+  // cron keeps its plain "Next:" line in the same footer slot; disabled reads "Disabled"
+  await page.click('.al-seg[data-v="1"]');
+  await page.fill('.al-cronin', '*/20 9-17 * * 1-5');
+  assert.strictEqual(await foot(), 'Next: today 10:20');
+  await page.locator('.al-card .al-switch').click();
+  assert.strictEqual(await foot(), 'Disabled');
+});
+
+test('weekday chips stay on one row inside the Schedule panel at narrow phone widths', async () => {
+  for (const width of [360, 340]) {
+    const phone = loadPhone();
+    const html = openConfigPage(phone);
+    const page = await browser.newPage({ viewport: { width, height: 800 } });
+    await page.setContent(html);
+    await heading(page, 'Alarms').click();
+    await page.click('.al-add');
+    const ys = await page.locator('.al-days .al-chip').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    assert.strictEqual(new Set(ys).size, 1, `one row at ${width}px: ${ys}`);
+    const w = await page.locator('.al-days .al-chip').first().evaluate((e) => e.getBoundingClientRect().width);
+    assert.ok(w >= 30, `chips stay tappable at ${width}px (${Math.round(w)}px wide)`);
+    await page.close();
+  }
+});
