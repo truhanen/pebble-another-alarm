@@ -1,0 +1,16 @@
+# Live-verified end-to-end 2026-10-04. A dense cron pattern ("*/25 9-17 * *
+# 1-5 *") shows the main list's bold time slot as "09:00+" (earliest
+# matching hour:minute, trailing "+" marking it as just the first of
+# several fires that day) and the summary line as the raw 6 space-joined
+# cron fields ("*/25 9-17 * * 1-5 *"), not a repeat-days summary.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmName=10020,
+# TestAlarmIsCron=10024, TestAlarmCronMinute=10025, TestAlarmCronHour=10026,
+# TestAlarmCronDow=10027, TestAlarmCronDom=10032, TestAlarmCronMonth=10033,
+# TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+TAP down
+SLEEP 1
+SCREENSHOT main_list_cron_plus_suffix_and_raw_summary --mask-rect 70x25+0+203

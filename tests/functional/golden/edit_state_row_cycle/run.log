@@ -1,0 +1,37 @@
+sequence: edit_state_row_cycle.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_state_row_cycle.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_state_row_cycle.seq:12] SLEEP 1
+[edit_state_row_cycle.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_state_row_cycle.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_state_row_cycle.seq:16] SLEEP 1
+[edit_state_row_cycle.seq:19] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_state_row_cycle.seq:20] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_state_row_cycle.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_state_row_cycle.seq:22] SLEEP 1
+[edit_state_row_cycle.seq:23] SCREENSHOT edit_menu_state_enabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_edit_menu_state_enabled.png
+[edit_state_row_cycle.seq:24] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_state_row_cycle.seq:25] SLEEP 1
+[edit_state_row_cycle.seq:26] SCREENSHOT edit_menu_state_disabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_edit_menu_state_disabled.png
+[edit_state_row_cycle.seq:27] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_state_row_cycle.seq:28] SLEEP 1
+[edit_state_row_cycle.seq:29] SCREENSHOT edit_menu_state_enabled_again --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_edit_menu_state_enabled_again.png
+sequence PASSED - log: run.log

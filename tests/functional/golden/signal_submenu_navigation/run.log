@@ -1,0 +1,66 @@
+sequence: signal_submenu_navigation.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[signal_submenu_navigation.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[signal_submenu_navigation.seq:12] SLEEP 1
+[signal_submenu_navigation.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_submenu_navigation.seq:16] SLEEP 1
+[signal_submenu_navigation.seq:19] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:20] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:22] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:24] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:25] SLEEP 1
+[signal_submenu_navigation.seq:26] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_submenu_navigation.seq:27] SLEEP 1
+[signal_submenu_navigation.seq:28] SCREENSHOT signal_submenu_defaults --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_signal_submenu_defaults.png
+[signal_submenu_navigation.seq:35] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_submenu_navigation.seq:36] SLEEP 1
+[signal_submenu_navigation.seq:37] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_submenu_navigation.seq:38] SLEEP 1
+[signal_submenu_navigation.seq:43] APPMSG --int 10009=0 10018=0 10019=0
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10018=0 10019=0
+[signal_submenu_navigation.seq:44] SLEEP 1
+[signal_submenu_navigation.seq:45] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_submenu_navigation.seq:46] SLEEP 1
+[signal_submenu_navigation.seq:47] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:48] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:49] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:50] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:51] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:52] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_submenu_navigation.seq:53] SLEEP 1
+[signal_submenu_navigation.seq:54] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_submenu_navigation.seq:55] SLEEP 1
+[signal_submenu_navigation.seq:56] SCREENSHOT signal_submenu_both_off --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_signal_submenu_both_off.png
+sequence PASSED - log: run.log

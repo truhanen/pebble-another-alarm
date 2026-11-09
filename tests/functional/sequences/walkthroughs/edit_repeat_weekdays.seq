@@ -1,0 +1,58 @@
+# Live-verified end-to-end 2026-10-04. Repeat preset -> "Custom" -> itemized
+# weekday editor (row 0 Apply, rows 1-7 weekdays starting Monday, since
+# s_first_day_of_week defaults to 1/Monday). Toggling Monday + Wednesday and
+# applying collapses to "M_W____" in the edit menu's Repeat row - confirms
+# `repeats` is derived from whether any day ended up picked, not set
+# directly (see CLAUDE.md's repeats/repeat_days design point).
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) Signal(6) Auto-dismiss(7) - 4 downs from the default
+# Delete selection reaches Repeat.
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT repeat_preset_once_selected
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT repeat_editor_apply_selected
+
+# Toggle Monday.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+# Toggle Wednesday.
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT repeat_editor_mon_wed_checked
+
+# Back to Apply (3 rows up from Wednesday) and apply.
+TAP up
+TAP up
+TAP up
+SLEEP 1
+SCREENSHOT repeat_editor_apply_reselected
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_repeat_m_w --mask-rect 70x25+0+203

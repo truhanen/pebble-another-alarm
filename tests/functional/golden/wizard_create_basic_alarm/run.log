@@ -1,0 +1,33 @@
+sequence: wizard_create_basic_alarm.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[wizard_create_basic_alarm.seq:22] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_create_basic_alarm.seq:23] SLEEP 1
+[wizard_create_basic_alarm.seq:24] SCREENSHOT wizard_time_step --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_wizard_time_step.png
+[wizard_create_basic_alarm.seq:27] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_create_basic_alarm.seq:28] SLEEP 1
+[wizard_create_basic_alarm.seq:29] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_create_basic_alarm.seq:30] SLEEP 1
+[wizard_create_basic_alarm.seq:31] SCREENSHOT wizard_repeat_step
++ pebble screenshot --emulator emery --vnc --no-open 02_wizard_repeat_step.png
+[wizard_create_basic_alarm.seq:35] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_create_basic_alarm.seq:37] SLEEP 5
+[wizard_create_basic_alarm.seq:38] SCREENSHOT wizard_label_keyboard
++ pebble screenshot --emulator emery --vnc --no-open 03_wizard_label_keyboard.png
+[wizard_create_basic_alarm.seq:42] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_create_basic_alarm.seq:43] SLEEP 1
+[wizard_create_basic_alarm.seq:44] SCREENSHOT alarm_created --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_alarm_created.png
+sequence PASSED - log: run.log

@@ -1,0 +1,42 @@
+sequence: main_list_state_tint_colors.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[main_list_state_tint_colors.seq:14] APPMSG --int 10008=1 10009=0 10010=6 10011=0 10012=1 10013=62 10014=1 --string 10020=Enabled
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=6 10011=0 10012=1 10013=62 10014=1 --string 10020=Enabled
+[main_list_state_tint_colors.seq:15] SLEEP 1
+[main_list_state_tint_colors.seq:17] APPMSG --int 10009=1 10010=7 10011=0 10012=1 10013=62 10014=0 --string 10020=Disabled
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=7 10011=0 10012=1 10013=62 10014=0 --string 10020=Disabled
+[main_list_state_tint_colors.seq:18] SLEEP 1
+[main_list_state_tint_colors.seq:20] APPMSG --int 10009=2 10010=8 10011=0 10012=1 10013=62 10014=1 10015=1 --string 10020=SkipPending
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=2 10010=8 10011=0 10012=1 10013=62 10014=1 10015=1 --string 10020=SkipPending
+[main_list_state_tint_colors.seq:21] SLEEP 1
+[main_list_state_tint_colors.seq:23] APPMSG --int 10009=3 10010=9 10011=0 10012=1 10013=62 10014=1 10021=600 --string 10020=Snoozing
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=3 10010=9 10011=0 10012=1 10013=62 10014=1 10021=600 --string 10020=Snoozing
+[main_list_state_tint_colors.seq:24] SLEEP 1
+[main_list_state_tint_colors.seq:26] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_state_tint_colors.seq:27] SLEEP 1
+[main_list_state_tint_colors.seq:28] SCREENSHOT row_enabled_green_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_row_enabled_green_selected.png
+[main_list_state_tint_colors.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_state_tint_colors.seq:30] SLEEP 1
+[main_list_state_tint_colors.seq:31] SCREENSHOT row_disabled_white_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_row_disabled_white_selected.png
+[main_list_state_tint_colors.seq:32] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_state_tint_colors.seq:33] SLEEP 1
+[main_list_state_tint_colors.seq:34] SCREENSHOT row_skip_pending_yellow_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_row_skip_pending_yellow_selected.png
+[main_list_state_tint_colors.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_state_tint_colors.seq:36] SLEEP 1
+[main_list_state_tint_colors.seq:37] SCREENSHOT row_snoozing_red_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_row_snoozing_red_selected.png
+sequence PASSED - log: run.log

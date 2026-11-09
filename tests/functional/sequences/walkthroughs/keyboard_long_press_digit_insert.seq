@@ -1,0 +1,64 @@
+# Live-verified against the real container 2026-10-04, after a golden-image
+# review caught that the "plain tap" below originally used TOUCH's default
+# hold_s (0.6s), which EXCEEDS this widget's own long-press threshold
+# (`HOLD_MS` 350ms, multitap_keyboard_window.c) - so both screenshots ended
+# up showing the SAME long-press digit-insert behavior ("1" then "11"),
+# defeating the whole point of this file. The plain tap now passes an
+# explicit 0.1s hold (comfortably under 350ms) so it actually registers as
+# a tap; the long-press keeps its original 1.0s hold (comfortably over it).
+#
+# Opens the SOUND pattern keyboard (via "+ Custom" on the Tune picker) -
+# row-major grid C(0,0) D(0,1) E(0,2) / F(1,0) G(1,1) A(1,2) / B(2,0)
+# [octave/accidental cycle](2,1) z(2,2) - confirmed via screenshot in this
+# same authoring session (see tune_create_via_wizard.seq's own
+# `pattern_keyboard_empty` screenshot for the exact glyphs/layout). A
+# long-press on the "C" key (grid position 0,0 - cx 33, cy 68 on this
+# platform's 200x228 display, same cell-center geometry
+# keyboard_label_touch_entry.seq derives) should insert its underlying
+# keypad digit ("1", first key row-major) instead of typing "C".
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT pattern_keyboard_empty
+
+# A plain tap on "C" types the letter "C".
+TOUCH 33 68 0.1
+SLEEP 1
+SCREENSHOT after_plain_tap_c
+
+# A long-press (hold_s > the widget's own long-press threshold) on the
+# same key inserts its keypad digit "1" instead, regardless of what the
+# key's tap-time glyph is.
+TOUCH 33 68 1.0
+SLEEP 1
+SCREENSHOT after_long_press_inserts_digit_1

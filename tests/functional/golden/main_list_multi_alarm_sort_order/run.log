@@ -1,0 +1,24 @@
+sequence: main_list_multi_alarm_sort_order.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[main_list_multi_alarm_sort_order.seq:18] APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=1 10013=62 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 10012=1 10013=62 --string 10020=Wakeup
+[main_list_multi_alarm_sort_order.seq:19] SLEEP 1
+[main_list_multi_alarm_sort_order.seq:28] APPMSG --int 10009=1 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10024=1 --string 10020=Pomodoro 10025=*/25 10026=9-17 10027=1-5 10032=* 10033=* 10035=*
+[main_list_multi_alarm_sort_order.seq:29] SLEEP 1
+[main_list_multi_alarm_sort_order.seq:32] APPMSG --int 10009=2 10010=20 10011=0 10012=0 10013=0 --string 10020=Movie
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=2 10010=20 10011=0 10012=0 10013=0 --string 10020=Movie
+[main_list_multi_alarm_sort_order.seq:33] SLEEP 1
+[main_list_multi_alarm_sort_order.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_multi_alarm_sort_order.seq:36] SLEEP 1
+[main_list_multi_alarm_sort_order.seq:37] SCREENSHOT sorted_list_top --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_sorted_list_top.png
+sequence PASSED - log: run.log

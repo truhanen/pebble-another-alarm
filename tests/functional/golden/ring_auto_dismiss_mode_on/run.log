@@ -1,0 +1,20 @@
+sequence: ring_auto_dismiss_mode_on.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[ring_auto_dismiss_mode_on.seq:17] APPMSG --int 10009=0 10010=7 10011=0 10014=1 10029=1 10023=1 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10010=7 10011=0 10014=1 10029=1 10023=1 --string 10020=Wakeup
+[ring_auto_dismiss_mode_on.seq:18] SLEEP 1
+[ring_auto_dismiss_mode_on.seq:19] KILL
++ pebble kill
+[ring_auto_dismiss_mode_on.seq:20] INSTALL
++ pebble install --emulator emery --vnc
+[ring_auto_dismiss_mode_on.seq:21] SLEEP 3
+[ring_auto_dismiss_mode_on.seq:22] SCREENSHOT main_list_auto_dismissed_still_enabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_main_list_auto_dismissed_still_enabled.png
+sequence PASSED - log: run.log

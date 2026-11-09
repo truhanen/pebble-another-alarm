@@ -1,0 +1,33 @@
+# Live-verified end-to-end 2026-10-04.
+#
+# IMPORTANT mechanism, live-verified: `TestAlarmPending=1` sent to an
+# ALREADY-RUNNING app does NOT show the ring screen - it only sets the
+# in-memory `alarm_pending` flag. The ring screen only gets pushed from
+# `init()`'s own startup sequence (or a real WakeupEvent), so a test
+# harness must set the pending flag, then KILL+INSTALL (a normal relaunch,
+# not a real wakeup - see the chaining sequence below for the distinction
+# that matters) to actually see it appear.
+#
+# Stop is a DOUBLE-click on DOWN (window_multi_click_subscribe) - two
+# separate `pebble emu-button` CLI invocations in a row (even with no
+# sleep between them) do NOT register as a double-click, because each
+# invocation's own connect/spawn overhead exceeds the multi-click window.
+# `--repeat 2 --interval 150` on a SINGLE `emu-button` invocation does,
+# since both clicks are sent from one already-connected process at a
+# precise interval. The DSL's own TAP step can't express this (it always
+# spawns a separate `pebble emu-button` call per instruction), so this
+# sequence uses the CMD escape hatch directly.
+#
+# Keys: TestAlarmIndex=10009, TestAlarmHour=10010, TestAlarmMinute=10011,
+# TestAlarmEnabled=10014, TestAlarmPending=10023, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Wakeup
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT ring_screen_showing --mask-rect 70x30+0+198
+
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+SCREENSHOT main_list_after_stop --mask-rect 70x25+0+203

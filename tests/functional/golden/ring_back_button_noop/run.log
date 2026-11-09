@@ -1,0 +1,25 @@
+sequence: ring_back_button_noop.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[ring_back_button_noop.seq:9] APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Wakeup
+[ring_back_button_noop.seq:10] SLEEP 1
+[ring_back_button_noop.seq:11] KILL
++ pebble kill
+[ring_back_button_noop.seq:12] INSTALL
++ pebble install --emulator emery --vnc
+[ring_back_button_noop.seq:13] SLEEP 3
+[ring_back_button_noop.seq:14] SCREENSHOT ring_screen_before_back --mask-rect 70x30+0+198
++ pebble screenshot --emulator emery --vnc --no-open 01_ring_screen_before_back.png
+[ring_back_button_noop.seq:15] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[ring_back_button_noop.seq:16] SLEEP 1
+[ring_back_button_noop.seq:17] SCREENSHOT ring_screen_unaffected_after_back --mask-rect 70x30+0+198
++ pebble screenshot --emulator emery --vnc --no-open 02_ring_screen_unaffected_after_back.png
+sequence PASSED - log: run.log

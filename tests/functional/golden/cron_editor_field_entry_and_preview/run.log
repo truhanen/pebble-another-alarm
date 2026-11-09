@@ -1,0 +1,39 @@
+sequence: cron_editor_field_entry_and_preview.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[cron_editor_field_entry_and_preview.seq:26] APPMSG --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro 10025=*/25 10026=9-17 10027=1-5 10032=* 10033=* 10035=*
+[cron_editor_field_entry_and_preview.seq:27] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_editor_field_entry_and_preview.seq:30] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[cron_editor_field_entry_and_preview.seq:31] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:32] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_editor_field_entry_and_preview.seq:33] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:34] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_editor_field_entry_and_preview.seq:35] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:36] SCREENSHOT cron_editor_apply_with_preview --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_cron_editor_apply_with_preview.png
+[cron_editor_field_entry_and_preview.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_editor_field_entry_and_preview.seq:39] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:40] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_editor_field_entry_and_preview.seq:41] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:42] SCREENSHOT minute_field_numeric_keyboard_prefilled
++ pebble screenshot --emulator emery --vnc --no-open 02_minute_field_numeric_keyboard_prefilled.png
+[cron_editor_field_entry_and_preview.seq:43] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_editor_field_entry_and_preview.seq:44] SLEEP 1
+[cron_editor_field_entry_and_preview.seq:45] SCREENSHOT back_on_cron_editor_minute_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_back_on_cron_editor_minute_selected.png
+sequence PASSED - log: run.log

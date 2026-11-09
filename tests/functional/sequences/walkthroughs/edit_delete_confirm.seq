@@ -1,0 +1,35 @@
+# Live-verified end-to-end 2026-10-04. The Delete row opens a 2-choice
+# confirm window ("Delete"/"Cancel") that - live-verified, somewhat
+# surprising given it's a reused singleton window elsewhere in this file -
+# always opens with "Delete" (row 0) pre-selected, not whatever was
+# selected on its previous use. Cancelling leaves the alarm intact;
+# confirming removes it from the list.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+SCREENSHOT edit_menu_delete_selected --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT confirm_delete_cancel_prompt
+
+# Cancel first - alarm must survive.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_after_cancel_alarm_intact --mask-rect 70x25+0+203
+
+# Now actually delete.
+TAP select
+SLEEP 1
+SCREENSHOT confirm_delete_cancel_prompt_reopened
+TAP select
+SLEEP 1
+SCREENSHOT main_list_empty_after_delete --mask-rect 70x25+0+203

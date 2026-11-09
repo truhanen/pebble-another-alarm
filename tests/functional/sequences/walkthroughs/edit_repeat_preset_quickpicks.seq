@@ -1,0 +1,55 @@
+# Live-verified end-to-end 2026-10-04. REPEAT_PRESET_LABEL = Once/Every
+# day/Weekdays (Mon-Fri)/Weekends (Sat, Sun)/Custom (5 rows). Once/Every
+# day/Weekdays/Weekend all commit IMMEDIATELY on selection (repeat_preset_
+# select -> repeat_preset_finish, straight back to the caller) - ONLY
+# "Custom" opens the itemized weekday editor (repeat_edit_window_push); see
+# edit_repeat_weekdays.seq for that path. This directly corrects an
+# earlier draft of this sequence that assumed every preset opened the
+# itemized editor.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) - 4 downs from the default Delete selection.
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT repeat_preset_menu_once_selected
+
+# "Every day" (row 1) commits immediately.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_repeat_every_day --mask-rect 70x25+0+203
+
+# Reopen and pick "Weekdays (Mon-Fri)" (row 2 from Every day's own row 1
+# preselect - repeat_preset_window_push preselects the row matching the
+# alarm's current repeat_days exactly).
+TAP select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_repeat_weekdays --mask-rect 70x25+0+203
+
+# Reopen and pick "Weekends (Sat, Sun)" (row 3 from Weekdays' row 2).
+TAP select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_repeat_weekend --mask-rect 70x25+0+203

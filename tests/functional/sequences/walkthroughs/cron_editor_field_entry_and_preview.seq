@@ -1,0 +1,45 @@
+# Live-verified end-to-end 2026-10-04. Cron editor rows: Apply (with a
+# live "(Next: ...)" preview), Minute, Hour, Day, Month, (Weekday, Week
+# below the fold). Each field row opens a NUMERIC multitap keyboard
+# pre-filled with its raw text - the bottom-left key cycles "*-/,"; SELECT
+# submits the keyboard's current text immediately, same submit mechanism
+# as the plain label keyboard (see wizard_create_basic_alarm.seq's own
+# note on this device's touch-only typing model - digit entry here is the
+# one case buttons alone are enough for, since 0-9 are reachable via
+# long-press-inserts-keypad-digit on... actually see
+# keyboard_long_press_digit_insert.seq for that mechanism specifically;
+# this file only exercises submitting a field's EXISTING text unchanged).
+#
+# NOT independently re-verified here: the "(invalid)" annotation for a
+# malformed field, and actually editing a field's text (needs TOUCH or the
+# long-press-digit-insert mechanism) - this file only confirms the
+# editor's navigation and the Apply row's live preview.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmName=10020,
+# TestAlarmIsCron=10024, TestAlarmCronMinute=10025, TestAlarmCronHour=10026,
+# TestAlarmCronDow=10027, TestAlarmCronDom=10032, TestAlarmCronMonth=10033,
+# TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+# Every bare "*"/"*/N" field must be quoted - the runner's instruction
+# dispatch does `eval "args=(...)"` (lib/steps.sh), which glob-expands an
+# unquoted "*" against the cwd's filenames at run time.
+APPMSG --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT cron_editor_apply_with_preview --mask-rect 70x25+0+203
+
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT minute_field_numeric_keyboard_prefilled
+TAP select
+SLEEP 1
+SCREENSHOT back_on_cron_editor_minute_selected --mask-rect 70x25+0+203

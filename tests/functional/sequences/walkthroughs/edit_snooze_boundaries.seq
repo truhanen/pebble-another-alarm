@@ -1,0 +1,51 @@
+# Live-verified end-to-end 2026-10-04. Minutes down to 0 shows "Disabled"
+# (not a bare "0"); Repeats (max) down to 0 shows "Infinite" - the two
+# fields mean opposite things at 0 (snooze disabled outright vs. unlimited
+# snoozes), per CLAUDE.md's snooze design point.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) ... - 5 downs from the default Delete selection.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT snooze_editor_default_10min_3rep
+
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT snooze_minutes_disabled
+
+TAP select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT snooze_repeats_infinite
+
+# Advance past the last field to confirm/Apply.
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_snooze_disabled_infinite --mask-rect 70x25+0+203

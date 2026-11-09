@@ -1,0 +1,33 @@
+# Live-verified for the legacy row layout (Delete/Time/Label/State/Repeat/
+# Snooze/Signal/Auto-dismiss, exercised repeatedly across every other
+# edit_*.seq in this suite). The cron row layout (Delete/Cron/Label/State/
+# Snooze/Signal/Auto-dismiss - Repeat collapsed away) is derived from
+# edit_build_rows(is_cron=true) in main.c, not independently re-run here -
+# see cron_convert_existing_alarm.seq for a cron alarm's edit menu in
+# context.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmName=10020,
+# TestAlarmIsCron=10024, TestAlarmCronMinute=10025, TestAlarmCronHour=10026,
+# TestAlarmCronDow=10027, TestAlarmCronDom=10032, TestAlarmCronMonth=10033,
+# TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+TAP down
+LONGPRESS select
+SLEEP 1
+SCREENSHOT legacy_edit_menu_delete_time_label_state --mask-rect 70x25+0+203
+
+# Every bare "*"/"*/N" field must be quoted - see
+# main_list_multi_alarm_sort_order.seq's own note on why (unquoted, the
+# runner's `eval "args=(...)"` glob-expands it against the cwd).
+APPMSG --int 10009=1 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+TAP back
+SLEEP 1
+TAP down
+SLEEP 1
+LONGPRESS select
+SLEEP 1
+SCREENSHOT cron_edit_menu_delete_cron_label_state --mask-rect 70x25+0+203

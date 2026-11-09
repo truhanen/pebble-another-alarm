@@ -1,0 +1,39 @@
+# Live-verified 2026-10-04 for the non-repeating 2-state case (enabled <->
+# disabled via a single TAP select). The repeating 3-state cycle (enabled ->
+# disabled -> skip-pending -> enabled, ml_cycle_alarm_state) is derived from
+# source, not yet live-verified screenshot-by-screenshot.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmRepeats=10012, TestAlarmRepeatDays=10013,
+# TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+
+# Alarm 0: non-repeating, 07:00 - only toggles enabled/disabled.
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=0 10013=0 --string 10020=OneTime
+SLEEP 1
+TAP down
+SLEEP 1
+SCREENSHOT onetime_enabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT onetime_disabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT onetime_enabled_again --mask-rect 70x25+0+203
+
+# Alarm 1: repeating Mon-Fri, 08:00 - cycles enabled -> disabled ->
+# skip-pending -> enabled.
+APPMSG --int 10009=1 10010=8 10011=0 10012=1 10013=62 --string 10020=Repeating
+SLEEP 1
+TAP down
+SLEEP 1
+SCREENSHOT repeating_enabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT repeating_disabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT repeating_skip_pending --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT repeating_enabled_again --mask-rect 70x25+0+203

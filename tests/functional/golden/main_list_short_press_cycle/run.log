@@ -1,0 +1,51 @@
+sequence: main_list_short_press_cycle.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[main_list_short_press_cycle.seq:12] APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=0 10013=0 --string 10020=OneTime
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 10012=0 10013=0 --string 10020=OneTime
+[main_list_short_press_cycle.seq:13] SLEEP 1
+[main_list_short_press_cycle.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_short_press_cycle.seq:15] SLEEP 1
+[main_list_short_press_cycle.seq:16] SCREENSHOT onetime_enabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_onetime_enabled.png
+[main_list_short_press_cycle.seq:17] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[main_list_short_press_cycle.seq:18] SLEEP 1
+[main_list_short_press_cycle.seq:19] SCREENSHOT onetime_disabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_onetime_disabled.png
+[main_list_short_press_cycle.seq:20] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[main_list_short_press_cycle.seq:21] SLEEP 1
+[main_list_short_press_cycle.seq:22] SCREENSHOT onetime_enabled_again --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_onetime_enabled_again.png
+[main_list_short_press_cycle.seq:26] APPMSG --int 10009=1 10010=8 10011=0 10012=1 10013=62 --string 10020=Repeating
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=8 10011=0 10012=1 10013=62 --string 10020=Repeating
+[main_list_short_press_cycle.seq:27] SLEEP 1
+[main_list_short_press_cycle.seq:28] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_short_press_cycle.seq:29] SLEEP 1
+[main_list_short_press_cycle.seq:30] SCREENSHOT repeating_enabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_repeating_enabled.png
+[main_list_short_press_cycle.seq:31] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[main_list_short_press_cycle.seq:32] SLEEP 1
+[main_list_short_press_cycle.seq:33] SCREENSHOT repeating_disabled --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_repeating_disabled.png
+[main_list_short_press_cycle.seq:34] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[main_list_short_press_cycle.seq:35] SLEEP 1
+[main_list_short_press_cycle.seq:36] SCREENSHOT repeating_skip_pending --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 06_repeating_skip_pending.png
+[main_list_short_press_cycle.seq:37] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[main_list_short_press_cycle.seq:38] SLEEP 1
+[main_list_short_press_cycle.seq:39] SCREENSHOT repeating_enabled_again --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 07_repeating_enabled_again.png
+sequence PASSED - log: run.log

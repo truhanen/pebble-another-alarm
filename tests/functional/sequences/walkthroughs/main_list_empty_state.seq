@@ -1,0 +1,6 @@
+# Live-verified 2026-10-04. Fresh install, no alarms: the list shows only
+# the "+ New alarm" row, no one-alarm hint, and the bottom bar reads
+# "Next: --" (main.c's format_relative_fire_time returns "--" when
+# compute_next_fire_time finds nothing scheduled).
+IMPORT ../common/wipe_and_prep.seq
+SCREENSHOT empty_list --mask-rect 70x25+0+203

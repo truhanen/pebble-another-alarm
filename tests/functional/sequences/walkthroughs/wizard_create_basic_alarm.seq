@@ -1,0 +1,44 @@
+# Live-verified end-to-end 2026-10-04: Time -> Repeat preset -> Label
+# keyboard ->
+# alarm appears in the list. The draft's default time is "next minute" from
+# whatever the emulator's current time is (start_new_alarm_flow), not a
+# fixed value, so this sequence doesn't assert the exact time shown - only
+# that each screen in the flow renders and the final list has exactly one
+# alarm.
+#
+# IMPORTANT, live-verified: the multitap keyboard's physical-button click
+# config (multitap_keyboard_window.c's prv_click_config) is NOT a
+# type-one-letter-per-click grid like a T9 phone - SELECT submits the
+# keyboard's CURRENT TEXT immediately (multitap_keyboard_submit), UP opens
+# its settings menu, DOWN cycles keyboard layout/backspaces on long-press,
+# and actual letter-by-letter typing only happens via TOUCH (this device,
+# emery/Pebble Time 2, has a touchscreen - the vendored widget's on-screen
+# keys are tapped, not button-navigated). So a bare TAP select here submits
+# an EMPTY label - fine for exercising the mechanical wizard-completes-and-
+# creates-an-alarm path, but see keyboard_label_touch_entry.seq for a
+# sequence that actually types a real label via TOUCH.
+IMPORT ../common/wipe_and_prep.seq
+
+TAP select
+SLEEP 1
+SCREENSHOT wizard_time_step --mask-rect 70x25+0+203
+
+# Advance hour -> minute field, then confirm straight into the Repeat step.
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT wizard_repeat_step
+
+# "Once" (row 0) is pre-selected; confirm it to go straight to the label
+# keyboard.
+TAP select
+# Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
+SLEEP 5
+SCREENSHOT wizard_label_keyboard
+
+# SELECT submits the keyboard's current (empty) text immediately - see this
+# file's header note.
+TAP select
+SLEEP 1
+SCREENSHOT alarm_created --mask-rect 70x25+0+203

@@ -1,0 +1,30 @@
+# Live-verified end-to-end 2026-10-04. Long-pressing SELECT on an existing
+# legacy alarm's Time row (opened from the edit menu, mid-edit) chords into
+# cron mode preserving the exact currently-staged hour:minute (20:30 ->
+# minute "30", hour "20") rather than resetting it, unlike the "+ New
+# alarm" wizard's own chord (see wizard_cron_chord_entry.seq), which
+# defaults to the next full hour instead - editing an existing schedule
+# shouldn't silently change the time itself.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=20 10011=30 --string 10020=Movie
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu opens with Delete (row 0) pre-selected - one down reaches Time.
+# A bug in an earlier version of this file pressed SELECT here directly,
+# which opened the Delete confirm (and the next LONGPRESS select then
+# DELETED the alarm instead of chording into cron mode) - confirmed the
+# hard way via a golden-image review.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT time_editor_20_30 --mask-rect 70x25+0+203
+LONGPRESS select
+SLEEP 1
+SCREENSHOT cron_fields_preserve_20_30 --mask-rect 70x25+0+203

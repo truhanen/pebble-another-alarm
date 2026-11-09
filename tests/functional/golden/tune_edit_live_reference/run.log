@@ -1,0 +1,98 @@
+sequence: tune_edit_live_reference.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[tune_edit_live_reference.seq:22] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[tune_edit_live_reference.seq:23] SLEEP 1
+[tune_edit_live_reference.seq:24] APPMSG --int 10040=1 10041=0 --string 10042=Chime "10043=C z E z G"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10040=1 10041=0 --string 10042=Chime 10043=C z E z G
+[tune_edit_live_reference.seq:25] SLEEP 1
+[tune_edit_live_reference.seq:26] APPMSG --int 10009=0 10044=1
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10044=1
+[tune_edit_live_reference.seq:27] SLEEP 1
+[tune_edit_live_reference.seq:28] APPMSG --int 10009=1 10010=8 10011=0 10044=1 --string 10020=Backup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=8 10011=0 10044=1 --string 10020=Backup
+[tune_edit_live_reference.seq:29] SLEEP 1
+[tune_edit_live_reference.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:32] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_edit_live_reference.seq:33] SLEEP 1
+[tune_edit_live_reference.seq:34] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:36] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:37] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:39] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:40] SLEEP 1
+[tune_edit_live_reference.seq:41] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_edit_live_reference.seq:42] SLEEP 1
+[tune_edit_live_reference.seq:43] SCREENSHOT wakeup_signal_tune_chime --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_wakeup_signal_tune_chime.png
+[tune_edit_live_reference.seq:45] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:46] SLEEP 1
+[tune_edit_live_reference.seq:47] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_edit_live_reference.seq:48] SLEEP 1
+[tune_edit_live_reference.seq:49] SCREENSHOT tune_picker_chime_preselected
++ pebble screenshot --emulator emery --vnc --no-open 02_tune_picker_chime_preselected.png
+[tune_edit_live_reference.seq:50] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_edit_live_reference.seq:51] SLEEP 1
+[tune_edit_live_reference.seq:52] SCREENSHOT custom_tune_screen_chime
++ pebble screenshot --emulator emery --vnc --no-open 03_custom_tune_screen_chime.png
+[tune_edit_live_reference.seq:55] APPMSG --int 10041=0 --string 10042=Bells
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10041=0 --string 10042=Bells
+[tune_edit_live_reference.seq:56] SLEEP 1
+[tune_edit_live_reference.seq:57] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_edit_live_reference.seq:58] SLEEP 1
+[tune_edit_live_reference.seq:59] SCREENSHOT tune_picker_renamed_to_bells
++ pebble screenshot --emulator emery --vnc --no-open 04_tune_picker_renamed_to_bells.png
+[tune_edit_live_reference.seq:63] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_edit_live_reference.seq:64] SLEEP 1
+[tune_edit_live_reference.seq:65] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_edit_live_reference.seq:66] SLEEP 1
+[tune_edit_live_reference.seq:67] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_edit_live_reference.seq:68] SLEEP 1
+[tune_edit_live_reference.seq:69] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:70] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_edit_live_reference.seq:71] SLEEP 1
+[tune_edit_live_reference.seq:72] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:73] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:74] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:75] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:76] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:77] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_edit_live_reference.seq:78] SLEEP 1
+[tune_edit_live_reference.seq:79] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_edit_live_reference.seq:80] SLEEP 1
+[tune_edit_live_reference.seq:81] SCREENSHOT backup_signal_also_shows_bells --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_backup_signal_also_shows_bells.png
+sequence PASSED - log: run.log

@@ -1,0 +1,19 @@
+# Mid-walkthrough reset without a full KILL/WIPE/INSTALL cycle: wipes every
+# alarm and the entire custom-tune library. Cheaper than re-importing
+# wipe_and_prep.seq when a sequence just wants a clean slate partway
+# through (e.g. between two unrelated scenarios sharing one emulator
+# session) - but note this does NOT reset the main list's MenuLayer
+# selection (see wipe_and_prep.seq's own note): it stays wherever it was,
+# which after a reload_ui() following this message is typically row 0
+# ("+ New alarm") since the list is now empty.
+#
+# Message-key IDs are hardcoded, not symbolically resolved - this DSL has
+# no such feature (same convention pebble-another-timer's own .seq files
+# use), and CLAUDE.md's own send-app-message docs are numeric-IDs-only too.
+# IDs below are `10000 + declaration index` in package.json's messageKeys
+# list (CLAUDE.md's "Test hooks" table) - re-verify against
+# build/src/message_keys.auto.c after any edit to that list, per CLAUDE.md's
+# own warning about array-type keys reshuffling everything after them
+# (not applicable today - no array-type key exists in this app).
+# TestClearAlarms=10008, TestClearTunes=10040
+APPMSG --int 10008=1 10040=1

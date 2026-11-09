@@ -1,0 +1,31 @@
+sequence: cron_convert_existing_alarm.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[cron_convert_existing_alarm.seq:12] APPMSG --int 10008=1 10009=0 10010=20 10011=30 --string 10020=Movie
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=20 10011=30 --string 10020=Movie
+[cron_convert_existing_alarm.seq:13] SLEEP 1
+[cron_convert_existing_alarm.seq:15] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_convert_existing_alarm.seq:16] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[cron_convert_existing_alarm.seq:17] SLEEP 1
+[cron_convert_existing_alarm.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_convert_existing_alarm.seq:24] SLEEP 1
+[cron_convert_existing_alarm.seq:25] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_convert_existing_alarm.seq:26] SLEEP 1
+[cron_convert_existing_alarm.seq:27] SCREENSHOT time_editor_20_30 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_time_editor_20_30.png
+[cron_convert_existing_alarm.seq:28] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[cron_convert_existing_alarm.seq:29] SLEEP 1
+[cron_convert_existing_alarm.seq:30] SCREENSHOT cron_fields_preserve_20_30 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_cron_fields_preserve_20_30.png
+sequence PASSED - log: run.log

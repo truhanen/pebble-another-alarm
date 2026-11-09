@@ -1,0 +1,33 @@
+sequence: ring_multiple_alarms_chain.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[ring_multiple_alarms_chain.seq:12] APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=First
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=First
+[ring_multiple_alarms_chain.seq:13] SLEEP 1
+[ring_multiple_alarms_chain.seq:14] APPMSG --int 10009=1 10010=8 10011=0 10014=1 10023=1 --string 10020=Second
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=8 10011=0 10014=1 10023=1 --string 10020=Second
+[ring_multiple_alarms_chain.seq:15] SLEEP 1
+[ring_multiple_alarms_chain.seq:16] KILL
++ pebble kill
+[ring_multiple_alarms_chain.seq:17] INSTALL
++ pebble install --emulator emery --vnc
+[ring_multiple_alarms_chain.seq:18] SLEEP 3
+[ring_multiple_alarms_chain.seq:19] SCREENSHOT ring_first_with_1_more_badge --mask-rect 70x30+0+198
++ pebble screenshot --emulator emery --vnc --no-open 01_ring_first_with_1_more_badge.png
+[ring_multiple_alarms_chain.seq:21] CMD emu-button --repeat 2 --interval 150 click down
++ pebble emu-button --emulator emery --vnc --repeat 2 --interval 150 click down
+[ring_multiple_alarms_chain.seq:22] SLEEP 1
+[ring_multiple_alarms_chain.seq:23] SCREENSHOT ring_second --mask-rect 70x30+0+198
++ pebble screenshot --emulator emery --vnc --no-open 02_ring_second.png
+[ring_multiple_alarms_chain.seq:25] CMD emu-button --repeat 2 --interval 150 click down
++ pebble emu-button --emulator emery --vnc --repeat 2 --interval 150 click down
+[ring_multiple_alarms_chain.seq:26] SLEEP 1
+[ring_multiple_alarms_chain.seq:27] SCREENSHOT main_list_both_alarms_fired --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_main_list_both_alarms_fired.png
+sequence PASSED - log: run.log

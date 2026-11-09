@@ -1,0 +1,25 @@
+sequence: ring_snooze_disabled_zero_minutes.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[ring_snooze_disabled_zero_minutes.seq:10] APPMSG --int 10009=0 10010=7 10011=0 10014=1 10016=0 10023=1 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10010=7 10011=0 10014=1 10016=0 10023=1 --string 10020=Wakeup
+[ring_snooze_disabled_zero_minutes.seq:11] SLEEP 1
+[ring_snooze_disabled_zero_minutes.seq:12] KILL
++ pebble kill
+[ring_snooze_disabled_zero_minutes.seq:13] INSTALL
++ pebble install --emulator emery --vnc
+[ring_snooze_disabled_zero_minutes.seq:14] SLEEP 3
+[ring_snooze_disabled_zero_minutes.seq:15] SCREENSHOT ring_screen_showing --mask-rect 70x30+0+198
++ pebble screenshot --emulator emery --vnc --no-open 01_ring_screen_showing.png
+[ring_snooze_disabled_zero_minutes.seq:17] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[ring_snooze_disabled_zero_minutes.seq:18] SLEEP 1
+[ring_snooze_disabled_zero_minutes.seq:19] SCREENSHOT main_list_stopped_not_snoozing --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_main_list_stopped_not_snoozing.png
+sequence PASSED - log: run.log

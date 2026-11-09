@@ -1,0 +1,27 @@
+# Live-verified end-to-end 2026-10-04. Two alarms both pending at relaunch
+# ring one after another: the first ring screen shows a "- 1 more" badge,
+# stopping it immediately shows the second's ring screen, and stopping
+# that one returns to the main list (not the watchface - these alarms were
+# triggered via a normal `pebble install` relaunch, not a real
+# WakeupEvent, so `s_launched_by_wakeup` is false here; see
+# ring_trigger_and_stop.seq's own double-click note for the Stop mechanism).
+#
+# Keys: TestAlarmIndex=10009, TestAlarmHour=10010, TestAlarmMinute=10011,
+# TestAlarmEnabled=10014, TestAlarmPending=10023, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=First
+SLEEP 1
+APPMSG --int 10009=1 10010=8 10011=0 10014=1 10023=1 --string 10020=Second
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT ring_first_with_1_more_badge --mask-rect 70x30+0+198
+
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+SCREENSHOT ring_second --mask-rect 70x30+0+198
+
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+SCREENSHOT main_list_both_alarms_fired --mask-rect 70x25+0+203

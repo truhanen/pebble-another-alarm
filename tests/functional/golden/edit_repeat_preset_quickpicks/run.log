@@ -1,0 +1,62 @@
+sequence: edit_repeat_preset_quickpicks.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_repeat_preset_quickpicks.seq:13] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_repeat_preset_quickpicks.seq:14] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:16] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:17] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_repeat_preset_quickpicks.seq:18] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:22] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:24] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:25] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:26] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:27] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:28] SCREENSHOT repeat_preset_menu_once_selected
++ pebble screenshot --emulator emery --vnc --no-open 01_repeat_preset_menu_once_selected.png
+[edit_repeat_preset_quickpicks.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:32] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:33] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:34] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:35] SCREENSHOT edit_menu_repeat_every_day --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_edit_menu_repeat_every_day.png
+[edit_repeat_preset_quickpicks.seq:40] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:41] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:42] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:43] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:44] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:45] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:46] SCREENSHOT edit_menu_repeat_weekdays --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_edit_menu_repeat_weekdays.png
+[edit_repeat_preset_quickpicks.seq:49] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:50] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:51] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_preset_quickpicks.seq:52] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:53] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_preset_quickpicks.seq:54] SLEEP 1
+[edit_repeat_preset_quickpicks.seq:55] SCREENSHOT edit_menu_repeat_weekend --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_edit_menu_repeat_weekend.png
+sequence PASSED - log: run.log

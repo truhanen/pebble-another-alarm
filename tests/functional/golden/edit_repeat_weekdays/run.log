@@ -1,0 +1,76 @@
+sequence: edit_repeat_weekdays.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_repeat_weekdays.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_repeat_weekdays.seq:12] SLEEP 1
+[edit_repeat_weekdays.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_repeat_weekdays.seq:16] SLEEP 1
+[edit_repeat_weekdays.seq:20] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:22] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:24] SLEEP 1
+[edit_repeat_weekdays.seq:25] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_weekdays.seq:26] SLEEP 1
+[edit_repeat_weekdays.seq:27] SCREENSHOT repeat_preset_once_selected
++ pebble screenshot --emulator emery --vnc --no-open 01_repeat_preset_once_selected.png
+[edit_repeat_weekdays.seq:28] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:30] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:32] SLEEP 1
+[edit_repeat_weekdays.seq:33] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_weekdays.seq:34] SLEEP 1
+[edit_repeat_weekdays.seq:35] SCREENSHOT repeat_editor_apply_selected
++ pebble screenshot --emulator emery --vnc --no-open 02_repeat_editor_apply_selected.png
+[edit_repeat_weekdays.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:39] SLEEP 1
+[edit_repeat_weekdays.seq:40] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_weekdays.seq:41] SLEEP 1
+[edit_repeat_weekdays.seq:43] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:44] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_repeat_weekdays.seq:45] SLEEP 1
+[edit_repeat_weekdays.seq:46] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_weekdays.seq:47] SLEEP 1
+[edit_repeat_weekdays.seq:48] SCREENSHOT repeat_editor_mon_wed_checked
++ pebble screenshot --emulator emery --vnc --no-open 03_repeat_editor_mon_wed_checked.png
+[edit_repeat_weekdays.seq:51] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[edit_repeat_weekdays.seq:52] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[edit_repeat_weekdays.seq:53] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[edit_repeat_weekdays.seq:54] SLEEP 1
+[edit_repeat_weekdays.seq:55] SCREENSHOT repeat_editor_apply_reselected
++ pebble screenshot --emulator emery --vnc --no-open 04_repeat_editor_apply_reselected.png
+[edit_repeat_weekdays.seq:56] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_repeat_weekdays.seq:57] SLEEP 1
+[edit_repeat_weekdays.seq:58] SCREENSHOT edit_menu_repeat_m_w --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_edit_menu_repeat_m_w.png
+sequence PASSED - log: run.log

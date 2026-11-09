@@ -1,0 +1,43 @@
+sequence: edit_delete_confirm.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_delete_confirm.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_delete_confirm.seq:12] SLEEP 1
+[edit_delete_confirm.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_delete_confirm.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_delete_confirm.seq:16] SLEEP 1
+[edit_delete_confirm.seq:17] SCREENSHOT edit_menu_delete_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_edit_menu_delete_selected.png
+[edit_delete_confirm.seq:18] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_delete_confirm.seq:19] SLEEP 1
+[edit_delete_confirm.seq:20] SCREENSHOT confirm_delete_cancel_prompt
++ pebble screenshot --emulator emery --vnc --no-open 02_confirm_delete_cancel_prompt.png
+[edit_delete_confirm.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_delete_confirm.seq:24] SLEEP 1
+[edit_delete_confirm.seq:25] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_delete_confirm.seq:26] SLEEP 1
+[edit_delete_confirm.seq:27] SCREENSHOT edit_menu_after_cancel_alarm_intact --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_edit_menu_after_cancel_alarm_intact.png
+[edit_delete_confirm.seq:30] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_delete_confirm.seq:31] SLEEP 1
+[edit_delete_confirm.seq:32] SCREENSHOT confirm_delete_cancel_prompt_reopened
++ pebble screenshot --emulator emery --vnc --no-open 04_confirm_delete_cancel_prompt_reopened.png
+[edit_delete_confirm.seq:33] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_delete_confirm.seq:34] SLEEP 1
+[edit_delete_confirm.seq:35] SCREENSHOT main_list_empty_after_delete --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_main_list_empty_after_delete.png
+sequence PASSED - log: run.log

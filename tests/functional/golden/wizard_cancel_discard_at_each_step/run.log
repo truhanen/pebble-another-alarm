@@ -1,0 +1,49 @@
+sequence: wizard_cancel_discard_at_each_step.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[wizard_cancel_discard_at_each_step.seq:9] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:10] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:11] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[wizard_cancel_discard_at_each_step.seq:12] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:13] SCREENSHOT after_cancel_at_time_step --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_after_cancel_at_time_step.png
+[wizard_cancel_discard_at_each_step.seq:16] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:17] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:18] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:19] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:20] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:21] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:22] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[wizard_cancel_discard_at_each_step.seq:23] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:24] SCREENSHOT after_cancel_at_repeat_step --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_after_cancel_at_repeat_step.png
+[wizard_cancel_discard_at_each_step.seq:27] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:28] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:29] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:30] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:31] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:32] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:33] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cancel_discard_at_each_step.seq:34] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:35] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[wizard_cancel_discard_at_each_step.seq:36] SLEEP 1
+[wizard_cancel_discard_at_each_step.seq:37] SCREENSHOT after_cancel_at_label_step --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_after_cancel_at_label_step.png
+sequence PASSED - log: run.log

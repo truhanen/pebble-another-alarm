@@ -1,0 +1,26 @@
+sequence: main_list_label_shrink_to_fit.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[main_list_label_shrink_to_fit.seq:10] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Gym
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Gym
+[main_list_label_shrink_to_fit.seq:11] SLEEP 1
+[main_list_label_shrink_to_fit.seq:12] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_label_shrink_to_fit.seq:13] SLEEP 1
+[main_list_label_shrink_to_fit.seq:14] SCREENSHOT short_label_normal_size --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_short_label_normal_size.png
+[main_list_label_shrink_to_fit.seq:16] APPMSG --int 10009=1 10010=8 10011=0 --string 10020=WeekendLongLabelName
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=8 10011=0 --string 10020=WeekendLongLabelName
+[main_list_label_shrink_to_fit.seq:17] SLEEP 1
+[main_list_label_shrink_to_fit.seq:18] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[main_list_label_shrink_to_fit.seq:19] SLEEP 1
+[main_list_label_shrink_to_fit.seq:20] SCREENSHOT long_label_shrunk --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_long_label_shrunk.png
+sequence PASSED - log: run.log

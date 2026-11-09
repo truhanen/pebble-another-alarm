@@ -1,0 +1,68 @@
+# Live-verified against the real container 2026-10-04, after a golden-image
+# review caught that this file's TOUCH taps originally used the default
+# hold_s (0.6s), which EXCEEDS this widget's own long-press threshold
+# (`HOLD_MS` 350ms, multitap_keyboard_window.c): a 0.6s touch on a nav
+# arrow key isn't read as a single tap at all - it's long enough to fire
+# the SAME hold-to-repeat timer the on-screen DEL key uses
+# (`multitap_keyboard_delete_repeat_ms`), so "two taps" moved the cursor
+# much further than 2 characters (all the way to the start, in practice),
+# and the follow-up "type a letter" touch registered as a long-press
+# digit-insert instead of a tap (see keyboard_long_press_digit_insert.seq's
+# own header for that mechanism). Every tap below now passes an explicit
+# 0.1s hold (comfortably under 350ms).
+#
+# Confirmed live: DOWN cycles the plain label keyboard through ALPHA ->
+# NUMBERS -> SYMBOLS -> NAV (3 presses from the default ALPHA page reaches
+# NAV - `Page` enum order in multitap_keyboard.c), the NAV page shows
+# left/right arrow keys at the SAME grid positions pattern/numeric mode's
+# own key 3/5 occupy (row 1, col 0 and col 2 - cx 33/165, cy 113 on this
+# platform's 200x228 display), and BACK cancels the whole keyboard from
+# ANY page, not just ALPHA (confirmed: BACK on the NAV page reverted the
+# label to its original text, same as BACK on the default page).
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+SLEEP 1
+TAP select
+# Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
+SLEEP 5
+SCREENSHOT label_keyboard_alpha_page_prefilled
+
+TAP down
+SLEEP 1
+SCREENSHOT label_keyboard_numbers_page
+TAP down
+SLEEP 1
+SCREENSHOT label_keyboard_symbols_page
+TAP down
+SLEEP 1
+SCREENSHOT label_keyboard_nav_page_arrow_keys
+
+# Move the cursor left 2 characters (from after "Wakeup" to between "ak"
+# and "eup"), then type "A" at that position.
+TOUCH 33 113 0.1
+SLEEP 1
+TOUCH 33 113 0.1
+SLEEP 1
+# Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
+SLEEP 5
+SCREENSHOT cursor_moved_left_2
+TAP down
+SLEEP 1
+TOUCH 99 68 0.1
+SLEEP 1
+# Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
+SLEEP 5
+SCREENSHOT a_inserted_mid_string
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_label_with_inserted_char --mask-rect 70x25+0+203

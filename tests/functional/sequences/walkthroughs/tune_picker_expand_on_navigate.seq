@@ -1,0 +1,46 @@
+# Live-verified end-to-end 2026-10-04. Two saved tunes (Chime, Gong) in
+# the Tune picker: whichever one is currently SELECTED expands to 2 lines
+# (name + its wrapped pattern text), while the other stays collapsed with
+# just a trailing "*" marker - confirmed the expansion follows the
+# selection cursor as it moves from Chime to Gong.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020, TestClearTunes=10040,
+# TestTuneIndex=10041, TestTuneName=10042, TestTuneCustomPattern=10043
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+APPMSG --int 10040=1 10041=0 --string 10042=Chime "10043=C z E z G"
+SLEEP 1
+APPMSG --int 10041=1 --string 10042=Gong 10043=C8
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT chime_expanded_gong_collapsed
+
+TAP down
+SLEEP 1
+SCREENSHOT gong_expanded_chime_collapsed

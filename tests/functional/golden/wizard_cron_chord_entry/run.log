@@ -1,0 +1,30 @@
+sequence: wizard_cron_chord_entry.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[wizard_cron_chord_entry.seq:8] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cron_chord_entry.seq:9] SLEEP 1
+[wizard_cron_chord_entry.seq:10] SCREENSHOT wizard_time_step --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_wizard_time_step.png
+[wizard_cron_chord_entry.seq:11] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[wizard_cron_chord_entry.seq:12] SLEEP 1
+[wizard_cron_chord_entry.seq:13] SCREENSHOT cron_chord_defaults --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_cron_chord_defaults.png
+[wizard_cron_chord_entry.seq:14] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cron_chord_entry.seq:15] SLEEP 1
+[wizard_cron_chord_entry.seq:16] SCREENSHOT label_keyboard_after_cron_apply
++ pebble screenshot --emulator emery --vnc --no-open 03_label_keyboard_after_cron_apply.png
+[wizard_cron_chord_entry.seq:17] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[wizard_cron_chord_entry.seq:18] SLEEP 1
+[wizard_cron_chord_entry.seq:19] SCREENSHOT cron_alarm_created --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_cron_alarm_created.png
+sequence PASSED - log: run.log

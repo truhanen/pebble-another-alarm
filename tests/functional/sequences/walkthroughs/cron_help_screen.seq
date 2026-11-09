@@ -1,0 +1,40 @@
+# Live-verified end-to-end 2026-10-04. Cron editor row order confirmed in
+# full: Apply(0) Minute(1) Hour(2) Day(3) Month(4) Weekday(5) Week(6)
+# Help(7). Selecting Help pushes a scrollable "Cron help" text screen on
+# top; BACK returns to the editor with its fields unchanged.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmName=10020,
+# TestAlarmIsCron=10024, TestAlarmCronMinute=10025, TestAlarmCronHour=10026,
+# TestAlarmCronDow=10027, TestAlarmCronDom=10032, TestAlarmCronMonth=10033,
+# TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+# 7 downs from Apply(0) reaches Help(7) - Minute(1) Hour(2) Day(3)
+# Month(4) Weekday(5) Week(6) Help(7). An earlier version of this file
+# had only 6 downs, landing on "Week" instead and opening its keyboard
+# rather than the Cron Help screen - confirmed the hard way via a
+# golden-image review.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT cron_editor_help_row_selected --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT cron_help_text_screen
+TAP back
+SLEEP 1
+SCREENSHOT cron_editor_unchanged_after_help --mask-rect 70x25+0+203

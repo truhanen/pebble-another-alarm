@@ -1,0 +1,33 @@
+# Live-verified end-to-end 2026-10-04. Auto-dismiss cycles Off -> On ->
+# "On, hide" -> Off via repeated SELECT on the edit menu's own row.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) Signal(6) Auto-dismiss(7) - 7 downs from the default
+# Delete selection.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT auto_dismiss_off --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT auto_dismiss_on --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT auto_dismiss_on_hide --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT auto_dismiss_off_again --mask-rect 70x25+0+203

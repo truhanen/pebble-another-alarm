@@ -1,0 +1,19 @@
+# Live-verified end-to-end 2026-10-04. Long-press SELECT on the wizard's
+# Time step chords into cron entry (new_alarm_time_chord): minute defaults
+# to "0" and hour to the next full hour from whatever the time editor was
+# showing (9:35 -> hour 10, confirmed). Apply skips Repeat entirely and
+# goes straight to the Label keyboard.
+IMPORT ../common/wipe_and_prep.seq
+
+TAP select
+SLEEP 1
+SCREENSHOT wizard_time_step --mask-rect 70x25+0+203
+LONGPRESS select
+SLEEP 1
+SCREENSHOT cron_chord_defaults --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT label_keyboard_after_cron_apply
+TAP select
+SLEEP 1
+SCREENSHOT cron_alarm_created --mask-rect 70x25+0+203

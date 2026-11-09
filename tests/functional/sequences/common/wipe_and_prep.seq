@@ -1,0 +1,43 @@
+# Wipe the emulator, reinstall fresh, and settle. Imported at the top of
+# nearly every walkthrough.
+#
+# IMPORTANT: every sequence that imports this file needs an
+# `APP_TEST_HOOKS=1 pebble build` (the containerized/golden path already
+# defaults this - see app.conf's BUILD_ENV - this only matters for a native
+# `--no-container` run). A plain `pebble build` silently no-ops every
+# Test* AppMessage (see main.c's `#ifdef APP_TEST_HOOKS` guard around
+# handle_test_message()) - if a walkthrough that imports this file doesn't
+# react to its own APPMSG lines at all, check this first.
+#
+# This app has no idle-auto-exit concept to disable (unlike pebble-another-
+# timer - see CLAUDE.md's "Deliberately no exit-guard sentinel window"
+# design point), so there's no equivalent of timer's own
+# disable_idle_exit.seq needed here.
+#
+# Live-verified finding worth knowing before writing a walkthrough: after a
+# fresh install (or after TestClearAlarms/TestAlarmIndex reconfigures an
+# already-running app's alarm list), the main list's MenuLayer selection
+# sits on row 0 ("+ New alarm"), NOT on the first alarm row - a short-press
+# SELECT at this point opens the "+ New alarm" wizard, not the state cycle.
+# Every walkthrough that wants to interact with the first seeded alarm
+# needs an explicit `TAP down` first to move onto row 1 (alarm index 0).
+# Main-list rows are 1-indexed in the UI (row 0 is always "+ New alarm" -
+# see ml_select/ml_select_long's own `if (row == 0)` special case in
+# main.c) - alarm N (0-indexed, as set via TestAlarmIndex=N) sits at
+# MenuLayer row N+1 while the list is sorted by the same clock-time order
+# TestAlarmIndex=0 was inserted in; a list mixing several alarms needs its
+# own per-sequence navigation count worked out from
+# `ac_format_time`/`cron_sort_key` ordering, not just N+1.
+#
+# Second live-verified finding: `reload_ui()` (main.c) only reloads the MAIN
+# list's own MenuLayer (`s_menu`) - it does NOT refresh the edit menu,
+# Signal submenu, or pattern-select picker's own MenuLayers even if one of
+# them is the window currently on top. An APPMSG test-hook mutation sent
+# while one of those sub-windows is already open will NOT be reflected on
+# screen until you back out to the main list and reopen it - don't rely on
+# a screenshot taken right after such an APPMSG to show the new value; pop
+# back to the main list first.
+KILL
+WIPE
+INSTALL
+SLEEP 3

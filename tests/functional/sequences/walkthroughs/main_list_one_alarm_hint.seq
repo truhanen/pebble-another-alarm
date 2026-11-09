@@ -1,0 +1,16 @@
+# Live-verified 2026-10-04 (as part of exploring main.c's row-selection
+# behavior). Exactly 1 alarm -> main_hint_update_proc's overlay ("- Short-
+# press to cycle state\n- Long-press to edit") appears in the blank space
+# below the list. Note the main list's default selection after a fresh
+# install/seed sits on row 0 ("+ New alarm"), not the alarm row - see
+# common/wipe_and_prep.seq's own note.
+#
+# TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+SCREENSHOT hint_row0_new_alarm_selected --mask-rect 70x25+0+203
+TAP down
+SLEEP 1
+SCREENSHOT hint_row1_alarm_selected --mask-rect 70x25+0+203

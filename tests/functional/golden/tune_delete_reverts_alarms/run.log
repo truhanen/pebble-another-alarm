@@ -1,0 +1,108 @@
+sequence: tune_delete_reverts_alarms.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[tune_delete_reverts_alarms.seq:15] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[tune_delete_reverts_alarms.seq:16] SLEEP 1
+[tune_delete_reverts_alarms.seq:17] APPMSG --int 10040=1 10041=0 --string 10042=Bells "10043=C z E z G"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10040=1 10041=0 --string 10042=Bells 10043=C z E z G
+[tune_delete_reverts_alarms.seq:18] SLEEP 1
+[tune_delete_reverts_alarms.seq:19] APPMSG --int 10009=0 10044=1
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10044=1
+[tune_delete_reverts_alarms.seq:20] SLEEP 1
+[tune_delete_reverts_alarms.seq:21] APPMSG --int 10009=1 10010=8 10011=0 10044=1 --string 10020=Backup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=1 10010=8 10011=0 10044=1 --string 10020=Backup
+[tune_delete_reverts_alarms.seq:22] SLEEP 1
+[tune_delete_reverts_alarms.seq:25] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:26] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_delete_reverts_alarms.seq:27] SLEEP 1
+[tune_delete_reverts_alarms.seq:28] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:30] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:32] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:33] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:34] SLEEP 1
+[tune_delete_reverts_alarms.seq:35] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:36] SLEEP 1
+[tune_delete_reverts_alarms.seq:37] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:38] SLEEP 1
+[tune_delete_reverts_alarms.seq:39] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:40] SLEEP 1
+[tune_delete_reverts_alarms.seq:47] SCREENSHOT tune_picker_bells_selected
++ pebble screenshot --emulator emery --vnc --no-open 01_tune_picker_bells_selected.png
+[tune_delete_reverts_alarms.seq:48] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:49] SLEEP 1
+[tune_delete_reverts_alarms.seq:50] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:51] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:52] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:53] SLEEP 1
+[tune_delete_reverts_alarms.seq:54] SCREENSHOT custom_tune_screen_delete_selected
++ pebble screenshot --emulator emery --vnc --no-open 02_custom_tune_screen_delete_selected.png
+[tune_delete_reverts_alarms.seq:55] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:56] SLEEP 1
+[tune_delete_reverts_alarms.seq:57] SCREENSHOT confirm_delete_cancel_prompt
++ pebble screenshot --emulator emery --vnc --no-open 03_confirm_delete_cancel_prompt.png
+[tune_delete_reverts_alarms.seq:58] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:59] SLEEP 1
+[tune_delete_reverts_alarms.seq:60] SCREENSHOT tune_picker_off_selected_bells_gone
++ pebble screenshot --emulator emery --vnc --no-open 04_tune_picker_off_selected_bells_gone.png
+[tune_delete_reverts_alarms.seq:64] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_delete_reverts_alarms.seq:65] SLEEP 1
+[tune_delete_reverts_alarms.seq:66] SCREENSHOT wakeup_signal_reverted_to_triple --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_wakeup_signal_reverted_to_triple.png
+[tune_delete_reverts_alarms.seq:72] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_delete_reverts_alarms.seq:73] SLEEP 1
+[tune_delete_reverts_alarms.seq:74] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_delete_reverts_alarms.seq:75] SLEEP 1
+[tune_delete_reverts_alarms.seq:76] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:77] SLEEP 1
+[tune_delete_reverts_alarms.seq:78] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_delete_reverts_alarms.seq:79] SLEEP 1
+[tune_delete_reverts_alarms.seq:80] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:81] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:82] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:83] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:84] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:85] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_delete_reverts_alarms.seq:86] SLEEP 1
+[tune_delete_reverts_alarms.seq:87] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_delete_reverts_alarms.seq:88] SLEEP 1
+[tune_delete_reverts_alarms.seq:89] SCREENSHOT backup_signal_also_reverted_to_triple --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 06_backup_signal_also_reverted_to_triple.png
+sequence PASSED - log: run.log

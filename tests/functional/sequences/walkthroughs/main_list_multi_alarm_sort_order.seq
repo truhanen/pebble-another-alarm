@@ -1,0 +1,37 @@
+# Not yet live-verified - derived from main.c's row-sort comparator (raw
+# clock time ascending; a cron alarm's own `cron_sort_key` is its earliest
+# matching hour:minute) and scripts/create_screenshots.sh's own verified
+# 3-alarm setup. Three alarms: a cron pomodoro (earliest match 9:00), a
+# legacy 07:00 repeating alarm, and a legacy 20:00 one-time alarm -
+# expected list order after sort: 07:00 Wakeup, 9:xx Pomodoro (cron,
+# "+"-suffixed since its hour/minute fields are real patterns, not plain
+# numbers), 20:00 Movie.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmRepeats=10012, TestAlarmRepeatDays=10013,
+# TestAlarmName=10020, TestAlarmIsCron=10024, TestAlarmCronMinute=10025,
+# TestAlarmCronHour=10026, TestAlarmCronDow=10027, TestAlarmCronDom=10032,
+# TestAlarmCronMonth=10033, TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+
+# Alarm 0: 'Wakeup', 07:00, repeats Mon-Fri (AC_DAY_MON|TUE|WED|THU|FRI = 62)
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=1 10013=62 --string 10020=Wakeup
+SLEEP 1
+
+# Alarm 1: 'Pomodoro', cron */25 9-17 * * 1-5 * (earliest match 9:00).
+# Every bare "*" or "*/N" field MUST be quoted - the runner's own
+# instruction dispatch does `eval "args=($instruction)"` (lib/steps.sh),
+# which glob-expands an unquoted "*" against the CURRENT WORKING
+# DIRECTORY's filenames at run time - confirmed the hard way while
+# authoring this file (an unquoted "*/25" produced a real
+# "no matches found" shell error).
+APPMSG --int 10009=1 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+
+# Alarm 2: 'Movie', 20:00, one-time
+APPMSG --int 10009=2 10010=20 10011=0 10012=0 10013=0 --string 10020=Movie
+SLEEP 1
+
+TAP down
+SLEEP 1
+SCREENSHOT sorted_list_top --mask-rect 70x25+0+203

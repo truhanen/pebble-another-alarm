@@ -1,0 +1,70 @@
+sequence: keyboard_long_press_digit_insert.seq
+platform=emery vnc=0 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery
+[wipe_and_prep.seq:43] SLEEP 3
+[keyboard_long_press_digit_insert.seq:23] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[keyboard_long_press_digit_insert.seq:24] SLEEP 1
+[keyboard_long_press_digit_insert.seq:26] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:27] LONGPRESS select
++ pebble emu-button --emulator emery click select --duration 700
+[keyboard_long_press_digit_insert.seq:28] SLEEP 1
+[keyboard_long_press_digit_insert.seq:29] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:30] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:31] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:32] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:33] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:34] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:35] SLEEP 1
+[keyboard_long_press_digit_insert.seq:36] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_long_press_digit_insert.seq:37] SLEEP 1
+[keyboard_long_press_digit_insert.seq:38] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:39] SLEEP 1
+[keyboard_long_press_digit_insert.seq:40] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_long_press_digit_insert.seq:41] SLEEP 1
+[keyboard_long_press_digit_insert.seq:42] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:43] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:44] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:45] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:46] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:47] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:48] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_long_press_digit_insert.seq:49] SLEEP 1
+[keyboard_long_press_digit_insert.seq:50] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_long_press_digit_insert.seq:51] SLEEP 1
+[keyboard_long_press_digit_insert.seq:52] SCREENSHOT pattern_keyboard_empty
++ pebble screenshot --emulator emery --no-open 01_pattern_keyboard_empty.png
+[keyboard_long_press_digit_insert.seq:55] TOUCH 33 68 0.1
++ xdotool mousemove --window 2097160 33 68 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_long_press_digit_insert.seq:56] SLEEP 1
+[keyboard_long_press_digit_insert.seq:57] SCREENSHOT after_plain_tap_c
++ pebble screenshot --emulator emery --no-open 02_after_plain_tap_c.png
+[keyboard_long_press_digit_insert.seq:62] TOUCH 33 68 1.0
++ xdotool mousemove --window 2097160 33 68 mousedown 1 sleep 1.0 mouseup 1
+[keyboard_long_press_digit_insert.seq:63] SLEEP 1
+[keyboard_long_press_digit_insert.seq:64] SCREENSHOT after_long_press_inserts_digit_1
++ pebble screenshot --emulator emery --no-open 03_after_long_press_inserts_digit_1.png
+sequence PASSED - log: run.log

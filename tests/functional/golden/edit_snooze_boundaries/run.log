@@ -1,0 +1,74 @@
+sequence: edit_snooze_boundaries.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_snooze_boundaries.seq:9] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_snooze_boundaries.seq:10] SLEEP 1
+[edit_snooze_boundaries.seq:12] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:13] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_snooze_boundaries.seq:14] SLEEP 1
+[edit_snooze_boundaries.seq:17] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:18] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:19] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:20] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:22] SLEEP 1
+[edit_snooze_boundaries.seq:23] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_snooze_boundaries.seq:24] SLEEP 1
+[edit_snooze_boundaries.seq:25] SCREENSHOT snooze_editor_default_10min_3rep
++ pebble screenshot --emulator emery --vnc --no-open 01_snooze_editor_default_10min_3rep.png
+[edit_snooze_boundaries.seq:27] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:28] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:30] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:32] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:33] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:34] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:36] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:37] SLEEP 1
+[edit_snooze_boundaries.seq:38] SCREENSHOT snooze_minutes_disabled
++ pebble screenshot --emulator emery --vnc --no-open 02_snooze_minutes_disabled.png
+[edit_snooze_boundaries.seq:40] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_snooze_boundaries.seq:41] SLEEP 1
+[edit_snooze_boundaries.seq:42] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:43] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:44] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_snooze_boundaries.seq:45] SLEEP 1
+[edit_snooze_boundaries.seq:46] SCREENSHOT snooze_repeats_infinite
++ pebble screenshot --emulator emery --vnc --no-open 03_snooze_repeats_infinite.png
+[edit_snooze_boundaries.seq:49] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_snooze_boundaries.seq:50] SLEEP 1
+[edit_snooze_boundaries.seq:51] SCREENSHOT edit_menu_snooze_disabled_infinite --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_edit_menu_snooze_disabled_infinite.png
+sequence PASSED - log: run.log

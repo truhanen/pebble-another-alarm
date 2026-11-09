@@ -1,0 +1,65 @@
+# Live-verified end-to-end 2026-10-04.
+#
+# CLAUDE.md DISCREPANCY FOUND while verifying this: its "Signal submenu"
+# design point says vibe presets open the pattern keyboard pre-filled
+# rather than committing immediately ("Sound's presets are the one
+# exception, on request"). That's stale - pattern_select_select's actual
+# code (main.c) now commits a Vibration preset immediately too, with a
+# comment literally saying "on request, matching Tune's own presets
+# below". Only vibe's own "Custom" row still opens the keyboard
+# pre-filled. This sequence reflects the real, current behavior.
+#
+# Row order: Off(0) Double(1) Short(2) Long(3) Custom(4) "Custom pattern
+# help"(5) - the trailing help row's label is "Custom pattern help", not a
+# bare "Help".
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) Signal(6) - 6 downs from the default Delete selection.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT vibe_picker_double_preselected
+
+TAP down
+SLEEP 1
+SCREENSHOT vibe_picker_short_highlighted
+
+# Short commits immediately - no keyboard step - straight back to Signal.
+TAP select
+SLEEP 1
+SCREENSHOT signal_menu_vibration_short --mask-rect 70x25+0+203
+
+# Reopen (preselect logic re-matches the committed "2" bytes to the Short
+# preset, landing on row 2, same as the first open's Double-default landed
+# on row 1 - re-verify this specific reopen/preselect step against a live
+# run before fully trusting it as a golden) and pick "Custom" - this one
+# still opens the pattern keyboard
+# pre-filled with whatever's currently stored (Short's own "2" byte, since
+# a committed preset is stored as vibe_pattern_kind=1/Custom bytes under
+# the hood - see vibe_preset_match's own byte-identity re-matching).
+TAP select
+SLEEP 1
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT vibe_picker_custom_highlighted
+TAP select
+SLEEP 1
+SCREENSHOT pattern_keyboard_prefilled_with_2

@@ -1,0 +1,119 @@
+# Live-verified 2026-10-04 for the wizard's entry/validation/cancel
+# mechanics: "+ Custom" (its real on-screen label - CLAUDE.md's own
+# "+ Custom tune" is slightly stale) opens the pattern keyboard (SOUND
+# mode: note letters C D E F G A B, an octave/accidental cycle key, z for
+# rest); submitting it EMPTY re-shows the same keyboard rather than
+# accepting it (an empty/unparseable pattern doesn't advance to the name
+# step); BACK at this point aborts the whole wizard, straight back to the
+# Tune picker with nothing created.
+#
+# Actually typing a real pattern needs TOUCH (see
+# keyboard_label_touch_entry.seq's header note on this device's touch-only
+# typing model - SOUND pattern mode's key layout differs again from both
+# the plain label keyboard and VIBE's own digit grid). This sequence uses
+# the TestTuneIndex/TestTuneCustomPattern/TestTuneName hooks to create the
+# tune directly afterward and confirms it shows up correctly in the Tune
+# picker (collapsed with the "(custom)"-equivalent "*" marker, named, and
+# linkable to an alarm) rather than re-deriving the wizard's own keyboard
+# coordinates.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020, TestClearTunes=10040,
+# TestTuneIndex=10041, TestTuneName=10042, TestTuneCustomPattern=10043
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+# Signal submenu opens on row 0 (Vibration) - one more down reaches Tune.
+# An earlier version of this file pressed SELECT here directly, which
+# opened the VIBRATION picker instead (and the downs below overshot into
+# its own "Custom pattern help" row) - confirmed the hard way via a
+# golden-image review.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT tune_picker_plus_custom_selected
+TAP select
+SLEEP 1
+SCREENSHOT pattern_keyboard_empty
+
+# Submitting empty re-shows the same keyboard rather than accepting it.
+TAP select
+SLEEP 1
+SCREENSHOT pattern_keyboard_still_showing_after_empty_submit
+
+# BACK aborts the whole wizard - back to the Tune picker, nothing created.
+TAP back
+SLEEP 1
+SCREENSHOT tune_picker_unchanged_after_cancel
+
+# Create the tune directly via the test hooks instead of TOUCH-typing it.
+# Back out all the way to the main list first (tune picker -> signal ->
+# edit menu -> main list is 3 levels, not 2 - confirmed live while
+# authoring this) so the sub-windows get rebuilt fresh against the new
+# tune on reopen (see common/wipe_and_prep.seq's reload_ui() note).
+TAP back
+SLEEP 1
+TAP back
+SLEEP 1
+TAP back
+SLEEP 1
+APPMSG --int 10040=1 10041=0 --string 10042=Chime 10043="C z E z G"
+SLEEP 1
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+# Signal submenu opens on row 0 (Vibration) - one more down reaches Tune.
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT tune_picker_triple_still_default
+
+# Chime is the one and only saved tune, so it's the first (and only) tune
+# row - PATTERN_SELECT_SOUND_TUNES_BASE (SOUND_PRESET_COUNT=7, so base=8)
+# + tune index 0 = row 8, i.e. 7 downs from Triple's own row 1.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT tune_picker_with_chime_tune
+TAP select
+SLEEP 1
+SCREENSHOT custom_tune_screen_apply_tune_name_delete
+TAP select
+SLEEP 1
+SCREENSHOT signal_menu_tune_chime_applied --mask-rect 70x25+0+203

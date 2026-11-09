@@ -1,0 +1,72 @@
+# Live-verified against the real container 2026-10-04, after a golden-image
+# review caught two timing bugs in an earlier version of this file (both
+# now fixed, see the notes inline below):
+#
+# 1. TOUCH's default hold_s (0.6s) EXCEEDS this widget's own long-press
+#    threshold (`HOLD_MS` 350ms, multitap_keyboard_window.c) - a bare
+#    `TOUCH x y` on a letter key doesn't register as a tap at all, it
+#    triggers the long-press "insert this key's own keypad digit" path
+#    instead. Every tap below passes an explicit short `hold_s` (0.1s,
+#    comfortably under 350ms) to actually register as a tap.
+# 2. The multi-tap commit timeout (`MULTITAP_DEFAULT_WAIT_MS` 800ms) is
+#    SHORTER than the SLEEP this file originally used between repeated
+#    taps on the same key (1s) - the pending glyph auto-committed before
+#    the next tap arrived, so three taps on the same key typed that key's
+#    FIRST letter three times ("WWW") instead of cycling through it
+#    ("W"->"X"->"Y"). Repeated taps on the same key below sleep only
+#    0.3s between each other (comfortably under 800ms) to actually cycle.
+#
+# Derived from multitap_keyboard.c's own grid geometry constants
+# (TEXT_AREA_H=44, GRID_VPAD=2, GRID_COLS=3, GRID_ROWS=4) against this
+# platform's confirmed 200x228 display (measured directly from a live
+# screenshot), the same "compute cell centers from documented geometry"
+# approach pebble-another-timer's own touch_dial sequences use.
+#
+# Grid layout (row, col -> label): (0,0) ,.?!  (0,1) ABC  (0,2) DEF
+#                                   (1,0) GHI   (1,1) JKL  (1,2) MNO
+#                                   (2,0) PQRS  (2,1) TUV  (2,2) WXYZ
+#                                   (3,0) Shift (3,1) Space (3,2) Backspace
+# Cell centers (top=46, rowh=45, colw=66): col centers 33/99/165, row
+# centers 68/113/158/203.
+#
+# Typing "Gym": G = GHI (row1,col0) tapped once; y = WXYZ (row2,col2)
+# tapped 3 times (W,X,Y); m = MNO (row1,col2) tapped once. A tap on a
+# DIFFERENT key commits whatever glyph the previous key's tap-cycle was on
+# - multitap_keyboard.c's own tokenizer handles the commit, no explicit
+# "confirm this letter" step is needed between keys, only between repeated
+# taps on the SAME key.
+IMPORT ../common/wipe_and_prep.seq
+
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT label_keyboard_empty
+
+# G (GHI key, one tap)
+TOUCH 33 113 0.1
+SLEEP 1
+SCREENSHOT after_g
+
+# y (WXYZ key, three taps, 0.3s apart - see this file's header note)
+TOUCH 165 158 0.1
+SLEEP 0.3
+TOUCH 165 158 0.1
+SLEEP 0.3
+TOUCH 165 158 0.1
+SLEEP 1
+SCREENSHOT after_gy
+
+# m (MNO key, one tap - a different key, so it commits the pending "y")
+TOUCH 165 113 0.1
+SLEEP 1
+SCREENSHOT after_gym
+
+# Submit via the SELECT button (multitap_keyboard_submit).
+TAP select
+SLEEP 1
+SCREENSHOT alarm_created_with_label --mask-rect 70x25+0+203

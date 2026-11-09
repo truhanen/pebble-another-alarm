@@ -1,0 +1,20 @@
+sequence: ring_auto_dismiss_mode_on_hide.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[ring_auto_dismiss_mode_on_hide.seq:10] APPMSG --int 10009=0 10010=7 10011=0 10014=1 10029=2 10023=1 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10010=7 10011=0 10014=1 10029=2 10023=1 --string 10020=Wakeup
+[ring_auto_dismiss_mode_on_hide.seq:11] SLEEP 1
+[ring_auto_dismiss_mode_on_hide.seq:12] KILL
++ pebble kill
+[ring_auto_dismiss_mode_on_hide.seq:13] INSTALL
++ pebble install --emulator emery --vnc
+[ring_auto_dismiss_mode_on_hide.seq:14] SLEEP 3
+[ring_auto_dismiss_mode_on_hide.seq:15] SCREENSHOT main_list_no_ring_screen_shown --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_main_list_no_ring_screen_shown.png
+sequence PASSED - log: run.log

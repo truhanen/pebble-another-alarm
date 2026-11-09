@@ -1,0 +1,66 @@
+sequence: keyboard_nav_subpage_cursor_move.seq
+platform=emery vnc=0 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery
+[wipe_and_prep.seq:43] SLEEP 3
+[keyboard_nav_subpage_cursor_move.seq:26] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[keyboard_nav_subpage_cursor_move.seq:27] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:29] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:30] LONGPRESS select
++ pebble emu-button --emulator emery click select --duration 700
+[keyboard_nav_subpage_cursor_move.seq:31] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:32] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:33] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:34] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:35] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_nav_subpage_cursor_move.seq:37] SLEEP 5
+[keyboard_nav_subpage_cursor_move.seq:38] SCREENSHOT label_keyboard_alpha_page_prefilled
++ pebble screenshot --emulator emery --no-open 01_label_keyboard_alpha_page_prefilled.png
+[keyboard_nav_subpage_cursor_move.seq:40] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:41] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:42] SCREENSHOT label_keyboard_numbers_page
++ pebble screenshot --emulator emery --no-open 02_label_keyboard_numbers_page.png
+[keyboard_nav_subpage_cursor_move.seq:43] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:44] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:45] SCREENSHOT label_keyboard_symbols_page
++ pebble screenshot --emulator emery --no-open 03_label_keyboard_symbols_page.png
+[keyboard_nav_subpage_cursor_move.seq:46] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:47] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:48] SCREENSHOT label_keyboard_nav_page_arrow_keys
++ pebble screenshot --emulator emery --no-open 04_label_keyboard_nav_page_arrow_keys.png
+[keyboard_nav_subpage_cursor_move.seq:52] TOUCH 33 113 0.1
++ xdotool mousemove --window 2097160 33 113 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_nav_subpage_cursor_move.seq:53] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:54] TOUCH 33 113 0.1
++ xdotool mousemove --window 2097160 33 113 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_nav_subpage_cursor_move.seq:55] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:57] SLEEP 5
+[keyboard_nav_subpage_cursor_move.seq:58] SCREENSHOT cursor_moved_left_2
++ pebble screenshot --emulator emery --no-open 05_cursor_moved_left_2.png
+[keyboard_nav_subpage_cursor_move.seq:59] TAP down
++ pebble emu-button --emulator emery click down --duration 150
+[keyboard_nav_subpage_cursor_move.seq:60] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:61] TOUCH 99 68 0.1
++ xdotool mousemove --window 2097160 99 68 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_nav_subpage_cursor_move.seq:62] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:64] SLEEP 5
+[keyboard_nav_subpage_cursor_move.seq:65] SCREENSHOT a_inserted_mid_string
++ pebble screenshot --emulator emery --no-open 06_a_inserted_mid_string.png
+[keyboard_nav_subpage_cursor_move.seq:66] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_nav_subpage_cursor_move.seq:67] SLEEP 1
+[keyboard_nav_subpage_cursor_move.seq:68] SCREENSHOT edit_menu_label_with_inserted_char --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --no-open 07_edit_menu_label_with_inserted_char.png
+sequence PASSED - log: run.log

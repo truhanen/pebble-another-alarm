@@ -1,0 +1,37 @@
+# Live-verified end-to-end 2026-10-04: BACK at the Time step's hour field,
+# BACK at the Repeat preset step, and BACK at the Label keyboard (see
+# wizard_create_basic_alarm.seq's own header note on how the keyboard's
+# BACK maps to a NULL text -> new_alarm_label_done aborts the create) each
+# discard the whole draft outright - the list stays empty afterward.
+IMPORT ../common/wipe_and_prep.seq
+
+# BACK at the Time step's first field (hour) cancels immediately.
+TAP select
+SLEEP 1
+TAP back
+SLEEP 1
+SCREENSHOT after_cancel_at_time_step --mask-rect 70x25+0+203
+
+# BACK at the Repeat preset step.
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP back
+SLEEP 1
+SCREENSHOT after_cancel_at_repeat_step --mask-rect 70x25+0+203
+
+# BACK at the Label keyboard.
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP select
+SLEEP 1
+TAP back
+SLEEP 1
+SCREENSHOT after_cancel_at_label_step --mask-rect 70x25+0+203

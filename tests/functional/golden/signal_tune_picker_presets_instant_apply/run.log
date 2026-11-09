@@ -1,0 +1,60 @@
+sequence: signal_tune_picker_presets_instant_apply.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[signal_tune_picker_presets_instant_apply.seq:9] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[signal_tune_picker_presets_instant_apply.seq:10] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:12] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:13] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_tune_picker_presets_instant_apply.seq:14] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:17] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:18] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:19] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:20] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:22] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:23] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:24] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_tune_picker_presets_instant_apply.seq:25] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:26] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:27] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:28] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_tune_picker_presets_instant_apply.seq:29] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:30] SCREENSHOT tune_picker_triple_default_marker
++ pebble screenshot --emulator emery --vnc --no-open 01_tune_picker_triple_default_marker.png
+[signal_tune_picker_presets_instant_apply.seq:32] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_tune_picker_presets_instant_apply.seq:33] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:34] SCREENSHOT signal_menu_tune_triple --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_signal_menu_tune_triple.png
+[signal_tune_picker_presets_instant_apply.seq:36] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_tune_picker_presets_instant_apply.seq:37] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_tune_picker_presets_instant_apply.seq:39] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:40] SCREENSHOT tune_picker_double_highlighted
++ pebble screenshot --emulator emery --vnc --no-open 03_tune_picker_double_highlighted.png
+[signal_tune_picker_presets_instant_apply.seq:41] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_tune_picker_presets_instant_apply.seq:42] SLEEP 1
+[signal_tune_picker_presets_instant_apply.seq:43] SCREENSHOT signal_menu_tune_double --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_signal_menu_tune_double.png
+sequence PASSED - log: run.log

@@ -1,0 +1,12 @@
+sequence: main_list_empty_state.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[main_list_empty_state.seq:6] SCREENSHOT empty_list --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_empty_list.png
+sequence PASSED - log: run.log

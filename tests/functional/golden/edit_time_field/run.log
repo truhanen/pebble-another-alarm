@@ -1,0 +1,52 @@
+sequence: edit_time_field.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[edit_time_field.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[edit_time_field.seq:12] SLEEP 1
+[edit_time_field.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_time_field.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[edit_time_field.seq:16] SLEEP 1
+[edit_time_field.seq:17] SCREENSHOT edit_menu_delete_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_edit_menu_delete_selected.png
+[edit_time_field.seq:18] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[edit_time_field.seq:19] SLEEP 1
+[edit_time_field.seq:20] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_time_field.seq:21] SLEEP 1
+[edit_time_field.seq:22] SCREENSHOT time_editor_07_00 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 02_time_editor_07_00.png
+[edit_time_field.seq:25] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[edit_time_field.seq:26] SLEEP 1
+[edit_time_field.seq:27] SCREENSHOT time_editor_bumped_to_08 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_time_editor_bumped_to_08.png
+[edit_time_field.seq:28] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[edit_time_field.seq:29] SLEEP 1
+[edit_time_field.seq:30] SCREENSHOT edit_menu_time_reverted_to_07_00 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_edit_menu_time_reverted_to_07_00.png
+[edit_time_field.seq:33] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_time_field.seq:34] SLEEP 1
+[edit_time_field.seq:35] TAP up
++ pebble emu-button --emulator emery --vnc click up --duration 150
+[edit_time_field.seq:36] SLEEP 1
+[edit_time_field.seq:37] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_time_field.seq:38] SLEEP 1
+[edit_time_field.seq:39] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[edit_time_field.seq:40] SLEEP 1
+[edit_time_field.seq:41] SCREENSHOT edit_menu_time_applied_08_00 --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_edit_menu_time_applied_08_00.png
+sequence PASSED - log: run.log

@@ -1,0 +1,19 @@
+# Live-verified end-to-end 2026-10-04. With TestAlarmSnoozeMinutes=0 ("0 =
+# snooze disabled outright" - CLAUDE.md), pressing the Snooze button (UP)
+# behaves like Stop instead: back to the main list with the alarm in its
+# normal enabled (green) tint, not the snoozing (red) one.
+#
+# Keys: TestAlarmIndex=10009, TestAlarmHour=10010, TestAlarmMinute=10011,
+# TestAlarmEnabled=10014, TestAlarmSnoozeMinutes=10016, TestAlarmPending=10023,
+# TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10016=0 10023=1 --string 10020=Wakeup
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT ring_screen_showing --mask-rect 70x30+0+198
+
+TAP up
+SLEEP 1
+SCREENSHOT main_list_stopped_not_snoozing --mask-rect 70x25+0+203

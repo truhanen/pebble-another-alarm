@@ -1,0 +1,56 @@
+# Live-verified end-to-end 2026-10-04. Edit menu's Signal row opens a
+# submenu with 3 rows: Vibration, Tune, Increasing volume - showing the
+# preset/tune names (not raw patterns) when enabled. A separate check (via
+# TestAlarmVibrationEnabled=0/TestAlarmSoundEnabled=0) confirms both rows
+# fall back to "Off" when their respective toggle is disabled.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020, TestAlarmVibrationEnabled=10018,
+# TestAlarmSoundEnabled=10019
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) Signal(6) - 6 downs from the default Delete selection.
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT signal_submenu_defaults --mask-rect 70x25+0+203
+
+# reload_ui() (triggered by the AppMessage below) only refreshes the main
+# list's own MenuLayer, not the edit/signal submenus already on the window
+# stack (see main.c's own reload_ui()) - back out to the main list first so
+# the Signal submenu is freshly built against the updated alarm fields
+# when we reopen it.
+TAP back
+SLEEP 1
+TAP back
+SLEEP 1
+# TestAlarmIndex (10009) must be present in the SAME message for any
+# per-alarm field to apply at all (handle_test_message only looks up
+# TestAlarmVibrationEnabled/TestAlarmSoundEnabled once it has resolved an
+# index) - omitting it live-verified as a silent no-op.
+APPMSG --int 10009=0 10018=0 10019=0
+SLEEP 1
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT signal_submenu_both_off --mask-rect 70x25+0+203

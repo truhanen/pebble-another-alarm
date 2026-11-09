@@ -1,0 +1,37 @@
+# Not yet live-verified. One alarm per state - enabled (green), disabled
+# (white), skip-pending (yellow), snoozing (red) - per CLAUDE.md's "Visual
+# style" design point (ml_row_colors). All four are repeating alarms so
+# skip-pending is reachable (TestAlarmSkipNext is meaningless on a
+# non-repeating alarm).
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmRepeats=10012, TestAlarmRepeatDays=10013,
+# TestAlarmEnabled=10014, TestAlarmSkipNext=10015, TestAlarmSnoozeInSec=10021,
+# TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+
+# Alarm 0: enabled, repeats Mon-Fri, 06:00
+APPMSG --int 10008=1 10009=0 10010=6 10011=0 10012=1 10013=62 10014=1 --string 10020=Enabled
+SLEEP 1
+# Alarm 1: disabled, repeats Mon-Fri, 07:00
+APPMSG --int 10009=1 10010=7 10011=0 10012=1 10013=62 10014=0 --string 10020=Disabled
+SLEEP 1
+# Alarm 2: enabled, skip-pending, repeats Mon-Fri, 08:00
+APPMSG --int 10009=2 10010=8 10011=0 10012=1 10013=62 10014=1 10015=1 --string 10020=SkipPending
+SLEEP 1
+# Alarm 3: enabled, repeats Mon-Fri, 09:00, snoozed for 10 real minutes
+APPMSG --int 10009=3 10010=9 10011=0 10012=1 10013=62 10014=1 10021=600 --string 10020=Snoozing
+SLEEP 1
+
+TAP down
+SLEEP 1
+SCREENSHOT row_enabled_green_selected --mask-rect 70x25+0+203
+TAP down
+SLEEP 1
+SCREENSHOT row_disabled_white_selected --mask-rect 70x25+0+203
+TAP down
+SLEEP 1
+SCREENSHOT row_skip_pending_yellow_selected --mask-rect 70x25+0+203
+TAP down
+SLEEP 1
+SCREENSHOT row_snoozing_red_selected --mask-rect 70x25+0+203

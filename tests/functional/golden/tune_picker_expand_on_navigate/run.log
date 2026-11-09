@@ -1,0 +1,68 @@
+sequence: tune_picker_expand_on_navigate.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[tune_picker_expand_on_navigate.seq:11] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[tune_picker_expand_on_navigate.seq:12] SLEEP 1
+[tune_picker_expand_on_navigate.seq:13] APPMSG --int 10040=1 10041=0 --string 10042=Chime "10043=C z E z G"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10040=1 10041=0 --string 10042=Chime 10043=C z E z G
+[tune_picker_expand_on_navigate.seq:14] SLEEP 1
+[tune_picker_expand_on_navigate.seq:15] APPMSG --int 10041=1 --string 10042=Gong 10043=C8
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10041=1 --string 10042=Gong 10043=C8
+[tune_picker_expand_on_navigate.seq:16] SLEEP 1
+[tune_picker_expand_on_navigate.seq:18] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:19] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_picker_expand_on_navigate.seq:20] SLEEP 1
+[tune_picker_expand_on_navigate.seq:21] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:22] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:23] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:24] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:25] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:26] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:27] SLEEP 1
+[tune_picker_expand_on_navigate.seq:28] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_picker_expand_on_navigate.seq:29] SLEEP 1
+[tune_picker_expand_on_navigate.seq:30] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:31] SLEEP 1
+[tune_picker_expand_on_navigate.seq:32] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_picker_expand_on_navigate.seq:33] SLEEP 1
+[tune_picker_expand_on_navigate.seq:34] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:36] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:37] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:39] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:40] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:41] SLEEP 1
+[tune_picker_expand_on_navigate.seq:42] SCREENSHOT chime_expanded_gong_collapsed
++ pebble screenshot --emulator emery --vnc --no-open 01_chime_expanded_gong_collapsed.png
+[tune_picker_expand_on_navigate.seq:44] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_picker_expand_on_navigate.seq:45] SLEEP 1
+[tune_picker_expand_on_navigate.seq:46] SCREENSHOT gong_expanded_chime_collapsed
++ pebble screenshot --emulator emery --vnc --no-open 02_gong_expanded_chime_collapsed.png
+sequence PASSED - log: run.log

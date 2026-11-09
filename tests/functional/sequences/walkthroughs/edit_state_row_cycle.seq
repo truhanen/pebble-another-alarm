@@ -1,0 +1,29 @@
+# Live-verified 2026-10-04 for the non-repeating 2-state toggle (Enabled
+# <-> Disabled via the State row's own SELECT, ml_cycle_alarm_state shared
+# with the main list's short-press cycle). The repeating 3-state cycle and
+# the cron alarm's "Skip next" label aren't independently re-run here - see
+# main_list_short_press_cycle.seq, which already exercises the same shared
+# ml_cycle_alarm_state function for the repeating case.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+
+TAP down
+LONGPRESS select
+SLEEP 1
+# Edit menu row order (non-cron): Delete(0) Time(1) Label(2) State(3) -
+# 3 downs from the default Delete selection.
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT edit_menu_state_enabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_state_disabled --mask-rect 70x25+0+203
+TAP select
+SLEEP 1
+SCREENSHOT edit_menu_state_enabled_again --mask-rect 70x25+0+203

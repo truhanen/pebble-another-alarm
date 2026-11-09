@@ -1,0 +1,15 @@
+# Live-verified end-to-end 2026-10-04. Auto-dismiss mode 2 ("On, hide")
+# never shows the ring screen at all - trigger_alarm() returns before ever
+# creating s_alarm_window, straight into alarm_do_stop() - confirmed: the
+# main list is on screen immediately after relaunch, alarm still enabled.
+#
+# Keys: TestAlarmIndex=10009, TestAlarmHour=10010, TestAlarmMinute=10011,
+# TestAlarmEnabled=10014, TestAlarmAutoDismiss=10029, TestAlarmPending=10023,
+# TestAlarmName=10020
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10029=2 10023=1 --string 10020=Wakeup
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT main_list_no_ring_screen_shown --mask-rect 70x25+0+203

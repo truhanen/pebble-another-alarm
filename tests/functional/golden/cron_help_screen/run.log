@@ -1,0 +1,51 @@
+sequence: cron_help_screen.seq
+platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery --vnc
+[wipe_and_prep.seq:43] SLEEP 3
+[cron_help_screen.seq:11] APPMSG --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10024=1 --string 10020=Pomodoro 10025=*/25 10026=9-17 10027=1-5 10032=* 10033=* 10035=*
+[cron_help_screen.seq:12] SLEEP 1
+[cron_help_screen.seq:14] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:15] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[cron_help_screen.seq:16] SLEEP 1
+[cron_help_screen.seq:17] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:18] SLEEP 1
+[cron_help_screen.seq:19] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_help_screen.seq:20] SLEEP 1
+[cron_help_screen.seq:26] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:27] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:28] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:29] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:30] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:31] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:32] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[cron_help_screen.seq:33] SLEEP 1
+[cron_help_screen.seq:34] SCREENSHOT cron_editor_help_row_selected --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 01_cron_editor_help_row_selected.png
+[cron_help_screen.seq:35] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[cron_help_screen.seq:36] SLEEP 1
+[cron_help_screen.seq:37] SCREENSHOT cron_help_text_screen
++ pebble screenshot --emulator emery --vnc --no-open 02_cron_help_text_screen.png
+[cron_help_screen.seq:38] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[cron_help_screen.seq:39] SLEEP 1
+[cron_help_screen.seq:40] SCREENSHOT cron_editor_unchanged_after_help --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 03_cron_editor_unchanged_after_help.png
+sequence PASSED - log: run.log

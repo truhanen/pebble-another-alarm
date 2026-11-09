@@ -1,0 +1,50 @@
+sequence: keyboard_label_touch_entry.seq
+platform=emery vnc=0 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
+[wipe_and_prep.seq:40] KILL
++ pebble kill
+[wipe_and_prep.seq:41] WIPE
++ pebble wipe
+[wipe_and_prep.seq:42] INSTALL
++ pebble install --emulator emery
+[wipe_and_prep.seq:43] SLEEP 3
+[keyboard_label_touch_entry.seq:40] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_label_touch_entry.seq:41] SLEEP 1
+[keyboard_label_touch_entry.seq:42] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_label_touch_entry.seq:43] SLEEP 1
+[keyboard_label_touch_entry.seq:44] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_label_touch_entry.seq:45] SLEEP 1
+[keyboard_label_touch_entry.seq:46] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_label_touch_entry.seq:47] SLEEP 1
+[keyboard_label_touch_entry.seq:48] SCREENSHOT label_keyboard_empty
++ pebble screenshot --emulator emery --no-open 01_label_keyboard_empty.png
+[keyboard_label_touch_entry.seq:51] TOUCH 33 113 0.1
++ xdotool mousemove --window 2097160 33 113 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_label_touch_entry.seq:52] SLEEP 1
+[keyboard_label_touch_entry.seq:53] SCREENSHOT after_g
++ pebble screenshot --emulator emery --no-open 02_after_g.png
+[keyboard_label_touch_entry.seq:56] TOUCH 165 158 0.1
++ xdotool mousemove --window 2097160 165 158 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_label_touch_entry.seq:57] SLEEP 0.3
+[keyboard_label_touch_entry.seq:58] TOUCH 165 158 0.1
++ xdotool mousemove --window 2097160 165 158 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_label_touch_entry.seq:59] SLEEP 0.3
+[keyboard_label_touch_entry.seq:60] TOUCH 165 158 0.1
++ xdotool mousemove --window 2097160 165 158 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_label_touch_entry.seq:61] SLEEP 1
+[keyboard_label_touch_entry.seq:62] SCREENSHOT after_gy
++ pebble screenshot --emulator emery --no-open 03_after_gy.png
+[keyboard_label_touch_entry.seq:65] TOUCH 165 113 0.1
++ xdotool mousemove --window 2097160 165 113 mousedown 1 sleep 0.1 mouseup 1
+[keyboard_label_touch_entry.seq:66] SLEEP 1
+[keyboard_label_touch_entry.seq:67] SCREENSHOT after_gym
++ pebble screenshot --emulator emery --no-open 04_after_gym.png
+[keyboard_label_touch_entry.seq:70] TAP select
++ pebble emu-button --emulator emery click select --duration 150
+[keyboard_label_touch_entry.seq:71] SLEEP 1
+[keyboard_label_touch_entry.seq:72] SCREENSHOT alarm_created_with_label --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --no-open 05_alarm_created_with_label.png
+sequence PASSED - log: run.log
