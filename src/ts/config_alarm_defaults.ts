@@ -1,6 +1,6 @@
 /* Clay custom component "alarmDefaults": the "New alarm defaults" block, laid
    out like the signal/snooze part of an alarm card (config_alarm_list.ts) --
-   same chips, same aligned grid, same "snooze off"/"unlimited" notes -- and
+   same chips, same aligned grid, same "Off"/"unlimited" notes -- and
    reusing its CSS classes (.al-chips/.al-chip/.al-grid/.al-lbl/.al-note, defined
    in that component's style; both are always on the page together).
    Value: { snoozeMinutes, snoozeMax, vibration, sound, increasing, vibePattern }
@@ -24,7 +24,7 @@ function alarmDefaultsInitialize(this: any, _minified: any, _clayConfig: any): v
   }
 
   function notes(): void {
-    q('.ad-sm-note').textContent = num(q('.ad-sm').value, 0, 120, 10) === 0 && q('.ad-sm').value !== '' ? 'snooze off' : '';
+    q('.ad-sm-note').textContent = num(q('.ad-sm').value, 0, 120, 10) === 0 && q('.ad-sm').value !== '' ? 'Off' : '';
     q('.ad-sx-note').textContent = num(q('.ad-sx').value, 0, 20, 3) === 0 && q('.ad-sx').value !== '' ? 'unlimited' : '';
   }
 

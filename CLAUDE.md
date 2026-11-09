@@ -192,7 +192,7 @@ library" below.
   defaults** — one `alarmDefaults` component (`config_alarm_defaults.ts`)
   laid out like an alarm card's signal/snooze block (chips for Vibration/
   Sound/Increasing, aligned Vibration-preset/"Snooze (min)"/"Max snoozes"
-  grid, "snooze off"/"unlimited" notes); its value is
+  grid, "Off"/"unlimited" notes); its value is
   `{snoozeMinutes, snoozeMax, vibration, sound, increasing, vibePattern}` and
   `dict.ts`'s `flattenAlarmDefaults()` turns it into the watch's original flat
   keys (`DefaultSnoozeMinutes` — 0 means snooze off, which replaced the old
@@ -298,7 +298,9 @@ library" below.
     06:30 · Next: tomorrow 06:30" for Basic, "Next: today 15:40" for Cron,
     "… · disabled"/"Disabled" when the alarm is off), **Signal** (vibration/sound/
     increasing chips, Vibration and Tune selects) and **Snooze and dismiss**
-    (snooze minutes, max snoozes, auto-dismiss). The caption says "and", not
+    (snooze minutes, max snoozes, auto-dismiss). The expanded editor opens with the label field (no "Label" prefix, just a
+    placeholder) and, to its right on the same line, a red DELETE button (not a
+    text link). The caption says "and", not
     "&": the page font draws a capital ampersand like a ® mark.
   - **Vibration patterns** section (`vibeList`, `config_vibe_list.ts`, between
     Tunes and Other): named custom vibration patterns, `VibeConfig` on the wire

@@ -292,8 +292,10 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       '</div>' +
       // -- editor --
       '<div class="al-body">' +
-        '<div class="al-field"><span class="al-lbl">Label</span>' +
-          '<input class="al-name" type="text" maxlength="31" placeholder="Label" value="' + esc(a.name) + '"></div>' +
+        // the label field (its placeholder says what it is) with the DELETE button to its right
+        '<div class="al-field">' +
+          '<input class="al-name" type="text" maxlength="31" placeholder="Label" value="' + esc(a.name) + '">' +
+          '<button type="button" class="al-del">DELETE</button></div>' +
         // Schedule: everything that decides WHEN the alarm fires, in one panel
         '<div class="al-group al-g-sched"><div class="al-gcap">Schedule</div>' +
           '<div class="al-seg-wrap" role="radiogroup">' +
@@ -335,7 +337,6 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
               opt(0, 'Off', a.autoDismiss) + opt(1, 'On', a.autoDismiss) + opt(2, 'On, hide', a.autoDismiss) + '</select></div>' +
           '</div>' +
         '</div>' +
-        '<div class="al-foot"><button type="button" class="al-del">Delete alarm</button></div>' +
       '</div>' +
     '</div>';
   }
@@ -478,7 +479,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       next.textContent = !on ? words + ' \u00b7 disabled' : n ? words + ' \u00b7 Next: ' + fmtNext(n, now) : words;
     }
     const sm = parseInt(q(r, '.al-sm').value, 10);
-    q(r, '.al-sm-note').textContent = sm === 0 ? 'snooze off' : '';
+    q(r, '.al-sm-note').textContent = sm === 0 ? 'Off' : '';
     const sx = parseInt(q(r, '.al-sx').value, 10);
     q(r, '.al-sx-note').textContent = sx === 0 ? 'unlimited' : '';
   }
@@ -707,7 +708,6 @@ const alarmListComponent = {
     '.al-card.open .al-body{display:block}' +
     '.al-lbl{color:#ddd;font-size:0.9rem}' +
     '.al-field{display:flex;align-items:center;gap:0.6rem;margin:0.7rem 0}' +
-    '.al-field .al-lbl{flex:0 0 4.6rem}' +
     '.al-name,.al-time,.al-cronin,.al-tune,.al-vibsel,.al-ad,.al-sm,.al-sx{box-sizing:border-box;height:2.5rem;margin:0;' +
       'background-color:#666;color:#fff;border:none;border-radius:0.3rem;padding:0 0.6rem;color-scheme:dark;font-size:1rem}' +
     '.al-name{flex:1 1 auto;min-width:0}' +
@@ -744,8 +744,10 @@ const alarmListComponent = {
     '.al-tune,.al-vibsel,.al-ad{width:100%}' +
     '.al-sm,.al-sx{width:5rem}' +
     '.al-note{color:#bbb;font-size:0.8rem;margin-left:0.6rem}' +
-    '.al-foot{text-align:right;margin-top:0.4rem}' +
-    '.al-del{min-width:0;width:auto;margin:0;padding:0.3rem 0.4rem;background:none;border:none;color:#ff8a80;text-decoration:underline;font-size:0.85rem}' +
+    // DELETE: a real (destructive) button to the right of the label field
+    '.al-del{flex:0 0 auto;min-width:0;width:auto;margin:0;padding:0 0.9rem;height:2.5rem;background:#b3302a;color:#fff;border:1px solid #d9534f;' +
+      'border-radius:0.3rem;font-size:0.9rem;font-weight:normal;cursor:pointer}' +
+    '.al-del:active{background:#8f2722}' +
     '.al-add{margin:0.4rem 0 0.6rem 0}',
   manipulator: {
     get: function(this: any): any[] {

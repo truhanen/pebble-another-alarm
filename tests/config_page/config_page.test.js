@@ -99,7 +99,7 @@ test('"New alarm defaults" uses the same chips/grid layout as an alarm card', as
   assert.strictEqual(await page.locator('.ad-rootc .al-grid').evaluate((e) => getComputedStyle(e).display), 'grid');
   // the 0-value notes, like the cards
   await page.fill('.ad-sm', '0');
-  assert.strictEqual(await page.locator('.ad-sm-note').innerText(), 'snooze off');
+  assert.strictEqual(await page.locator('.ad-sm-note').innerText(), 'Off');
   await page.fill('.ad-sx', '0');
   assert.strictEqual(await page.locator('.ad-sx-note').innerText(), 'unlimited');
 });
@@ -255,7 +255,7 @@ test('snooze fields explain their 0 values', async () => {
   await page.click('.al-add');
   assert.strictEqual(await page.locator('.al-sm-note').innerText(), '');
   await page.fill('.al-sm', '0');
-  assert.strictEqual(await page.locator('.al-sm-note').innerText(), 'snooze off');
+  assert.strictEqual(await page.locator('.al-sm-note').innerText(), 'Off');
   await page.fill('.al-sx', '0');
   assert.strictEqual(await page.locator('.al-sx-note').innerText(), 'unlimited');
   await page.fill('.al-sx', '3');
@@ -1082,4 +1082,39 @@ test('the counter reflects values loaded from the watch and survives a re-render
   assert.deepStrictEqual(counts, ['5/160', '5/160']);   // "C z E" and "G A B" are 5 characters each
   await page.click('.tu-add');                          // adding a row re-renders the others
   assert.deepStrictEqual(await page.locator('.tu-count').allInnerTexts(), ['5/160', '5/160', '0/160']);
+});
+
+test('DELETE is a real button to the right of the label field (which has no "Label" prefix)', async () => {
+  const { page } = await open();
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  const del = page.locator('.al-card .al-del');
+  const name = page.locator('.al-card .al-name');
+  assert.strictEqual(await del.count(), 1, 'one delete button per card, no leftover footer link');
+  assert.strictEqual(await page.locator('.al-foot, .al-top').count(), 0);
+  assert.strictEqual(await del.evaluate((e) => e.tagName), 'BUTTON');
+  assert.strictEqual((await del.innerText()).trim().toUpperCase(), 'DELETE');
+  assert.strictEqual(await name.getAttribute('placeholder'), 'Label', 'the field says what it is itself');
+  assert.strictEqual(await page.locator('.al-card .al-field .al-lbl').count(), 0, 'no "Label" text in front of the field');
+
+  // same line as the label field, to its right, and flush with the right edge of the editor
+  const [d, n, body, sched] = await Promise.all([del.boundingBox(), name.boundingBox(),
+    page.locator('.al-card .al-body').boundingBox(), page.locator('.al-card .al-g-sched').boundingBox()]);
+  assert.ok(Math.abs((d.y + d.height / 2) - (n.y + n.height / 2)) <= 3, 'vertically centred on the label field');
+  assert.ok(d.x >= n.x + n.width, 'to the right of the field');
+  assert.ok(n.x - body.x <= 14, `the field now starts at the left edge (${Math.round(n.x - body.x)}px in)`);
+  assert.ok(Math.abs((d.x + d.width) - (body.x + body.width)) <= 14, 'right-aligned');
+  assert.ok(d.y + d.height <= sched.y, 'above the Schedule panel');
+
+  // styled as a button, not as underlined text
+  const css = await del.evaluate((e) => { const c = getComputedStyle(e); return { bg: c.backgroundColor, deco: c.textDecorationLine, border: c.borderTopWidth, radius: c.borderTopLeftRadius, h: e.getBoundingClientRect().height }; });
+  assert.notStrictEqual(css.bg, 'rgba(0, 0, 0, 0)', 'has a fill');
+  assert.strictEqual(css.deco, 'none', 'not underlined');
+  assert.strictEqual(css.border, '1px');
+  assert.notStrictEqual(css.radius, '0px');
+  assert.ok(css.h >= 32, `a comfortable tap height (${css.h}px)`);
+
+  // it still deletes
+  await del.click();
+  assert.strictEqual(await page.locator('.al-card').count(), 0);
 });
