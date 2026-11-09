@@ -43,7 +43,10 @@ TAP select
 SLEEP 1
 TAP select
 SLEEP 1
-# Navigate to Custom (row 4 from Double's default row 1 preselect).
+# Navigate to "+ Custom" (row 6 from Double's default row 1 preselect; rows: Off, Double,
+# Double long, Double short, Long, Short, + Custom, Help).
+TAP down
+TAP down
 TAP down
 TAP down
 TAP down

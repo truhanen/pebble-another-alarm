@@ -9,7 +9,7 @@
 # below". Only vibe's own "Custom" row still opens the keyboard
 # pre-filled. This sequence reflects the real, current behavior.
 #
-# Row order: Off(0) Double(1) Short(2) Long(3) then one row per library vibration
+# Row order: Off(0) Double(1) Double long(2) Double short(3) Long(4) Short(5) then one row per library vibration
 # (none here), "+ Custom" and "Custom vibration help". UPDATED with the
 # custom-vibration library: "+ Custom" now starts the pattern -> name creation
 # wizard (an EMPTY pattern keyboard), instead of the old inline "Custom" row that
@@ -40,6 +40,9 @@ SLEEP 1
 SCREENSHOT vibe_picker_double_preselected
 
 TAP down
+TAP down
+TAP down
+TAP down
 SLEEP 1
 SCREENSHOT vibe_picker_short_highlighted
 
@@ -58,7 +61,6 @@ SCREENSHOT signal_menu_vibration_short --mask-rect 70x25+0+203
 # the hood - see vibe_preset_match's own byte-identity re-matching).
 TAP select
 SLEEP 1
-TAP down
 TAP down
 SLEEP 1
 SCREENSHOT vibe_picker_new_custom_highlighted

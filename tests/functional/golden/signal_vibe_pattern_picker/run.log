@@ -38,28 +38,32 @@ platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
 + pebble screenshot --emulator emery --vnc --no-open 01_vibe_picker_double_preselected.png
 [signal_vibe_pattern_picker.seq:42] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_pattern_picker.seq:43] SLEEP 1
-[signal_vibe_pattern_picker.seq:44] SCREENSHOT vibe_picker_short_highlighted
+[signal_vibe_pattern_picker.seq:43] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_pattern_picker.seq:44] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_pattern_picker.seq:45] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_pattern_picker.seq:46] SLEEP 1
+[signal_vibe_pattern_picker.seq:47] SCREENSHOT vibe_picker_short_highlighted
 + pebble screenshot --emulator emery --vnc --no-open 02_vibe_picker_short_highlighted.png
-[signal_vibe_pattern_picker.seq:47] TAP select
+[signal_vibe_pattern_picker.seq:50] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_pattern_picker.seq:48] SLEEP 1
-[signal_vibe_pattern_picker.seq:49] SCREENSHOT signal_menu_vibration_short --mask-rect 70x25+0+203
+[signal_vibe_pattern_picker.seq:51] SLEEP 1
+[signal_vibe_pattern_picker.seq:52] SCREENSHOT signal_menu_vibration_short --mask-rect 70x25+0+203
 + pebble screenshot --emulator emery --vnc --no-open 03_signal_menu_vibration_short.png
-[signal_vibe_pattern_picker.seq:59] TAP select
+[signal_vibe_pattern_picker.seq:62] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_pattern_picker.seq:60] SLEEP 1
-[signal_vibe_pattern_picker.seq:61] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_pattern_picker.seq:62] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
 [signal_vibe_pattern_picker.seq:63] SLEEP 1
-[signal_vibe_pattern_picker.seq:64] SCREENSHOT vibe_picker_new_custom_highlighted
+[signal_vibe_pattern_picker.seq:64] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_pattern_picker.seq:65] SLEEP 1
+[signal_vibe_pattern_picker.seq:66] SCREENSHOT vibe_picker_new_custom_highlighted
 + pebble screenshot --emulator emery --vnc --no-open 04_vibe_picker_new_custom_highlighted.png
-[signal_vibe_pattern_picker.seq:65] TAP select
+[signal_vibe_pattern_picker.seq:67] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_pattern_picker.seq:66] SLEEP 1
-[signal_vibe_pattern_picker.seq:69] SLEEP 5
-[signal_vibe_pattern_picker.seq:70] SCREENSHOT pattern_keyboard_empty_new_vibration
+[signal_vibe_pattern_picker.seq:68] SLEEP 1
+[signal_vibe_pattern_picker.seq:71] SLEEP 5
+[signal_vibe_pattern_picker.seq:72] SCREENSHOT pattern_keyboard_empty_new_vibration
 + pebble screenshot --emulator emery --vnc --no-open 05_pattern_keyboard_empty_new_vibration.png
 sequence PASSED - log: run.log
