@@ -50,7 +50,7 @@ test('alarmsToString basic + cron, tune id validation, separators scrubbed', () 
   const s = L.alarmsToString([base, cron, badCron], [123]);
   const recs = s.split('\x1e');
   assert.strictEqual(recs.length, 2);
-  assert.strictEqual(recs[0], ['70000', 'A B', '1', '0', '7', '5', '62', '*', '10', '3', '1', '0', '123', '1', '1', '0', '0'].join('\x1f'));
+  assert.strictEqual(recs[0], ['70000', 'A B', '1', '0', '7', '5', '62', '*', '10', '3', '1', '0', '123', '1', '1', '0', '0', '0'].join('\x1f'));
   assert.strictEqual(recs[1].split('\x1f')[3], '1');
   assert.strictEqual(recs[1].split('\x1f')[7], '*/20 9-17 * * * *');
   assert.strictEqual(L.alarmsToString([base], []).split('\x1f')[12], '0');
@@ -73,7 +73,7 @@ test('tombstones: bare-id records, only for ids no longer present', () => {
 test('parseAlarms/parseTunes round-trip what the phone sends', () => {
   const base = { id: 3, name: 'W', enabled: false, isCron: false, hour: 6, minute: 30, repeatDays: 62, cron: '',
     snoozeMinutes: 5, snoozeMax: 0, vibration: false, sound: true, tuneId: 4, autoDismiss: 2, increasingVolume: true,
-    vibeId: 9, vibePreset: 2 };
+    vibeId: 9, vibePreset: 2, soundPreset: 5 };
   const cron = Object.assign({}, base, { id: 8, isCron: true, cron: '*/20 9-17' });
   const str = L.alarmsToString([base, cron], [4], [], [9]);
   const back = L.parseAlarms(str);
@@ -126,4 +126,18 @@ test('a pattern over 160 characters is dropped from a tunes push, 160 is kept', 
   const s = L.tunesToString([rec(70000, ok), rec(70001, base + ' ^C,,7/8')]);
   assert.strictEqual(s.split('\x1e').length, 1);
   assert.ok(s.startsWith('70000'));
+});
+
+test('the built-in tune index travels with the alarm and is clamped to the watch\'s presets', () => {
+  const base = { id: 70000, name: 'A', enabled: true, isCron: false, hour: 7, minute: 0, repeatDays: 0, cron: '',
+    snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true, tuneId: 0, autoDismiss: 0, increasingVolume: false,
+    vibeId: 0, vibePreset: 0, soundPreset: 4 };
+  const fields = (a) => L.alarmsToString([a], []).split('\x1f');
+  assert.strictEqual(fields(base).length, 18);
+  assert.strictEqual(fields(base)[17], '4');
+  assert.strictEqual(fields(Object.assign({}, base, { soundPreset: 99 }))[17], '6', 'clamped to the last built-in (7 of them)');
+  assert.strictEqual(fields(Object.assign({}, base, { soundPreset: -3 }))[17], '0');
+  assert.strictEqual(L.parseAlarms(fields(base).join('\x1f'))[0].soundPreset, 4);
+  // an older watch's 17-field record has no built-in tune field: defaults to 0
+  assert.strictEqual(L.parseAlarms(fields(base).slice(0, 17).join('\x1f'))[0].soundPreset, 0);
 });

@@ -13,7 +13,8 @@
    reads those as special replacement patterns and corrupts the page. The cron
    parsing/next-occurrence code duplicates list_config.ts (cronNext etc.), which
    is the unit-tested, authoritative copy and what gates Save. The Tune select
-   reads the Tunes list live from the sibling "TuneList" component, the Vibration
+   reads the Tunes list live from the sibling "TuneList" component (after the
+   watch's built-in tunes, config.soundPresets), the Vibration
    select likewise reads "VibeList", and the
    weekday order follows the "FirstDayOfWeek" setting. The watch's full cron help
    (config.help, from config_clay.ts) sits in a collapsible item under the
@@ -204,17 +205,35 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       return out;
     } catch (e) { return []; }
   }
-  function tuneOptions(sel: number): string {
-    const list = tunes();
-    let html = '<option value="0"' + (sel === 0 ? ' selected' : '') + '>Default tune</option>';
-    let found = sel === 0;
-    for (let i = 0; i < list.length; i++) {
-      const on = list[i].id === sel;
-      if (on) { found = true; }
-      html += '<option value="' + list[i].id + '"' + (on ? ' selected' : '') + '>' + esc(list[i].name) + '</option>';
+  // The watch's built-in tunes (names come from the item's config, see
+  // config_clay.ts), listed ahead of the user's own.
+  function builtinTunes(): string[] {
+    const cfg: any = self.config || {};
+    return Array.isArray(cfg.soundPresets) ? cfg.soundPresets : [];
+  }
+  // Option values: "p0".."pN" = built-in tune, "v<id>" = the user's own tune.
+  function tuneOptions(tuneId: number, preset: number): string {
+    const names = builtinTunes();
+    let html = '';
+    for (let i = 0; i < names.length; i++) {
+      html += '<option value="p' + i + '"' + (tuneId === 0 && preset === i ? ' selected' : '') + '>' + esc(names[i]) + '</option>';
     }
-    if (!found) { html += '<option value="' + sel + '" selected>(missing tune)</option>'; }
+    const list = tunes();
+    let found = tuneId === 0;
+    for (let i = 0; i < list.length; i++) {
+      const on = list[i].id === tuneId;
+      if (on) { found = true; }
+      html += '<option value="v' + list[i].id + '"' + (on ? ' selected' : '') + '>' + esc(list[i].name) + '</option>';
+    }
+    if (!found) { html += '<option value="v' + tuneId + '" selected>(missing tune)</option>'; }
     return html;
+  }
+  // Current selection of a tune <select>: { tuneId, soundPreset }.
+  function readTune(sel: HTMLSelectElement): any {
+    const v = sel.value || 'p0';
+    const last = num(sel.getAttribute('data-preset'), 0, 255, 0);
+    if (v.charAt(0) === 'v') { return { tuneId: num(v.slice(1), 0, 0x7fffffff, 0), soundPreset: last }; }
+    return { tuneId: 0, soundPreset: num(v.slice(1), 0, 255, 0) };
   }
 
   // ---- vibrations ----
@@ -323,7 +342,8 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
           '<div class="al-grid">' +
             '<span class="al-lbl">Vibration</span><div><select class="al-vibsel" data-preset="' + a.vibePreset + '">' +
               vibeOptions(a.vibeId, a.vibePreset) + '</select></div>' +
-            '<span class="al-lbl">Tune</span><div><select class="al-tune">' + tuneOptions(a.tuneId) + '</select></div>' +
+            '<span class="al-lbl">Tune</span><div><select class="al-tune" data-preset="' + a.soundPreset + '">' +
+              tuneOptions(a.tuneId, a.soundPreset) + '</select></div>' +
           '</div>' +
         '</div>' +
         // Snooze and dismiss: what happens after it rings
@@ -357,6 +377,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       vibration: e.vibration !== false,
       sound: e.sound !== false,
       tuneId: num(e.tuneId, 0, 0x7fffffff, 0),
+      soundPreset: num(e.soundPreset, 0, 255, 0),
       autoDismiss: num(e.autoDismiss, 0, 2, 0),
       increasingVolume: !!e.increasingVolume,
       vibeId: num(e.vibeId, 0, 0x7fffffff, 0),
@@ -381,6 +402,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
         if ((ds[d] as HTMLInputElement).checked) { days |= 1 << parseInt((ds[d] as HTMLElement).getAttribute('data-d') || '0', 10); }
       }
       const vib = readVibe(q(r, '.al-vibsel'));
+      const snd = readTune(q(r, '.al-tune'));
       out.push({
         id: parseInt(r.getAttribute('data-id') || '', 10) || genId(),
         name: q(r, '.al-name').value,
@@ -394,7 +416,8 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
         snoozeMax: num(q(r, '.al-sx').value, 0, 20, 3),
         vibration: q(r, '.al-vib').checked,
         sound: q(r, '.al-snd').checked,
-        tuneId: num(q(r, '.al-tune').value, 0, 0x7fffffff, 0),
+        tuneId: snd.tuneId,
+        soundPreset: snd.soundPreset,
         autoDismiss: num(q(r, '.al-ad').value, 0, 2, 0),
         increasingVolume: q(r, '.al-inc').checked,
         vibeId: vib.vibeId,
@@ -481,7 +504,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
     const sm = parseInt(q(r, '.al-sm').value, 10);
     q(r, '.al-sm-note').textContent = sm === 0 ? 'Off' : '';
     const sx = parseInt(q(r, '.al-sx').value, 10);
-    q(r, '.al-sx-note').textContent = sx === 0 ? 'unlimited' : '';
+    q(r, '.al-sx-note').textContent = sx === 0 ? 'Unlimited' : '';
   }
 
   function refreshAll(): void {
@@ -557,9 +580,9 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
   }, true);
   root.addEventListener('change', function(ev: Event) {
     const t = ev.target as HTMLElement;
-    if (t && t.classList && t.classList.contains('al-vibsel')) {
-      // Remember the last chosen preset so picking a library vibration and
-      // later a preset again still round-trips cleanly.
+    if (t && t.classList && (t.classList.contains('al-vibsel') || t.classList.contains('al-tune'))) {
+      // Remember the last built-in choice so picking one of the user's own and
+      // later a built-in again still round-trips cleanly.
       const sel = t as HTMLSelectElement;
       if (sel.value.charAt(0) === 'p') { sel.setAttribute('data-preset', sel.value.slice(1)); }
     }
@@ -571,8 +594,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
   root.addEventListener('mousedown', function(ev: Event) {
     const t = ev.target as HTMLElement;
     if (t && t.classList && t.classList.contains('al-tune')) {
-      const sel = t as HTMLSelectElement;
-      sel.innerHTML = tuneOptions(num(sel.value, 0, 0x7fffffff, 0));
+      refreshTuneSelect(t as HTMLSelectElement);
     }
     if (t && t.classList && t.classList.contains('al-vibsel')) {
       refreshVibeSelect(t as HTMLSelectElement);
@@ -586,12 +608,13 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
     const sels = root.querySelectorAll('.al-vibsel');
     for (let i = 0; i < sels.length; i++) { refreshVibeSelect(sels[i] as HTMLSelectElement); }
   }
+  function refreshTuneSelect(sel: HTMLSelectElement): void {
+    const cur = readTune(sel);
+    sel.innerHTML = tuneOptions(cur.tuneId, cur.soundPreset);
+  }
   function refreshAllTunes(): void {
     const sels = root.querySelectorAll('.al-tune');
-    for (let i = 0; i < sels.length; i++) {
-      const s = sels[i] as HTMLSelectElement;
-      s.innerHTML = tuneOptions(num(s.value, 0, 0x7fffffff, 0));
-    }
+    for (let i = 0; i < sels.length; i++) { refreshTuneSelect(sels[i] as HTMLSelectElement); }
   }
   // Settings this list depends on (weekday order, date order): re-render
   // rows in place when they change, keeping every card's values/open state.

@@ -192,7 +192,7 @@ library" below.
   defaults** — one `alarmDefaults` component (`config_alarm_defaults.ts`)
   laid out like an alarm card's signal/snooze block (chips for Vibration/
   Sound/Increasing, aligned Vibration-preset/"Snooze (min)"/"Max snoozes"
-  grid, "Off"/"unlimited" notes); its value is
+  grid, "Off"/"Unlimited" notes); its value is
   `{snoozeMinutes, snoozeMax, vibration, sound, increasing, vibePattern}` and
   `dict.ts`'s `flattenAlarmDefaults()` turns it into the watch's original flat
   keys (`DefaultSnoozeMinutes` — 0 means snooze off, which replaced the old
@@ -1420,9 +1420,12 @@ feature — see git history if curious):
   "<alarm name> vibe"; a preset-identical inline pattern is left alone; if the
   library is full the alarm keeps its inline copy, which still plays). Synced
   both ways like tunes: key `VibeConfig` (snapshot stage 1, before tunes and
-  alarms), and an alarm record carries two extra optional fields — field 15
-  `vibeId`, field 16 `vibePreset` (0-2) — so the page's per-alarm Vibration
-  select (Double/Short/Long + library vibrations) round-trips; a push only
+  alarms), and an alarm record carries three extra optional fields — field 15
+  `vibeId`, field 16 `vibePreset` (0-2), field 17 `soundPreset` (0-6, index into
+  `SOUND_PRESETS`) — so the page's per-alarm Vibration select (Double/Short/Long +
+  library vibrations) and Tune select (the watch's 7 built-in tunes + the user's
+  own; a pick of a built-in is stored as `sound_pattern_kind=0` +
+  `sound_preset`, only when it differs) round-trip; a push only
   rewrites the watch's stored vibration when it actually differs.
   **Rule: never bump `VIBE_STORE_SCHEMA` (or `TUNE_STORE_SCHEMA`) without a
   migration.** `store_load_vibes()`/`store_load_tunes()` wipe the whole library on
@@ -1815,7 +1818,7 @@ feature — see git history if curious):
   consumed via `tests/functional/app.conf` (this app's own UUID/platform/
   container settings) and `tests/functional/run_sequence.sh` (a thin shim
   pinning `--conf`). Scenarios are plain-text `.seq` files under
-  `sequences/walkthroughs/` (41 of them, covering the main list, the "+ New
+  `sequences/walkthroughs/` (42 of them, covering the main list, the "+ New
   alarm" wizard, every field editor, cron alarms, the Signal submenu/
   pattern pickers, the custom-tune library, ring/snooze/dismiss (incl. all
   3 `auto_dismiss_mode` values and multi-alarm chaining) and
@@ -1863,6 +1866,17 @@ feature — see git history if curious):
     later than the golden was captured at (`"12:00"` vs. `"12:01"`, a
     71-pixel mismatch confined to the last digit) — ordinary run-to-run
     timing variance, not a regression.
+  - **Keyboard screenshots wait 5 seconds first** (`SLEEP 5` before every
+    `SCREENSHOT` taken while a multitap keyboard is open, 21 of them in 10
+    sequences): the keyboard's text cursor blinks until the keyboard has been
+    idle ~5s, then stops *visible*, so a screenshot taken sooner lands on a random
+    blink phase (`keyboard_label_touch_entry`'s `after_g` flaked on exactly that,
+    a 3x22px bar). The goldens therefore all show the cursor.
+  - The Vibration picker/library flows are covered by
+    `signal_vibe_pattern_picker`, `signal_vibe_custom_pattern_entry` (cancel of the
+    "+ Custom" wizard, a legacy inline pattern, a library vibration's Signal row,
+    picker row and "Custom vibration" screen) and
+    `signal_vibe_delete_reverts_alarms` (delete -> both alarms revert to a preset).
   - **Typing on this device is TOUCH-only** — a real, live-verified finding
     worth knowing before writing or trusting any sequence that opens the
     multitap keyboard (label entry, cron field entry, vibe/sound pattern

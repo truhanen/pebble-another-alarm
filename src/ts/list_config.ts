@@ -9,7 +9,7 @@
 //   AlarmConfig: id US name US enabled US isCron US hour US minute US
 //                repeatDays US cron US snoozeMin US snoozeMax US vibration US
 //                sound US tuneId US autoDismiss US increasingVolume US
-//                vibeId US vibePreset      (the last two are optional on read)
+//                vibeId US vibePreset US soundPreset   (the last three are optional on read)
 //
 // The watch sends the SAME formats back (a full snapshot of everything it
 // has, after every change and at launch), so the page lists existing watch
@@ -18,6 +18,8 @@
 // Ids >= PHONE_ID_MIN are minted by the phone; the watch allocates its own
 // far below that, so the two can never collide (see main.c's
 // apply_alarm_config/apply_tune_config).
+
+import { BUILTIN_TUNES } from './pattern_help';
 
 export const RS = '\x1e';
 export const US = '\x1f';
@@ -49,7 +51,8 @@ export interface AlarmRec {
   snoozeMax: number;       // 0 = unlimited
   vibration: boolean;
   sound: boolean;
-  tuneId: number;          // 0 = built-in preset
+  tuneId: number;          // the user's own tune; 0 = a built-in tune (see soundPreset)
+  soundPreset: number;     // which built-in tune (index into the watch's SOUND_PRESETS); used when tuneId is 0
   autoDismiss: number;     // 0 off, 1 on, 2 on+hide
   increasingVolume: boolean;
   vibeId: number;          // library vibration, 0 = a preset
@@ -267,6 +270,7 @@ export function alarmsToString(list: AlarmRec[], validTuneIds: number[], removed
       b(a.increasingVolume),
       vibeId,
       clampInt(a.vibePreset, 0, 2, 0),
+      clampInt(a.soundPreset, 0, BUILTIN_TUNES.length - 1, 0),
     ].join(US));
   }
   const present = list.map((a) => a.id);
@@ -323,6 +327,7 @@ export function parseAlarms(str: string): AlarmRec[] {
       increasingVolume: f[14] === '1',
       vibeId: f.length > 15 ? toInt(f[15], 0) : 0,
       vibePreset: f.length > 16 ? toInt(f[16], 0) : 0,
+      soundPreset: f.length > 17 ? toInt(f[17], 0) : 0,
     });
   });
   return out;

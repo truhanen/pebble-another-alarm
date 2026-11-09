@@ -24,9 +24,11 @@ const config = [
       { type: 'heading', defaultValue: 'Alarms' },
       // Phone-edited list, pushed to the watch on Save (see list_config.ts).
       // Clay-only key: index.ts serializes it into the real `AlarmConfig` key.
-      // `help` is read by the component (this.config): the watch's full cron
-      // help, shown collapsible under each cron alarm's Basic/Cron selector.
-      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP },
+      // `help` and `soundPresets` are read by the component (this.config): the
+      // watch's full cron help (collapsible under each cron alarm's Basic/Cron
+      // selector) and the names of its built-in tunes (the Tune dropdown's first entries).
+      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP,
+        soundPresets: BUILTIN_TUNES.map((b) => b.name) },
     ],
   },
   {

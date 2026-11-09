@@ -5423,7 +5423,7 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
 #define PHONE_ID_MIN 0x10000u
 #define LIST_RS '\x1e'
 #define LIST_US '\x1f'
-#define ALARM_REC_FIELDS 17
+#define ALARM_REC_FIELDS 18
 #define ALARM_REC_MIN_FIELDS 15
 #define SNAPSHOT_DEBOUNCE_MS 1500
 #define SNAPSHOT_LAUNCH_DELAY_MS 3000
@@ -5551,7 +5551,7 @@ static char *build_alarm_snapshot(void) {
     // already carries -- send 0 so the page doesn't read it as weekdays.
     size_t before = used;
     if (!snap_advance(snprintf(buf + used, cap - used,
-        "%s%lu%c%s%c%d%c%d%c%d%c%d%c%d%c%s%c%d%c%d%c%d%c%d%c%lu%c%d%c%d%c%lu%c%d",
+        "%s%lu%c%s%c%d%c%d%c%d%c%d%c%d%c%s%c%d%c%d%c%d%c%d%c%lu%c%d%c%d%c%lu%c%d%c%d",
         used ? "\x1e" : "", (unsigned long)a->id, LIST_US, name, LIST_US,
         a->enabled ? 1 : 0, LIST_US, a->is_cron ? 1 : 0, LIST_US,
         a->is_cron ? 7 : a->hour, LIST_US, a->is_cron ? 0 : a->minute, LIST_US,
@@ -5559,7 +5559,8 @@ static char *build_alarm_snapshot(void) {
         (int)a->snooze_minutes, LIST_US, (int)a->snooze_max, LIST_US,
         a->vibration_enabled ? 1 : 0, LIST_US, a->sound_enabled ? 1 : 0, LIST_US,
         (unsigned long)tune_id, LIST_US, (int)a->auto_dismiss_mode, LIST_US,
-        a->increasing_volume ? 1 : 0, LIST_US, (unsigned long)vibe_id, LIST_US, vibe_preset), cap, &used)) {
+        a->increasing_volume ? 1 : 0, LIST_US, (unsigned long)vibe_id, LIST_US, vibe_preset,
+        LIST_US, (int)(a->sound_preset < SOUND_PRESET_COUNT ? a->sound_preset : 0)), cap, &used)) {
       buf[before] = '\0';
       break;
     }
@@ -5774,6 +5775,17 @@ static bool apply_alarm_record(Alarm *a, char **f, int nfields, bool is_new) {
   if (tune_id != 0 && find_tune_by_id(tune_id) >= 0) {
     a->sound_pattern_kind = 2;
     a->custom_tune_id = tune_id;
+  } else if (nfields >= 18) {
+    // The page chose one of the built-in tunes (field 17 = index into
+    // SOUND_PRESETS). Only touch the fields when it actually differs from
+    // what's stored, so an unchanged alarm stays byte-stable.
+    int preset = atoi(f[17]);
+    if (preset < 0 || preset >= SOUND_PRESET_COUNT) { preset = 0; }
+    if (a->sound_pattern_kind != 0 || a->sound_preset != (uint8_t)preset) {
+      a->sound_pattern_kind = 0;
+      a->sound_preset = (uint8_t)preset;
+      a->custom_tune_id = 0;
+    }
   } else if (a->sound_pattern_kind == 2) {
     // The page says "default tune" (or its tune is gone): back to a preset.
     // sound_preset itself is a watch-side choice and is left as it was.
@@ -5837,7 +5849,8 @@ static void apply_alarm_config(const char *text) {
     int n = 0;
     while (rec && n < ALARM_REC_FIELDS) { f[n++] = list_next(&rec, LIST_US); }
     // Fields 0-14 are the original record; 15-16 (vibration) were added with
-    // the vibration library and are optional so an older page still works.
+    // the vibration library and 17 (built-in tune) after that; both are optional
+    // so an older page still works.
     if (n == 0 || !f[0] || !*f[0]) { continue; }
     uint32_t id = (uint32_t)strtoul(f[0], NULL, 10);
     int idx = -1;

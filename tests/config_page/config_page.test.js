@@ -101,7 +101,7 @@ test('"New alarm defaults" uses the same chips/grid layout as an alarm card', as
   await page.fill('.ad-sm', '0');
   assert.strictEqual(await page.locator('.ad-sm-note').innerText(), 'Off');
   await page.fill('.ad-sx', '0');
-  assert.strictEqual(await page.locator('.ad-sx-note').innerText(), 'unlimited');
+  assert.strictEqual(await page.locator('.ad-sx-note').innerText(), 'Unlimited');
 });
 
 test('a new alarm added on the page respects "New alarm defaults"', async () => {
@@ -257,7 +257,7 @@ test('snooze fields explain their 0 values', async () => {
   await page.fill('.al-sm', '0');
   assert.strictEqual(await page.locator('.al-sm-note').innerText(), 'Off');
   await page.fill('.al-sx', '0');
-  assert.strictEqual(await page.locator('.al-sx-note').innerText(), 'unlimited');
+  assert.strictEqual(await page.locator('.al-sx-note').innerText(), 'Unlimited');
   await page.fill('.al-sx', '3');
   assert.strictEqual(await page.locator('.al-sx-note').innerText(), '');
 });
@@ -326,7 +326,7 @@ test('tune dropdown in an alarm follows the Tunes list', async () => {
   await page.click('.al-add');
   await page.locator('.al-tune').dispatchEvent('mousedown');
   const labels = await page.locator('.al-tune option').allInnerTexts();
-  assert.deepStrictEqual(labels, ['Default tune', 'Mine']);
+  assert.deepStrictEqual(labels, [...TUNE_BUILTIN_NAMES, 'Mine']);
 
   // An invalid pattern (or no name) must not be offered: Save would drop it.
   await heading(page, 'Tunes').click();
@@ -337,7 +337,7 @@ test('tune dropdown in an alarm follows the Tunes list', async () => {
   await page.locator('.tu-pat').nth(2).fill('C E');   // valid but unnamed
   await heading(page, 'Alarms').click();
   await page.locator('.al-tune').dispatchEvent('mousedown');
-  assert.deepStrictEqual(await page.locator('.al-tune option').allInnerTexts(), ['Default tune', 'Mine']);
+  assert.deepStrictEqual(await page.locator('.al-tune option').allInnerTexts(), [...TUNE_BUILTIN_NAMES, 'Mine']);
 
   // Fixing the pattern makes it appear (live, via the TuneList change event).
   await heading(page, 'Tunes').click();
@@ -345,7 +345,7 @@ test('tune dropdown in an alarm follows the Tunes list', async () => {
   await page.locator('.tu-pat').nth(1).dispatchEvent('change');
   await heading(page, 'Alarms').click();
   await page.locator('.al-tune').dispatchEvent('mousedown');
-  assert.deepStrictEqual(await page.locator('.al-tune option').allInnerTexts(), ['Default tune', 'Mine', 'Broken']);
+  assert.deepStrictEqual(await page.locator('.al-tune option').allInnerTexts(), [...TUNE_BUILTIN_NAMES, 'Mine', 'Broken']);
 });
 
 test('Save sends tunes then alarms, with validation, padding and tune ids', async () => {
@@ -524,7 +524,7 @@ test('a plain unchanged Save does not tombstone anything', async () => {
   await t.save();
   const alarms = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
   assert.strictEqual(alarms.length, 2);
-  assert.ok(alarms.every((r) => r.split(US).length === 17));
+  assert.ok(alarms.every((r) => r.split(US).length === 18));
 });
 
 // ---- ordering (same as the watch's main list) ----
@@ -1117,4 +1117,58 @@ test('DELETE is a real button to the right of the label field (which has no "Lab
   // it still deletes
   await del.click();
   assert.strictEqual(await page.locator('.al-card').count(), 0);
+});
+
+// ---- built-in tunes in an alarm's Tune dropdown ----
+
+test('an alarm\'s Tune dropdown offers the watch\'s built-in tunes, then the user\'s own', async () => {
+  const { page } = await open();
+  await heading(page, 'Tunes').click();
+  await page.click('.tu-add');
+  await page.locator('.tu-name').fill('Mine'); await page.locator('.tu-pat').fill('C E G');
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  const sel = page.locator('.al-card .al-tune');
+  const opts = await sel.evaluate((e) => Array.from(e.options).map((o) => [o.value, o.text]));
+  assert.deepStrictEqual(opts.map((o) => o[1]), [...TUNE_BUILTIN_NAMES, 'Mine']);
+  assert.deepStrictEqual(opts.slice(0, 7).map((o) => o[0]), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
+  assert.ok(opts[7][0].startsWith('v'), 'the user\'s own tune is a v<id> entry');
+  assert.strictEqual(await sel.inputValue(), 'p0', 'a new alarm starts on the first built-in tune');
+  assert.ok(!opts.some((o) => /default tune/i.test(o[1])), 'no vague "Default tune" entry any more');
+});
+
+test('picking a built-in tune is saved as its index; picking the user\'s own saves its id', async () => {
+  const t = await open();
+  const { page } = t;
+  await heading(page, 'Tunes').click();
+  await page.click('.tu-add');
+  await page.locator('.tu-name').fill('Mine'); await page.locator('.tu-pat').fill('C E G');
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  await page.locator('.al-card').nth(0).locator('.al-tune').selectOption({ label: 'Celebration' });   // built-in 4
+  await page.click('.al-add');
+  await page.locator('.al-card').nth(1).locator('.al-tune').dispatchEvent('mousedown');
+  await page.locator('.al-card').nth(1).locator('.al-tune').selectOption({ label: 'Mine' });
+  const sent = await t.save();
+  const tunes = sent.find((d) => 'TuneConfig' in d).TuneConfig.split(RS);
+  const tid = tunes[0].split(US)[0];
+  const alarms = sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS).map((r) => r.split(US));
+  assert.strictEqual(alarms[0][12], '0', 'built-in: no custom tune id');
+  assert.strictEqual(alarms[0][17], '4', 'built-in: Celebration is index 4');
+  assert.strictEqual(alarms[1][12], tid, 'own tune: its id');
+});
+
+test('a watch snapshot preselects the alarm\'s built-in tune; switching to your own tune and back remembers it', async () => {
+  const rec = (name, tuneId, preset) => ['1', name, '1', '0', '6', '30', '62', '*', '10', '3', '1', '1', String(tuneId), '0', '0', '0', '0', String(preset)].join(US);
+  const { page } = await open(undefined, (phone) => snapshotAll(phone, '', snapTunes, [rec('Bell', 0, 3), rec('Own', 3, 0)].join(RS)));
+  await heading(page, 'Alarms').click();
+  const shown = async (n) => page.locator('.al-tune').nth(n).evaluate((e) => e.options[e.selectedIndex].text);
+  assert.strictEqual(await shown(0), 'Analog bell');
+  assert.strictEqual(await shown(1), 'Watch tune');
+  // own tune -> built-in -> own again keeps working (open the card to reach its dropdown)
+  await page.locator('.al-sum').nth(0).click();
+  const first = page.locator('.al-tune').nth(0);
+  await first.selectOption({ label: 'Watch tune' });
+  await first.selectOption({ label: 'March' });
+  assert.strictEqual(await shown(0), 'March');
 });
