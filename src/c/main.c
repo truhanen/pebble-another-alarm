@@ -5086,6 +5086,262 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
 
 // ================================= AppMessage (phone settings) =================================
 
+// ---- phone-pushed Alarms / Tunes lists (AlarmConfig / TuneConfig) ----
+//
+// The phone config page edits two lists and pushes each as one CString (see
+// src/ts/list_config.ts for the wire format: records split by RS, fields by
+// US). Ids >= PHONE_ID_MIN are phone-owned: a push creates/updates/deletes
+// exactly those and never touches watch-created ones (the watch allocates
+// small ids, see next_alarm_id()/store_alloc_tune_id()), so an alarm made on
+// the watch survives any Save. Runtime state (snooze, last-fired, pending)
+// and watch-only signal settings (custom vibe pattern/preset) are preserved
+// on update.
+#define PHONE_ID_MIN 0x10000u
+#define LIST_RS '\x1e'
+#define LIST_US '\x1f'
+#define ALARM_REC_FIELDS 15
+
+// Splits `s` in place at `sep`, returning the next piece and advancing *s
+// (NULL once exhausted).
+static char *list_next(char **s, char sep) {
+  if (!*s) { return NULL; }
+  char *start = *s;
+  char *p = strchr(start, sep);
+  if (p) { *p = '\0'; *s = p + 1; } else { *s = NULL; }
+  return start;
+}
+
+static void copy_name(char *dst, const char *src) {
+  strncpy(dst, src, NAME_LEN);
+  dst[NAME_LEN] = '\0';
+}
+
+static void apply_tune_config(const char *text) {
+  size_t len = strlen(text);
+  char *buf = malloc(len + 1);
+  if (!buf) { return; }
+  memcpy(buf, text, len + 1);
+
+  // Drop every phone-owned tune (compacting in place), then re-add the
+  // phone's current list. Watch-created tunes stay put.
+  uint32_t dropped[MAX_CUSTOM_TUNES];
+  int ndropped = 0, w = 0;
+  for (int i = 0; i < s_tune_count; i++) {
+    if (s_tunes[i].id >= PHONE_ID_MIN) { dropped[ndropped++] = s_tunes[i].id; continue; }
+    if (w != i) { s_tunes[w] = s_tunes[i]; }
+    w++;
+  }
+  s_tune_count = w;
+
+  char *rest = buf;
+  while (rest && *rest) {
+    char *rec = list_next(&rest, LIST_RS);
+    char *id_s = list_next(&rec, LIST_US);
+    char *name = list_next(&rec, LIST_US);
+    char *pat = list_next(&rec, LIST_US);
+    if (!id_s || !name || !pat || !*name) { continue; }
+    uint32_t id = (uint32_t)strtoul(id_s, NULL, 10);
+    if (id < PHONE_ID_MIN) { continue; }
+    uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], plen;
+    if (!ac_sound_pattern_parse(pat, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &plen)) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "TuneConfig: invalid pattern for tune %lu", (unsigned long)id);
+      continue;
+    }
+    if (s_tune_count >= MAX_CUSTOM_TUNES) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "TuneConfig: library full, skipping tune %lu", (unsigned long)id);
+      continue;
+    }
+    CustomTune *t = &s_tunes[s_tune_count++];
+    memset(t, 0, sizeof(*t));
+    t->id = id;
+    copy_name(t->name, name);
+    t->pattern_len = plen;
+    memcpy(t->pattern, flags, plen);
+    memcpy(t->pattern_note, notes, plen);
+  }
+  free(buf);
+
+  // Alarms that referenced a tune that no longer exists fall back to the
+  // preset (same fallback as deleting a tune on the watch).
+  for (int i = 0; i < ndropped; i++) {
+    if (find_tune_by_id(dropped[i]) < 0) { revert_alarms_using_tune(dropped[i]); }
+  }
+  persist_tunes();
+}
+
+// Parses the six space-separated cron fields into `a`. Leaves `a` untouched
+// and returns false if any field is invalid.
+static bool set_alarm_cron(Alarm *a, const char *cron) {
+  char buf[6 * CRON_FIELD_LEN + 8];
+  strncpy(buf, cron, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  char *f[6];
+  char *p = buf;
+  for (int i = 0; i < 6; i++) {
+    while (*p == ' ') { p++; }
+    if (!*p) { return false; }
+    f[i] = p;
+    while (*p && *p != ' ') { p++; }
+    if (*p) { *p++ = '\0'; }
+    if (strlen(f[i]) >= CRON_FIELD_LEN) { return false; }
+  }
+  uint64_t mn, hr, dom, mon, dow, wk;
+  if (!ac_cron_parse_field(f[0], 0, 59, &mn) || !ac_cron_parse_field(f[1], 0, 23, &hr) ||
+      !ac_cron_parse_field(f[2], 1, 31, &dom) || !ac_cron_parse_field(f[3], 1, 12, &mon) ||
+      !ac_cron_parse_field(f[4], 0, 6, &dow) || !ac_cron_parse_field(f[5], 1, 53, &wk)) {
+    return false;
+  }
+  a->cron_min_mask = mn;
+  a->cron_hour_mask = (uint32_t)hr;
+  a->cron_dom_mask = (uint32_t)dom;
+  a->cron_month_mask = (uint16_t)mon;
+  a->repeat_days = (uint8_t)dow;
+  a->cron_week_mask = wk;
+  strncpy(a->cron_min, f[0], CRON_FIELD_LEN - 1); a->cron_min[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(a->cron_hour, f[1], CRON_FIELD_LEN - 1); a->cron_hour[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(a->cron_dom, f[2], CRON_FIELD_LEN - 1); a->cron_dom[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(a->cron_month, f[3], CRON_FIELD_LEN - 1); a->cron_month[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(a->cron_dow, f[4], CRON_FIELD_LEN - 1); a->cron_dow[CRON_FIELD_LEN - 1] = '\0';
+  strncpy(a->cron_week, f[5], CRON_FIELD_LEN - 1); a->cron_week[CRON_FIELD_LEN - 1] = '\0';
+  return true;
+}
+
+// Applies one AlarmConfig record (already split into its fields) to `a`.
+// Returns false (leaving `a` possibly partially defaulted only if it was
+// new -- the caller discards a new slot on false) if the record is invalid.
+static bool apply_alarm_record(Alarm *a, char **f, bool is_new) {
+  bool is_cron = f[3][0] == '1';
+  int hour = atoi(f[4]), minute = atoi(f[5]), days = atoi(f[6]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) { return false; }
+  bool enabled = f[2][0] == '1';
+
+  Alarm before = *a;   // single Alarm, not an array -- safe on the stack
+  if (is_cron) {
+    if (!set_alarm_cron(a, f[7])) { return false; }
+    a->is_cron = true;
+    a->repeats = false;
+  } else {
+    a->is_cron = false;
+    a->hour = (uint8_t)hour;
+    a->minute = (uint8_t)minute;
+    a->repeat_days = (uint8_t)(days & AC_DAY_ALL);
+    a->repeats = a->repeat_days != 0;
+  }
+  copy_name(a->name, f[1]);
+  a->enabled = enabled;
+  a->snooze_minutes = (uint16_t)atoi(f[8]);
+  a->snooze_max = (uint8_t)atoi(f[9]);
+  a->vibration_enabled = f[10][0] == '1';
+  a->sound_enabled = f[11][0] == '1';
+  uint32_t tune_id = (uint32_t)strtoul(f[12], NULL, 10);
+  if (tune_id != 0 && find_tune_by_id(tune_id) >= 0) {
+    a->sound_pattern_kind = 2;
+    a->custom_tune_id = tune_id;
+  } else if (a->sound_pattern_kind == 2) {
+    // The phone says "default tune" (or its tune is gone): back to a preset.
+    // sound_preset itself is a watch-side choice and is left as it was.
+    a->sound_pattern_kind = 0;
+    a->custom_tune_id = 0;
+  }
+  a->auto_dismiss_mode = (uint8_t)atoi(f[13]);
+  if (a->auto_dismiss_mode > 2) { a->auto_dismiss_mode = 0; }
+  a->increasing_volume = f[14][0] == '1';
+
+  // Re-derive the "already handled" markers only when the schedule (or
+  // enabled state) actually changed, so an unchanged alarm keeps its
+  // fired/snoozed state across a re-push.
+  bool sched_changed = is_new || before.is_cron != a->is_cron || before.hour != a->hour ||
+      before.minute != a->minute || before.repeat_days != a->repeat_days ||
+      before.repeats != a->repeats || (!before.enabled && a->enabled) ||
+      (a->is_cron && (strcmp(before.cron_min, a->cron_min) || strcmp(before.cron_hour, a->cron_hour) ||
+        strcmp(before.cron_dom, a->cron_dom) || strcmp(before.cron_month, a->cron_month) ||
+        strcmp(before.cron_week, a->cron_week)));
+  if (sched_changed) {
+    a->skip_next = false;
+    if (a->is_cron) {
+      a->cron_last_fired_min = -1;
+    } else if (a->enabled) {
+      resync_last_fired_for_schedule_change(a);
+    }
+  }
+  return true;
+}
+
+static void apply_alarm_config(const char *text) {
+  size_t len = strlen(text);
+  char *buf = malloc(len + 1);
+  if (!buf) { return; }
+  memcpy(buf, text, len + 1);
+
+  // Pass 1: which phone ids are present in this push?
+  uint32_t present[MAX_ALARMS];
+  int npresent = 0;
+  {
+    // Scan a second copy: list_next() splits in place, and pass 2 below
+    // needs the original records intact.
+    char *tmp = malloc(len + 1);
+    if (!tmp) { free(buf); return; }
+    memcpy(tmp, buf, len + 1);
+    char *scan = tmp;
+    while (scan && *scan && npresent < MAX_ALARMS) {
+      char *rec = list_next(&scan, LIST_RS);
+      char *id_s = list_next(&rec, LIST_US);
+      if (id_s) { present[npresent++] = (uint32_t)strtoul(id_s, NULL, 10); }
+    }
+    free(tmp);
+  }
+
+  // Drop phone-owned alarms the phone no longer lists (in-place compaction).
+  int w = 0;
+  for (int i = 0; i < s_count; i++) {
+    bool keep = true;
+    if (s_alarms[i].id >= PHONE_ID_MIN) {
+      keep = false;
+      for (int j = 0; j < npresent; j++) { if (present[j] == s_alarms[i].id) { keep = true; break; } }
+    }
+    if (!keep) { continue; }
+    if (w != i) { s_alarms[w] = s_alarms[i]; }
+    w++;
+  }
+  s_count = w;
+
+  // Pass 2: create/update.
+  char *rest = buf;
+  while (rest && *rest) {
+    char *rec = list_next(&rest, LIST_RS);
+    char *f[ALARM_REC_FIELDS];
+    int n = 0;
+    while (rec && n < ALARM_REC_FIELDS) { f[n++] = list_next(&rec, LIST_US); }
+    if (n < ALARM_REC_FIELDS) { continue; }
+    uint32_t id = (uint32_t)strtoul(f[0], NULL, 10);
+    if (id < PHONE_ID_MIN) { continue; }
+    int idx = -1;
+    for (int i = 0; i < s_count; i++) { if (s_alarms[i].id == id) { idx = i; break; } }
+    if (idx >= 0) {
+      if (!apply_alarm_record(&s_alarms[idx], f, false)) {
+        APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: invalid record for alarm %lu", (unsigned long)id);
+      }
+    } else if (s_count < MAX_ALARMS) {
+      Alarm *a = &s_alarms[s_count];
+      memset(a, 0, sizeof(*a));
+      a->id = id;
+      a->last_fired_day = -1;
+      a->cron_last_fired_min = -1;
+      a->vibe_pattern = (uint8_t)s_default_vibe_pattern;
+      a->sound_preset = (uint8_t)s_default_sound_preset;
+      if (apply_alarm_record(a, f, true)) {
+        s_count++;
+      } else {
+        APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: invalid record for new alarm %lu", (unsigned long)id);
+      }
+    } else {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: alarm list full, skipping %lu", (unsigned long)id);
+    }
+  }
+  free(buf);
+  rebuild_order();
+}
+
 #ifdef APP_TEST_HOOKS
 // Test-only channel: lets an automated harness (`pebble send-app-message`)
 // create/mutate an alarm's full state in one round trip, including state no
@@ -5323,6 +5579,17 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultVibrationEnabled))) { s_default_vibration_enabled = t->value->int32 != 0; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultIncreasingVolume))) { s_default_increasing_volume = t->value->int32 != 0; changed = true; }
   if (changed) { persist_all(); reload_ui(); }
+  // Tunes first, so an alarm record's tune id resolves against the new library.
+  bool lists_changed = false;
+  if ((t = dict_find(iter, MESSAGE_KEY_TuneConfig)) && t->type == TUPLE_CSTRING) {
+    apply_tune_config(t->value->cstring);
+    lists_changed = true;
+  }
+  if ((t = dict_find(iter, MESSAGE_KEY_AlarmConfig)) && t->type == TUPLE_CSTRING) {
+    apply_alarm_config(t->value->cstring);
+    lists_changed = true;
+  }
+  if (lists_changed) { persist_all(); rearm_wakeup(); reload_ui(); }
 #ifdef APP_TEST_HOOKS
   if (handle_test_message(iter)) { persist_all(); rearm_wakeup(); reload_ui(); }
 #endif

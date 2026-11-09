@@ -25,7 +25,7 @@ export interface ClaySettings {
 interface ClayConfigItem {
   type: string;
   messageKey?: string;
-  defaultValue?: string | number | boolean;
+  defaultValue?: string | number | boolean | unknown[];
   items?: ClayConfigItem[];
 }
 

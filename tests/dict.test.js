@@ -121,6 +121,8 @@ test('getDefaultClaySettings extracts every messageKey/defaultValue from config_
     FirstDayOfWeek: '1',
     DateFormat: '0',
     AudioVolume: 50,
+    AlarmList: [],
+    TuneList: [],
   });
 });
 

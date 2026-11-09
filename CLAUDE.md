@@ -219,16 +219,34 @@ library" below.
   in sync.
 - **`index.ts`** — entry point; wires `Pebble.addEventListener` for
   `showConfiguration`/`webviewclosed`, opens the Clay URL, and sends the
-  built dict on save. Alarms themselves are **never synced to/from the
-  phone** — only these global settings are. All alarm data (time, label,
-  repeat, snooze, per-alarm toggles) lives solely in the watch's persistent
-  storage, edited entirely through the watch UI.
+  built dict on save. The config page has three accordion sections
+  (`config_clay_custom.ts`, ported from pebble-aika-watchface; only one open
+  at a time, all closed on load; every top-level section must start with
+  exactly one `heading`, sub-labels are `text` items): **Configuration**
+  (the global settings above), **Alarms** (`alarmList` component,
+  `config_alarm_list.ts`: per-alarm Basic/Cron toggle, cron = ONE text field
+  of 6 space-separated fields, short patterns padded with `*`) and **Tunes**
+  (`tuneList`, `config_tune_list.ts`, ABC patterns). Both lists are
+  phone-edit, push-to-watch only (no watch→phone mirroring), serialized by
+  `list_config.ts` (RS/US-delimited CStrings, keys `AlarmConfig`/
+  `TuneConfig`; `list_config.ts` holds the authoritative, unit-tested cron/ABC
+  validators, the components carry self-contained copies because Clay
+  `toSource()`s them). They are pushed only after a Save (pending flag
+  `lists_pending` in localStorage, retried on `ready`) — NOT on every launch
+  like the plain settings, which would revert watch-side edits (e.g.
+  short-press enable/disable). Ids >= `PHONE_ID_MIN` (0x10000) are
+  phone-owned: `apply_alarm_config`/`apply_tune_config` (`main.c`) create/
+  update/delete exactly those and never touch watch-created ones (small
+  ids). Updates preserve runtime state (snooze, last-fired) and watch-only
+  signal settings; schedule/enable changes re-derive last-fired markers.
+  Known limitation: the phone list is not refreshed from the watch, so
+  saving after editing a phone-owned alarm on the watch overwrites that edit.
 
 AppMessage keys (`package.json`'s `pebble.messageKeys`, used as
 `MESSAGE_KEY_*` in C): `FirstDayOfWeek`, `AlarmVibePattern`,
 `DefaultSnoozeMinutes`, `DefaultSnoozeMax`, `AudioVolume`,
 `DefaultSoundEnabled`, `DefaultVibrationEnabled`, `DateFormat` — phone→watch
-only, all plain scalars, no array-type key. `DateFormat` was appended at the
+only, all plain scalars, no array-type key; plus `AlarmConfig`/`TuneConfig` (list CStrings, appended last: 10045/10046). `DateFormat` was appended at the
 very end of the declared list (after every `Test*` key) rather than next to
 `FirstDayOfWeek` despite being thematically related, per the "IDs are
 `10000 + declaration index`, never insert" rule below — it landed at 10034.
@@ -1597,6 +1615,19 @@ feature — see git history if curious):
   for the largest.
 
 ## Tests
+
+- **`tests/config_page/`** — Playwright (headless Chromium) tests of the
+  phone config page: `harness.js` loads the REAL bundled phone JS
+  (`build/pebble-js-app.js`) into a Node `vm` with a stubbed `Pebble`/
+  `localStorage`, fires `showConfiguration` to get the generated Clay page,
+  and feeds the page's Save response back into `webviewclosed` to inspect the
+  AppMessages sent. Run `pebble build && npm run test:config` (not part of
+  `npm test`; first use needs `npx playwright install chromium`). It already
+  caught a real bug: Clay injects component/custom-fn source via
+  `String.replace`, so a dollar sign followed by a quote or backtick anywhere
+  in those functions — even inside a comment or a `'$'` string — is a special
+  replacement pattern that silently corrupts the page. Keep such sequences
+  out of `config_*_list.ts`/`config_clay_custom.ts` (use regex literals).
 
 - `tests/test_alarm_calc.c` — plain `assert`-based C program, no framework,
   links `alarm_calc.c` directly (see build command above). Covers one-time/
