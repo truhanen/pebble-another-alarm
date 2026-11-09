@@ -1,0 +1,131 @@
+# Pure layout survey of the ring screen's title (main.c's trigger_alarm /
+# layout_alarm_title / alarm_title_font): how an alarm's label -- or, when it
+# has none, the time trigger_alarm() falls back to -- lays out across the
+# text shapes the auto-shrinking / word-wrap font ladder has to handle
+# differently:
+#   - a short single word (fits at the largest font, no wrap)
+#   - a short multi-word label (wraps across a few lines at a comfortable size)
+#   - one very long unbreakable word (can't wrap at a space at all: exercises
+#     the shrink-then-hyphenate path, as in pebble-another-timer's own survey)
+#   - a label at the 31-character limit (NAME_LEN) made of several words
+#   - no label, plain alarm: the title becomes its formatted time ("07:00"),
+#     which is the one title that must NEVER word-wrap (s_alarm_title_is_time)
+#   - no label, cron alarm whose hour/minute fields are patterns: the title is
+#     the earliest daily match with a trailing "+" ("09:00+", ml_format_cron_time)
+#   - the "+N more" sub-label (several alarms due at once), with both a short
+#     and a wrapping title, since it takes room away from the title band.
+#
+# Each of the first six cases is a SEPARATE single alarm, so the "+N more"
+# sub-label stays hidden and the title layout is the only thing that changes;
+# the last two cases add queued alarms on purpose.
+#
+# Reaches the ring screen the way every ring_*.seq does: set TestAlarmPending
+# on the seeded alarm, then KILL + INSTALL (a normal relaunch, not a wakeup --
+# see ring_trigger_and_stop.seq: pending state sent to an already-running app
+# does not open the ring screen by itself). Stop is a double-click on DOWN, sent
+# as a single `emu-button --repeat 2` invocation (see that file's note).
+#
+# The ring screen draws the CURRENT time bottom-left, so every screenshot masks
+# just that corner (--mask-rect 70x30+0+198, the ring screen's own geometry).
+#
+# Keys: TestAlarmIndex=10009, TestAlarmHour=10010, TestAlarmMinute=10011,
+# TestAlarmEnabled=10014, TestAlarmName=10020, TestAlarmPending=10023,
+# TestAlarmIsCron=10024, TestAlarmCronMinute=10025, TestAlarmCronHour=10026,
+# TestAlarmCronDow=10027, TestAlarmCronDom=10032, TestAlarmCronMonth=10033,
+# TestAlarmCronWeek=10035
+IMPORT ../common/wipe_and_prep.seq
+
+# --- Case 1: one short word ---
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Gym
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT label_one_short_word --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 2: three short words ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020="Take Out Trash"
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT label_three_short_words --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 3: one very long word ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Antidisestablishmentarianism
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT label_one_very_long_word --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 4: a label at the 31-character limit, several words ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020="Water the plants on the balcony"
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT label_max_length_31_chars --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 5: no label, plain alarm -> the title is its time ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT no_label_plain_alarm_time --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 6: no label, cron alarm with hour/minute patterns -> "09:00+" ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10014=1 10023=1 10024=1 --string 10025="*/20" 10026="9-17" 10027="*" 10032="*" 10033="*" 10035="*"
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT no_label_cron_time_with_plus --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 7: short label with "+2 more" (three alarms due at once) ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020=Gym
+SLEEP 1
+APPMSG --int 10009=1 10010=8 10011=0 10014=1 10023=1 --string 10020=Run
+SLEEP 1
+APPMSG --int 10009=2 10010=9 10011=0 10014=1 10023=1 --string 10020=Swim
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT short_label_with_2_more --mask-rect 70x30+0+198
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+CMD emu-button --repeat 2 --interval 150 click down
+SLEEP 1
+
+# --- Case 8: wrapping label with "+1 more" (the sub-label shrinks the title band) ---
+IMPORT ../common/clear_state.seq
+APPMSG --int 10009=0 10010=7 10011=0 10014=1 10023=1 --string 10020="Take Out Trash"
+SLEEP 1
+APPMSG --int 10009=1 10010=8 10011=0 10014=1 10023=1 --string 10020=Second
+SLEEP 1
+KILL
+INSTALL
+SLEEP 3
+SCREENSHOT wrapping_label_with_1_more --mask-rect 70x30+0+198

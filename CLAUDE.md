@@ -1804,10 +1804,14 @@ feature — see git history if curious):
   consumed via `tests/functional/app.conf` (this app's own UUID/platform/
   container settings) and `tests/functional/run_sequence.sh` (a thin shim
   pinning `--conf`). Scenarios are plain-text `.seq` files under
-  `sequences/walkthroughs/` (40 of them, covering the main list, the "+ New
+  `sequences/walkthroughs/` (41 of them, covering the main list, the "+ New
   alarm" wizard, every field editor, cron alarms, the Signal submenu/
   pattern pickers, the custom-tune library, ring/snooze/dismiss (incl. all
-  3 `auto_dismiss_mode` values and multi-alarm chaining)) — each one drives real button presses and
+  3 `auto_dismiss_mode` values and multi-alarm chaining) and
+  `ring_title_label_layouts.seq`, a pure layout survey of the ring screen's
+  title: short/multi-word/unbreakable-long/31-character labels, the no-label time
+  fallbacks (`07:00`, cron `09:00+`) and the "+N more" badge with a short and a
+  wrapping title -- modeled on pebble-another-timer's `alarm_title_label_layouts`) — each one drives real button presses and
   `APP_TEST_HOOKS` AppMessages against the real `pebble-tool` QEMU
   emulator and captures screenshots at meaningful checkpoints. Golden-file
   (approval-based) screenshot/log diffing against `tests/functional/golden/`
