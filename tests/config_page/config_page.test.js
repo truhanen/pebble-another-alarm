@@ -1014,3 +1014,72 @@ test('the on/off switch and the option chips keep their whole tap area (no relia
   });
   assert.strictEqual(hit, 'INPUT');
 });
+
+// ---- tune pattern: hard length limit + live counter ----
+
+test('the tune pattern field stops at 160 characters and shows a live counter', async () => {
+  const { page, errors } = await open();
+  await heading(page, 'Tunes').click();
+  await page.click('.tu-add');
+  const pat = page.locator('.tu-pat');
+  assert.strictEqual(await pat.getAttribute('maxlength'), '160', 'the same cap as the watch keyboard');
+  assert.strictEqual(await page.locator('.tu-count').innerText(), '0/160');
+
+  await pat.fill('C z E z G');
+  assert.strictEqual(await page.locator('.tu-count').innerText(), '9/160');
+  assert.ok(!(await page.locator('.tu-count').evaluate((e) => e.classList.contains('near'))));
+
+  // typing past the limit is not possible
+  await pat.fill('');
+  await pat.focus();
+  await page.keyboard.insertText('C '.repeat(100));
+  const typed = await pat.inputValue();
+  assert.strictEqual(typed.length, 160, 'input stops at 160 characters');
+  assert.strictEqual(await page.locator('.tu-count').innerText(), '160/160');
+  assert.ok(await page.locator('.tu-count').evaluate((e) => e.classList.contains('full')), 'counter marks the limit');
+
+  // close to the limit it warms up, without being full
+  await pat.fill('C '.repeat(70).trim());   // 139 characters
+  await pat.fill('C '.repeat(75).trim());   // 149 characters
+  assert.ok(await page.locator('.tu-count').evaluate((e) => e.classList.contains('near')), 'near the limit');
+  assert.ok(!(await page.locator('.tu-count').evaluate((e) => e.classList.contains('full'))));
+  assert.deepStrictEqual(errors, []);
+});
+
+test('a paste that does not fit says it was cut; the next edit clears the notice', async () => {
+  const { page } = await open();
+  await heading(page, 'Tunes').click();
+  await page.click('.tu-add');
+  const pat = page.locator('.tu-pat');
+  await pat.fill('C z E');
+  // a paste of 200 characters would not fit in the remaining space
+  await pat.evaluate((el) => {
+    const dt = new DataTransfer();
+    dt.setData('text', 'C '.repeat(100));
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    el.value = (el.value + 'C '.repeat(100)).slice(0, 160);   // what the browser then does with maxlength
+    el.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste', bubbles: true }));
+  });
+  assert.match(await page.locator('.tu-err').innerText(), /cut at 160 characters/);
+  assert.strictEqual(await page.locator('.tu-count').innerText(), '160/160');
+  // any later edit removes the notice
+  await pat.fill('C z E');
+  assert.ok(!(await page.locator('.tu-err').innerText()).includes('cut'), 'notice cleared');
+
+  // a paste that fits leaves no notice
+  await pat.evaluate((el) => {
+    const dt = new DataTransfer();
+    dt.setData('text', ' D F');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  assert.ok(!(await page.locator('.tu-err').innerText()).includes('cut'));
+});
+
+test('the counter reflects values loaded from the watch and survives a re-render', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, '', snapTunes));
+  await heading(page, 'Tunes').click();
+  const counts = await page.locator('.tu-count').allInnerTexts();
+  assert.deepStrictEqual(counts, ['5/160', '5/160']);   // "C z E" and "G A B" are 5 characters each
+  await page.click('.tu-add');                          // adding a row re-renders the others
+  assert.deepStrictEqual(await page.locator('.tu-count').allInnerTexts(), ['5/160', '5/160', '0/160']);
+});

@@ -303,6 +303,15 @@ library" below.
   - **Vibration patterns** section (`vibeList`, `config_vibe_list.ts`, between
     Tunes and Other): named custom vibration patterns, `VibeConfig` on the wire
     (same record shape/tombstones as tunes; sent before tunes and alarms).
+  - **Tune pattern length**: the page's pattern field is hard-limited to 160
+    characters (`maxlength`, the watch keyboard's `PATTERN_KEYBOARD_MAX_LEN`) with
+    a live "n/160" counter that warms up near the limit and marks the cap, and a
+    paste the browser had to cut says so. The same cap is enforced by
+    `validTunePattern`, by both component copies, and by the watch's push handler
+    (`apply_tune_config`); the snapshot builders (`main.c`) cap a message at
+    `SNAPSHOT_MAX_BYTES` (8000 of the 8200-byte AppMessage buffer) and stop at the
+    last complete record, and format tune patterns into a buffer big enough for the
+    worst-case 447-character pattern (the earlier 200-byte buffer truncated them).
   - **Built-ins and syntax help** (Tunes and Vibration patterns sections): the
     watch's built-in presets (`SOUND_PRESETS`/`VIBE_PRESETS`) are listed
     read-only above the user's own items, one line each — a plain-text label and

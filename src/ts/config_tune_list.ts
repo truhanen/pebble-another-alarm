@@ -11,6 +11,7 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   const self = this;
   const root: HTMLElement = self.$element[0];
   const MAX = 20;   // MAX_CUSTOM_TUNES
+  const PAT_MAX = 160;   // the watch keyboard's pattern cap (PATTERN_KEYBOARD_MAX_LEN)
 
   // Phone-owned ids are >= 0x10000; the watch allocates its own far below.
   function genId(): number {
@@ -45,15 +46,28 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
       '<input class="tu-name" type="text" maxlength="31" placeholder="Name" value="' + esc(name) + '">' +
       '<button type="button" class="tu-del" title="Remove">&#10005;</button>' +
       '</div>' +
-      '<input class="tu-pat" type="text" placeholder="Pattern, e.g. C z E z G" value="' + esc(pattern) + '">' +
-      '<div class="tu-err"></div>' +
+      '<input class="tu-pat" type="text" maxlength="160" placeholder="Pattern, e.g. C z E z G" value="' + esc(pattern) + '">' +
+      '<div class="tu-meta"><div class="tu-err"></div><div class="tu-count"></div></div>' +
       '</div>';
   }
 
   function refreshValidity(row: HTMLElement): void {
     const pat = (row.querySelector('.tu-pat') as HTMLInputElement).value;
     const err = row.querySelector('.tu-err') as HTMLElement;
-    err.textContent = (pat.trim() === '' || validPattern(pat)) ? '' : 'Invalid pattern: up to 32 notes and 160 characters (will not be saved)';
+    const count = row.querySelector('.tu-count') as HTMLElement;
+    const notes: string[] = [];
+    if (pat.trim() !== '' && !validPattern(pat)) {
+      notes.push('Invalid pattern: up to 32 notes and 160 characters (will not be saved).');
+    }
+    if (row.getAttribute('data-cut') === '1') {
+      // the browser silently cuts a paste at maxlength; say so
+      notes.push('The pasted text was cut at ' + PAT_MAX + ' characters.');
+    }
+    err.textContent = notes.join(' ');
+    // characters used / allowed, warming up near the limit
+    count.textContent = pat.length + '/' + PAT_MAX;
+    count.classList.toggle('near', pat.length >= PAT_MAX - 20 && pat.length < PAT_MAX);
+    count.classList.toggle('full', pat.length >= PAT_MAX);
   }
 
   function currentValue(): any[] {
@@ -119,8 +133,22 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   root.addEventListener('input', function(ev: Event) {
     const t = ev.target as HTMLElement;
     const row = t && t.closest ? (t.closest('.tu-row') as HTMLElement) : null;
-    if (row) { refreshValidity(row); }
+    if (!row) { return; }
+    // any edit other than the paste itself clears the "was cut" notice
+    if ((ev as any).inputType !== 'insertFromPaste') { row.removeAttribute('data-cut'); }
+    refreshValidity(row);
   });
+  // maxlength makes the browser drop whatever doesn't fit when text is pasted;
+  // work out in advance whether that is about to happen so it can be reported.
+  root.addEventListener('paste', function(ev: Event) {
+    const t = ev.target as HTMLInputElement;
+    if (!t || !t.classList || !t.classList.contains('tu-pat')) { return; }
+    const row = t.closest('.tu-row') as HTMLElement;
+    const cd = (ev as ClipboardEvent).clipboardData;
+    const text = cd && cd.getData ? cd.getData('text') : '';
+    const selected = (t.selectionEnd || 0) - (t.selectionStart || 0);
+    if (row && t.value.length - selected + text.length > PAT_MAX) { row.setAttribute('data-cut', '1'); }
+  }, true);
 
   root.addEventListener('click', function(ev: Event) {
     let target = ev.target as HTMLElement;
@@ -170,7 +198,11 @@ const tuneListComponent = {
     '.tu-name{flex:1 1 auto;min-width:0}' +
     '.tu-pat{width:100%;font-family:monospace}' +
     '.tu-line button{flex:0 0 auto;min-width:0;width:2.8rem;height:2.8rem;margin:0 0 0 6px;padding:0}' +
-    '.tu-err{color:#ff6b6b;font-size:0.8rem;min-height:0}' +
+    '.tu-meta{display:flex;justify-content:space-between;align-items:flex-start}' +
+    '.tu-err{flex:1 1 auto;color:#ff6b6b;font-size:0.8rem;min-height:0}' +
+    '.tu-count{flex:0 0 auto;margin-left:0.5rem;color:#aaa;font-size:0.75rem}' +
+    '.tu-count.near{color:#ffcc66}' +
+    '.tu-count.full{color:#ff8a65;font-weight:bold}' +
     '.tu-add{margin:8px 0 6px 0}' +
     // collapsible long syntax help
     '.tu-helpbox{margin:0 0 0.8rem 0;background:#444;border:1px solid #555;border-radius:0.5rem}' +
