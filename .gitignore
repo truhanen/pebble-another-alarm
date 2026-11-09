@@ -55,3 +55,6 @@ Temporary Items
 .apdisk
 
 .idea
+
+# Local, machine-specific MCP server config
+.mcp.json
