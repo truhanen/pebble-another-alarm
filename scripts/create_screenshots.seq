@@ -1,0 +1,152 @@
+# Generates reference screenshots of the app's key screens via
+# tests/functional_framework, replacing the old scripts/create_screenshots.sh's
+# own hand-rolled `pebble` CLI driving and its sed-based message_key()
+# key-ID lookup (see git history for that version) - this app has no touch
+# dial or on-screen-keyboard step to script around (unlike pebble-another-
+# timer's own create_screenshots.seq), since every screen captured here is
+# reachable purely through APP_TEST_HOOKS AppMessages plus ordinary button
+# navigation. Run via scripts/create_screenshots.sh, which invokes this
+# through run_sequence.sh and copies the resulting PNGs into screenshots/.
+#
+# Requires an APP_TEST_HOOKS=1 build (see CLAUDE.md's "Test hooks" section)
+# for every Test* AppMessage below - scripts/create_screenshots.conf already
+# sets BUILD_ENV=APP_TEST_HOOKS=1 for container builds, and container mode
+# builds automatically before running any instructions below (no explicit
+# BUILD step needed here). That conf is its own file, separate from
+# tests/functional/app.conf, specifically to avoid inheriting that one's
+# GOLDEN_DIR default (see its own header comment) - these are illustrative
+# README screenshots, not a regression baseline.
+#
+# Message-key IDs are hardcoded (CLAUDE.md's "Test hooks" table) - this DSL
+# has no symbolic-name resolution, same convention every sequence under
+# tests/functional/sequences/walkthroughs/ already uses.
+#
+# Numbering note: SCREENSHOT auto-numbers files in the order they're taken
+# across this whole run - the instructions below are deliberately ordered
+# to produce, in order: main_view, time_config, repeat_config, cron_config,
+# main_view_hint.
+IMPORT ../tests/functional/sequences/common/wipe_and_prep.seq
+
+# Three varied alarms, set up via test hooks rather than the "+ New alarm"
+# wizard - a weekday-repeating morning alarm with skip-next pending, a
+# disabled cron pomodoro alarm, and a plain one-time alarm. AC_DAY_MON|
+# TUE|WED|THU|FRI = (1<<1)|(1<<2)|(1<<3)|(1<<4)|(1<<5) = 62 (alarm_calc.h's
+# AC_DAY_* bits). Every bare "*"/"*/N" cron field below must be quoted -
+# the runner's own instruction dispatch does `eval "args=(...)"`
+# (lib/steps.sh), which glob-expands an unquoted "*" against the cwd's
+# filenames at run time.
+LOG "Alarm 0: 'Wakeup' (07:00, repeats Mon-Fri, skip-next)"
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=1 10013=62 10015=1 --string 10020=Wakeup
+SLEEP 1
+
+LOG "Alarm 1: 'Pomodoro' (cron: */25 9-17 * * 1-5 *, disabled)"
+APPMSG --int 10009=1 10024=1 10014=0 --string 10020=Pomodoro "10025=*/25" "10026=9-17" 10027=1-5 "10032=*" "10033=*" "10035=*"
+SLEEP 1
+
+LOG "Alarm 2: 'Movie' (20:00, one-time)"
+APPMSG --int 10009=2 10010=20 10011=0 10012=0 10013=0 --string 10020=Movie
+SLEEP 1
+
+# Main list starts with the MenuLayer's default selection on row 0
+# ("+ New alarm" - see common/wipe_and_prep.seq's own note on this) -
+# already exactly where this hero shot wants it, no navigation needed.
+LOG "Main view (3 alarms, '+ New alarm' focused, Pomodoro disabled)"
+SCREENSHOT main_view
+
+# Time + Repeat screenshots, via 'Wakeup' (non-cron)'s edit menu. Row
+# order (edit_build_rows, non-cron): Delete(0) Time(1) Label(2) State(3)
+# Repeat(4) Snooze(5) Signal(6) Auto-dismiss(7). Long-pressing row 0
+# ("+ New alarm") is a no-op (ml_select_long's own `if (row == 0) return`)
+# - move onto the 'Wakeup' row (sorted first, by raw clock time ascending)
+# first.
+LOG "Moving to the 'Wakeup' row"
+TAP down
+SLEEP 1
+
+LOG "Opening 'Wakeup' edit menu (long-press select)"
+LONGPRESS select
+SLEEP 1
+
+LOG "Moving to the Time row"
+TAP down
+SLEEP 1
+
+LOG "Time configuration screen"
+TAP select
+SLEEP 1
+SCREENSHOT time_config
+
+LOG "Returning to edit menu"
+TAP back
+SLEEP 1
+
+LOG "Moving to the Repeat row"
+TAP down
+TAP down
+TAP down
+SLEEP 1
+
+LOG "Repeat preset menu"
+TAP select
+SLEEP 1
+SCREENSHOT repeat_config
+
+LOG "Returning to edit menu"
+TAP back
+SLEEP 1
+
+LOG "Closing edit menu, back to main list"
+TAP back
+SLEEP 1
+
+# Cron screenshot, via 'Pomodoro' (is_cron)'s own edit menu. Row order for
+# a cron alarm collapses Time+Repeat into one Cron row: Delete(0) Cron(1)
+# Label(2) State(3) Snooze(4) Signal(5) Auto-dismiss(6).
+LOG "Moving to the 'Pomodoro' row"
+TAP down
+SLEEP 1
+
+LOG "Opening 'Pomodoro' edit menu (long-press select)"
+LONGPRESS select
+SLEEP 1
+
+LOG "Moving to the Cron row"
+TAP down
+SLEEP 1
+
+LOG "Cron configuration screen"
+TAP select
+SLEEP 1
+SCREENSHOT cron_config
+
+LOG "Returning to edit menu"
+TAP back
+SLEEP 1
+
+LOG "Closing edit menu, back to main list"
+TAP back
+SLEEP 1
+
+# One-alarm main view, to show the one-alarm hint overlay
+# (main_hint_update_proc draws "- Short-press to cycle state\n- Long-press
+# to edit" in the blank space below the list, but only when s_count == 1).
+# Resetting via TestClearAlarms+TestAlarmIndex=0 is simpler than a full
+# wipe+install cycle - it wipes the 3 existing alarms and appends a fresh
+# one, reconfigured identically to the 'Wakeup' alarm from the first main
+# view screenshot (07:00, repeats Mon-Fri), but left enabled (normal)
+# rather than skip-next.
+LOG "Resetting to a single 'Wakeup' alarm (07:00, repeats Mon-Fri, enabled) for the one-alarm hint view"
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 10012=1 10013=62 --string 10020=Wakeup
+SLEEP 1
+
+# reload_ui()'s own selection-clamp only pulls an out-of-range row DOWN to
+# the new last row (here, row 1, the sole remaining alarm) - it never
+# resets to row 0 outright. Selection was on 'Pomodoro' (row 2) before this
+# reset, which is now out of range, so it lands on row 1, not "+ New
+# alarm" - move up one to get the focus this screenshot wants.
+LOG "Moving to the '+ New alarm' row"
+TAP up
+SLEEP 1
+
+LOG "Main view (1 alarm, hint text shown, '+ New alarm' focused)"
+SCREENSHOT main_view_hint

@@ -43,8 +43,9 @@ can create or edit an alarm directly — including states that aren't
 reachable through the on-watch UI at all — instead of driving the "+ New
 alarm" wizard button-by-button. Never installed by a plain `pebble build`.
 See `CLAUDE.md`'s "Test hooks (APP_TEST_HOOKS)" section for the full message
-key reference, and `scripts/create_screenshots.sh` for a working example
-that drives this to capture this README's own screenshots.
+key reference, and `scripts/create_screenshots.sh`/`.seq` (driven through
+`tests/functional_framework`, see CLAUDE.md's "Tests" section) for a
+working example that drives this to capture this README's own screenshots.
 
 ## Target platforms
 
