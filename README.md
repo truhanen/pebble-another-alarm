@@ -16,9 +16,18 @@ for architecture details.
   (e.g. `'09:00'`) or the day's raw fields when they're plain numbers
 - Skip-next-occurrence and one-time-vs-repeating alarm states, cycled with
   a short main-list press
-- Per-alarm vibration pattern, increasing-volume ramp, and auto-dismiss
-- Phone-side Clay config page for global settings (first day of week, date
-  format, default vibe pattern, default snooze, alarm volume)
+- Per-alarm vibration pattern, tune, increasing-volume ramp, and auto-dismiss
+- Built-in vibrations (Double, Double long, Double short, Long, Short — with
+  PebbleOS timings) and tunes, plus your own named vibration patterns and
+  tunes written in a small ABC-style notation
+- Long-press a vibration or tune in the watch's picker to make it the default
+  for new alarms
+- Phone-side Clay config page, in collapsible sections: **New alarm defaults**
+  (snooze, vibration, tune, sound, increasing volume), **Alarms**, **Tunes**,
+  **Vibration patterns** and **Other** (first day of week, date format, alarm
+  volume). Alarms, tunes and vibration patterns can be edited on the phone
+  and are pushed to the watch on Save; what you create on the watch shows up
+  on the page too
 
 ## Building & running
 
@@ -75,7 +84,7 @@ gcc -I src/c tests/test_alarm_calc.c src/c/alarm_calc.c -o /tmp/t && /tmp/t
 
 ```
 src/c/alarm_calc.c/.h     Pure alarm scheduling logic (host-testable, no SDK)
-src/c/alarm_store.c/.h    Persistence (two persist keys per alarm + settings)
+src/c/alarm_store.c/.h    Persistence (alarms, tune/vibration libraries, settings)
 src/c/main.c              UI/controller: list, edit menu, ring screen, wizard
 src/c/multitap_keyboard/  Vendored Apache-2.0 keyboard widget (label entry)
 src/ts/                   Phone-side TypeScript (Clay config + AppMessage),
