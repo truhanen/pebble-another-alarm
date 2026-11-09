@@ -392,10 +392,10 @@ static void ml_row_colors(bool enabled, bool snoozing, bool skip_pending, bool s
 }
 
 static bool ml_is_boundary_row(int row) {
-  // Row 0 ("+ New alarm") gets a divider below it only when there's an
-  // alarm list beneath it to separate from; every alarm row gets one
-  // except the very last, which is now the true end of the list.
-  return (row == 0) ? (s_count > 0) : (row < s_count);
+  // Every row gets a divider below it, including the last one (and the lone
+  // "+ New alarm" row of an empty list), so the list visibly ends on a line.
+  (void)row;
+  return true;
 }
 
 // Leading play/stop/skip indicator for an alarm row's first line, ported
