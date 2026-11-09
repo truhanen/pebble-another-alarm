@@ -83,7 +83,24 @@
 // needed -- sizeof(CustomTune) is well under PERSIST_DATA_MAX_LENGTH).
 // Clear of PERSIST_KEY_ALARM_BASE(100-115)/PERSIST_KEY_ALARM_EXT_BASE(200-215).
 #define PERSIST_KEY_TUNE_BASE          300
-#define STORE_SCHEMA 20  // bumped: the custom sound/vibe pattern grammar itself was
+// Custom-vibration library: the vibration counterpart of the tune library
+// above (own schema counter, own persist keys, independent of STORE_SCHEMA).
+// Keys 23-25 are free (1-22 above are taken); vibe i -> key 500+i. NOT 400+i:
+// the vendored multitap keyboard keeps its settings (key wait time, auto-caps,
+// ...) in THIS app's persist namespace at MULTITAP_SETTINGS_BASE_KEY (400) ..
+// +11, and an earlier revision of this library used 400+i -- a vibration at
+// index 0 made the keyboard read its blob as the "key wait time" (150 ms), and
+// saving keyboard settings overwrote library entries. store_load_vibes() moves
+// anything still at the old keys (LEGACY_VIBE_BASE_KEY). alarm_store.c has
+// compile-time checks that none of these key ranges overlap.
+#define PERSIST_KEY_VIBE_SCHEMA        23
+#define PERSIST_KEY_VIBE_COUNT         24
+#define PERSIST_KEY_NEXT_VIBE_ID       25
+#define PERSIST_KEY_VIBE_BASE          500
+#define LEGACY_VIBE_BASE_KEY           400   // the colliding range, see above
+#define VIBE_STORE_SCHEMA 1
+#define STORE_SCHEMA 21  // 21: pure append of Alarm.custom_vibe_id (vibration library reference), no layout change before it.
+                          // 20 was: bumped: the custom sound/vibe pattern grammar itself was
                           // reworked into an ABC-notation subset (durations became
                           // ratios instead of an absolute digit, sharp/flat accidentals
                           // were added, breaks became a dedicated 'z' rest token) --
@@ -352,6 +369,11 @@ void store_save_tunes(const CustomTune *tunes, int count);
 // "none"), mirroring store_load_next_local_id/store_save_next_local_id's
 // shape for Alarm.id.
 uint32_t store_alloc_tune_id(void);
+
+// Custom-vibration library -- same shape as the tune library functions above.
+int store_load_vibes(CustomVibe *out);
+void store_save_vibes(const CustomVibe *vibes, int count);
+uint32_t store_alloc_vibe_id(void);
 
 // Wakeup id (-1 when none).
 int32_t store_load_wakeup_id(void);

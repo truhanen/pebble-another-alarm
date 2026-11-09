@@ -1,3 +1,5 @@
+import { BUILTIN_TUNES, BUILTIN_VIBES, TUNE_HELP, VIBE_HELP, CRON_HELP } from './pattern_help';
+
 const config = [
   {
     type: 'section',
@@ -7,26 +9,13 @@ const config = [
       // must be a non-heading item.
       { type: 'heading', defaultValue: 'New alarm defaults' },
       { type: 'text', defaultValue: 'Defaults for newly created alarms. Can be changed per alarm from the watch\'s alarm edit menu.'},
-      { type: 'toggle', messageKey: 'DefaultSnoozeEnabled', label: 'Snooze enabled',
-        defaultValue: true },
-      { type: 'input', messageKey: 'DefaultSnoozeMinutes', label: 'Snooze duration (minutes)',
-        attributes: { type: 'number', min: 1, max: 60 }, defaultValue: '10' },
-      // "Repeats", not "Max snoozes", to match the on-watch snooze editor's
-      // own field name for the exact same value.
-      { type: 'input', messageKey: 'DefaultSnoozeMax', label: 'Snooze repeats (0 = unlimited)',
-        attributes: { type: 'number', min: 0, max: 20 }, defaultValue: '3' },
-      { type: 'toggle', messageKey: 'DefaultSoundEnabled', label: 'Sound',
-        defaultValue: true },
-      { type: 'toggle', messageKey: 'DefaultIncreasingVolume', label: 'Increasing volume',
-        defaultValue: false },
-      { type: 'toggle', messageKey: 'DefaultVibrationEnabled', label: 'Vibration',
-        defaultValue: true },
-      { type: 'select', messageKey: 'AlarmVibePattern', label: 'Vibration pattern',
-        defaultValue: '0', options: [
-          { label: 'Double', value: '0' },
-          { label: 'Short', value: '1' },
-          { label: 'Long', value: '2' },
-        ] },
+      // One component (config_alarm_defaults.ts) laid out like an alarm card's
+      // signal/snooze block; index.ts/dict.ts flatten it into the watch's
+      // original DefaultSnooze*/DefaultSound*/... keys. "Repeats"/"Max
+      // snoozes" is the same value the on-watch snooze editor calls Repeats.
+      { type: 'alarmDefaults', messageKey: 'AlarmDefaults',
+        defaultValue: { snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true,
+                        increasing: false, vibePattern: 0 } },
     ],
   },
   {
@@ -35,14 +24,29 @@ const config = [
       { type: 'heading', defaultValue: 'Alarms' },
       // Phone-edited list, pushed to the watch on Save (see list_config.ts).
       // Clay-only key: index.ts serializes it into the real `AlarmConfig` key.
-      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [] },
+      // `help` is read by the component (this.config): the watch's full cron
+      // help, shown collapsible under each cron alarm's Basic/Cron selector.
+      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP },
     ],
   },
   {
     type: 'section',
     items: [
       { type: 'heading', defaultValue: 'Tunes' },
-      { type: 'tuneList', messageKey: 'TuneList', defaultValue: [] },
+      // `builtins`/`help` are read by the component (this.config): the watch's
+      // built-in tunes, shown read-only, and the long pattern-syntax help.
+      { type: 'tuneList', messageKey: 'TuneList', defaultValue: [],
+        builtins: BUILTIN_TUNES, help: TUNE_HELP },
+    ],
+  },
+  {
+    type: 'section',
+    items: [
+      { type: 'heading', defaultValue: 'Vibration patterns' },
+      // Named custom vibration patterns (the library alarms pick from);
+      // Clay-only key serialized into the real `VibeConfig` key by index.ts.
+      { type: 'vibeList', messageKey: 'VibeList', defaultValue: [],
+        builtins: BUILTIN_VIBES, help: VIBE_HELP },
     ],
   },
   {

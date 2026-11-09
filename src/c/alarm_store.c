@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <pebble.h>
 #include "alarm_store.h"
+#include "multitap_keyboard/multitap_keyboard/keyboard_settings.h"   // MULTITAP_SETTINGS_BASE_KEY, for the key-range checks below
 #include <string.h>
 
 // Historical byte-size of `Alarm`'s MAIN blob at each schema version this
@@ -370,6 +371,87 @@ void store_save_tunes(const CustomTune *tunes, int count) {
   for (int i = count; i < MAX_CUSTOM_TUNES; i++) {
     if (persist_exists(PERSIST_KEY_TUNE_BASE + i)) { persist_delete(PERSIST_KEY_TUNE_BASE + i); }
   }
+}
+
+_Static_assert(sizeof(CustomVibe) <= PERSIST_DATA_MAX_LENGTH,
+               "CustomVibe's persisted blob exceeds persist_write_data's per-key cap");
+
+// The persist key ranges this app uses must never overlap (a collision
+// silently corrupts both owners -- see PERSIST_KEY_VIBE_BASE's comment). The
+// keyboard's block is MULTITAP_SETTINGS_BASE_KEY .. +11.
+_Static_assert(PERSIST_KEY_ALARM_BASE + MAX_ALARMS <= PERSIST_KEY_ALARM_EXT_BASE, "alarm keys overlap alarm-extension keys");
+_Static_assert(PERSIST_KEY_ALARM_EXT_BASE + MAX_ALARMS <= PERSIST_KEY_TUNE_BASE, "alarm-extension keys overlap tune keys");
+_Static_assert(PERSIST_KEY_TUNE_BASE + MAX_CUSTOM_TUNES <= MULTITAP_SETTINGS_BASE_KEY, "tune keys overlap the keyboard's settings keys");
+_Static_assert(PERSIST_KEY_VIBE_BASE >= MULTITAP_SETTINGS_BASE_KEY + 12, "vibration keys overlap the keyboard's settings keys");
+_Static_assert(MULTITAP_SETTINGS_BASE_KEY + 12 <= PERSIST_KEY_VIBE_BASE, "keyboard settings keys overlap vibration keys");
+
+// One-time repair for the colliding range (see PERSIST_KEY_VIBE_BASE's
+// comment): any library entry still stored at LEGACY_VIBE_BASE_KEY + i is
+// recognised by its exact blob size (the keyboard's own values there are 1- or
+// 4-byte ints/bools), copied to its real key, and removed from the old one, so
+// the keyboard stops reading it as a setting. An entry the keyboard already
+// overwrote is simply gone; main.c's migrate_inline_vibes() recreates it from
+// the copy the alarm still holds.
+static void move_legacy_vibe_keys(void) {
+  for (int i = 0; i < MAX_CUSTOM_VIBES; i++) {
+    uint32_t old_key = LEGACY_VIBE_BASE_KEY + i;
+    if (!persist_exists(old_key) || persist_get_size(old_key) != (int)sizeof(CustomVibe)) { continue; }
+    CustomVibe v;
+    memset(&v, 0, sizeof(v));
+    persist_read_data(old_key, &v, sizeof(v));
+    if (!persist_exists(PERSIST_KEY_VIBE_BASE + i)) {
+      persist_write_data(PERSIST_KEY_VIBE_BASE + i, &v, sizeof(v));
+    }
+    persist_delete(old_key);
+  }
+}
+
+// Brand-new table (VIBE_STORE_SCHEMA 1), same wipe-on-any-mismatch policy as
+// the tune library.
+int store_load_vibes(CustomVibe *out) {
+  move_legacy_vibe_keys();
+  if (!persist_exists(PERSIST_KEY_VIBE_SCHEMA)) { return 0; }
+  if (persist_read_int(PERSIST_KEY_VIBE_SCHEMA) != VIBE_STORE_SCHEMA) { return 0; }
+  int count = persist_exists(PERSIST_KEY_VIBE_COUNT) ? persist_read_int(PERSIST_KEY_VIBE_COUNT) : 0;
+  if (count > MAX_CUSTOM_VIBES) { count = MAX_CUSTOM_VIBES; }
+  if (count < 0) { count = 0; }
+  // Keep only intact entries, compacted. A slot can be missing, zeroed or hold
+  // something else entirely (the old key-collision with the keyboard's settings,
+  // see PERSIST_KEY_VIBE_BASE's comment), and listing those as blank "vibrations"
+  // is what a user saw as corrupted patterns. If anything was dropped, rewrite
+  // the compacted table right away so the bad slots are gone for good.
+  int kept = 0;
+  for (int i = 0; i < count; i++) {
+    CustomVibe v;
+    memset(&v, 0, sizeof(v));
+    if (persist_exists(PERSIST_KEY_VIBE_BASE + i)) {
+      persist_read_data(PERSIST_KEY_VIBE_BASE + i, &v, sizeof(v));
+    }
+    if (!ac_custom_vibe_is_valid(&v)) { continue; }
+    bool duplicate = false;
+    for (int j = 0; j < kept; j++) { if (out[j].id == v.id) { duplicate = true; break; } }
+    if (!duplicate) { out[kept++] = v; }
+  }
+  if (kept != count) { store_save_vibes(out, kept); }
+  return kept;
+}
+
+void store_save_vibes(const CustomVibe *vibes, int count) {
+  if (count > MAX_CUSTOM_VIBES) { count = MAX_CUSTOM_VIBES; }
+  persist_write_int(PERSIST_KEY_VIBE_SCHEMA, VIBE_STORE_SCHEMA);
+  persist_write_int(PERSIST_KEY_VIBE_COUNT, count);
+  for (int i = 0; i < count; i++) {
+    persist_write_data(PERSIST_KEY_VIBE_BASE + i, &vibes[i], sizeof(CustomVibe));
+  }
+  for (int i = count; i < MAX_CUSTOM_VIBES; i++) {
+    if (persist_exists(PERSIST_KEY_VIBE_BASE + i)) { persist_delete(PERSIST_KEY_VIBE_BASE + i); }
+  }
+}
+
+uint32_t store_alloc_vibe_id(void) {
+  uint32_t next = persist_exists(PERSIST_KEY_NEXT_VIBE_ID) ? (uint32_t)persist_read_int(PERSIST_KEY_NEXT_VIBE_ID) : 1;
+  persist_write_int(PERSIST_KEY_NEXT_VIBE_ID, (int)(next + 1));
+  return next;
 }
 
 uint32_t store_alloc_tune_id(void) {

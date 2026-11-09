@@ -23,7 +23,7 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   }
 
   function validPattern(text: string): boolean {
-    const toks = ('' + text).trim().split(/\s+/);
+    const toks = ('' + text).replace(/^ +| +$/g, '').split(/ +/);   // the watch splits on spaces only
     if (toks.length === 0 || toks[0] === '' || toks.length > 32) { return false; }
     // Regex LITERALS on purpose. Clay injects this source with
     // String.replace(), so a dollar sign followed by a quote anywhere in this
@@ -91,6 +91,29 @@ function tuneListInitialize(this: any, _minified: any, _clayConfig: any): void {
   self._tuCurrentValue = currentValue;
   self._tuRebuild = rebuild;
 
+  // ---- read-only built-ins + collapsible long help (from the item's config) ----
+  const cfg: any = self.config || {};
+  const builtins: any[] = Array.isArray(cfg.builtins) ? cfg.builtins : [];
+  let biHtml = '';
+  for (let i = 0; i < builtins.length; i++) {
+    biHtml += '<div class="tu-bi"><span class="tu-biname">' + esc(builtins[i].name) + '</span>' +
+      '<input class="tu-bipat" type="text" readonly value="' + esc(builtins[i].pattern) + '"></div>';
+  }
+  (root.querySelector('.tu-builtins') as HTMLElement).innerHTML = biHtml;
+  const helpParas = ('' + (cfg.help || '')).split(/\n\n+/);
+  let helpHtml = '';
+  for (let i = 0; i < helpParas.length; i++) {
+    if (helpParas[i].replace(/^ +| +$/g, '') !== '') { helpHtml += '<p>' + esc(helpParas[i]) + '</p>'; }
+  }
+  (root.querySelector('.tu-helptext') as HTMLElement).innerHTML = helpHtml;
+  // Tapping a read-only value selects all of it, so it can be copied natively.
+  root.addEventListener('focusin', function(ev: Event) {
+    const t = ev.target as HTMLInputElement;
+    if (t && t.classList && t.hasAttribute && t.hasAttribute('readonly')) {
+      t.select();
+      try { t.setSelectionRange(0, 9999); } catch (e) { /* ignore */ }
+    }
+  });
   root.addEventListener('input', function(ev: Event) {
     const t = ev.target as HTMLElement;
     const row = t && t.closest ? (t.closest('.tu-row') as HTMLElement) : null;
@@ -127,12 +150,17 @@ const tuneListComponent = {
   name: 'tuneList',
   template:
     '<div class="tu-rootc">' +
+    '<details class="tu-helpbox"><summary>Syntax help</summary><div class="tu-helptext"></div></details>' +
+    '<div class="tu-sub">Built-in tunes (read-only)</div>' +
+    '<div class="tu-builtins"></div>' +
+    '<div class="tu-sub">Your tunes</div>' +
     '<div class="tu-list"></div>' +
     '<button type="button" class="tu-add">+ Add tune</button>' +
-    '<div class="tu-help">Notes C D E F G A B, optional ^ (sharp) / _ (flat) before, \' or , after for octave, ' +
-    'then a length like 2 or 1/2 (default 1 = 100 ms). z = rest. Example: C z E2 G/2</div>' +
     '</div>',
   style:
+    // Same inset as Clay's own components (12px at the sides and below the heading),
+    // so nothing touches the section outline.
+    '.tu-rootc{padding:0.75rem 0.75rem 0.5rem 0.75rem;box-sizing:border-box}' +
     '.tu-row{margin:0 0 12px 0}' +
     '.tu-line{display:flex;align-items:center;margin:0 0 6px 0}' +
     '.tu-name,.tu-pat{box-sizing:border-box;height:2.8rem;margin:0;background-color:#767676;color:#fff;' +
@@ -142,7 +170,20 @@ const tuneListComponent = {
     '.tu-line button{flex:0 0 auto;min-width:0;width:2.8rem;height:2.8rem;margin:0 0 0 6px;padding:0}' +
     '.tu-err{color:#ff6b6b;font-size:0.8rem;min-height:0}' +
     '.tu-add{margin:8px 0 6px 0}' +
-    '.tu-help{font-size:0.8rem;color:#bbb;margin:4px 0 8px 0}',
+    // collapsible long syntax help
+    '.tu-helpbox{margin:0 0 0.8rem 0;background:#444;border:1px solid #555;border-radius:0.5rem}' +
+    '.tu-helpbox summary{cursor:pointer;padding:0.6rem 0.8rem;color:#ddd;font-size:0.95rem}' +
+    '.tu-helptext{padding:0 0.8rem 0.6rem 0.8rem;color:#ccc;font-size:0.85rem;line-height:1.4}' +
+    '.tu-helptext p{margin:0 0 0.6rem 0;white-space:pre-wrap}' +
+    '.tu-helptext code{font-family:monospace;color:#fff}' +
+    '.tu-sub{color:#bbb;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.04em;margin:0.8rem 0 0.4rem 0}' +
+    // built-in (read-only) rows: same shape as editable ones, dimmer, and
+    // selectable so the value can be copied
+    // one line each: plain-text label + read-only, selectable value field
+    '.tu-bi{display:flex;align-items:center;margin:0 0 6px 0}' +
+    '.tu-biname{flex:0 0 6.6rem;min-width:0;color:#ddd;font-size:0.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:0.5rem}' +
+    '.tu-bipat{flex:1 1 auto;min-width:0;box-sizing:border-box;height:2.3rem;margin:0;background-color:#555;color:#ddd;border:none;' +
+      'border-radius:0.3rem;padding:0 0.5rem;color-scheme:dark;font-family:monospace;-webkit-user-select:all;user-select:all}',
   manipulator: {
     get: function(this: any): any[] {
       return this._tuCurrentValue ? this._tuCurrentValue() : [];

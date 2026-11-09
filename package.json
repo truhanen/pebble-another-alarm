@@ -70,7 +70,13 @@
       "TestTuneCustomPattern",
       "TestAlarmTuneId",
       "AlarmConfig",
-      "TuneConfig"
+      "TuneConfig",
+      "VibeConfig",
+      "TestClearVibes",
+      "TestVibeIndex",
+      "TestVibeName",
+      "TestVibePattern",
+      "TestAlarmVibeId"
     ],
     "resources": {
       "media": [

@@ -653,3 +653,15 @@ void ac_format_cron_summary(char *buf, size_t n, const char *min_str, const char
            dom_str ? dom_str : "*", month_str ? month_str : "*", dow_str ? dow_str : "*",
            week_str ? week_str : "*");
 }
+
+bool ac_custom_vibe_is_valid(const CustomVibe *v) {
+  if (v->id == 0) { return false; }
+  if (v->pattern_len == 0 || v->pattern_len > AC_VIBE_PATTERN_MAX_SEGMENTS) { return false; }
+  size_t n = 0;
+  while (n < sizeof(v->name) && v->name[n] != '\0') { n++; }
+  if (n == 0 || n == sizeof(v->name)) { return false; }
+  for (int i = 0; i < v->pattern_len; i++) {
+    if (v->pattern[i] & 0x40) { return false; }
+  }
+  return true;
+}

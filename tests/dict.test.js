@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildDict, getDefaultClaySettings } = require('../src/pkjs/dict');
+const { buildDict, getDefaultClaySettings, migrateSavedSettings, flattenAlarmDefaults } = require('../src/pkjs/dict');
 const clayConfig = require('../src/pkjs/config_clay').default;
 
 test('buildDict parses Clay string values to ints', () => {
@@ -111,37 +111,46 @@ test('buildDict sends DefaultIncreasingVolume as an independent boolean', () => 
 test('getDefaultClaySettings extracts every messageKey/defaultValue from config_clay.ts', () => {
   const defaults = getDefaultClaySettings(clayConfig);
   assert.deepStrictEqual(defaults, {
-    DefaultSnoozeEnabled: true,
-    DefaultSnoozeMinutes: '10',
-    DefaultSnoozeMax: '3',
-    DefaultSoundEnabled: true,
-    DefaultIncreasingVolume: false,
-    DefaultVibrationEnabled: true,
-    AlarmVibePattern: '0',
+    AlarmDefaults: { snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true, increasing: false, vibePattern: 0 },
     FirstDayOfWeek: '1',
     DateFormat: '0',
     AudioVolume: 50,
     AlarmList: [],
     TuneList: [],
+    VibeList: [],
   });
 });
 
-test('getDefaultClaySettings output feeds buildDict a fully audible, in-sync first-run config', () => {
-  const dict = buildDict(getDefaultClaySettings(clayConfig));
-  assert.strictEqual(dict.AudioVolume, 50);
-  assert.strictEqual(dict.DefaultSoundEnabled, 1);
+test('flattenAlarmDefaults produces the flat keys the watch protocol uses', () => {
+  const flat = flattenAlarmDefaults({ AlarmDefaults: { snoozeMinutes: 7, snoozeMax: 0, vibration: false, sound: true, increasing: true, vibePattern: 2 } });
+  assert.strictEqual(flat.DefaultSnoozeMinutes, '7');
+  assert.strictEqual(flat.DefaultSnoozeMax, '0');
+  assert.strictEqual(flat.DefaultVibrationEnabled, false);
+  assert.strictEqual(flat.DefaultSoundEnabled, true);
+  assert.strictEqual(flat.DefaultIncreasingVolume, true);
+  assert.strictEqual(flat.AlarmVibePattern, '2');
+  assert.deepStrictEqual(buildDict(flat), {
+    FirstDayOfWeek: 1, DateFormat: 0, AlarmVibePattern: 2, DefaultSnoozeMinutes: 7, DefaultSnoozeMax: 0,
+    DefaultSoundEnabled: 1, DefaultVibrationEnabled: 0, DefaultIncreasingVolume: 1, AudioVolume: 0,
+  });
+  // snooze 0 = off: flat key says disabled, and buildDict sends minutes 0
+  assert.strictEqual(flattenAlarmDefaults({ AlarmDefaults: { snoozeMinutes: 0 } }).DefaultSnoozeEnabled, false);
+  // no AlarmDefaults: input passes through untouched
+  assert.deepStrictEqual(flattenAlarmDefaults({ FirstDayOfWeek: '0' }), { FirstDayOfWeek: '0' });
 });
 
-test('buildDict parses DateFormat', () => {
-  assert.deepStrictEqual(buildDict({ DateFormat: '1' }), {
-    FirstDayOfWeek: 1,
-    DateFormat: 1,
-    AlarmVibePattern: 0,
-    DefaultSnoozeMinutes: 9,
-    DefaultSnoozeMax: 3,
-    DefaultSoundEnabled: 1,
-    DefaultVibrationEnabled: 1,
-    DefaultIncreasingVolume: 0,
-    AudioVolume: 0,
-  });
+test('migrateSavedSettings seeds AlarmDefaults from legacy flat keys, once', () => {
+  const legacy = { DefaultSnoozeEnabled: true, DefaultSnoozeMinutes: '15', DefaultSnoozeMax: '5',
+    DefaultSoundEnabled: false, DefaultVibrationEnabled: true, DefaultIncreasingVolume: true, AlarmVibePattern: '1', FirstDayOfWeek: '0' };
+  const m = migrateSavedSettings(legacy);
+  assert.deepStrictEqual(m.AlarmDefaults, { snoozeMinutes: 15, snoozeMax: 5, vibration: true, sound: false, increasing: true, vibePattern: 1 });
+  assert.strictEqual(m.FirstDayOfWeek, '0', 'other settings kept');
+  // snooze disabled in the old toggle becomes minutes 0
+  assert.strictEqual(migrateSavedSettings({ DefaultSnoozeEnabled: false, DefaultSnoozeMinutes: '10' }).AlarmDefaults.snoozeMinutes, 0);
+  // wrapped values (Clay's { value }) are understood
+  assert.strictEqual(migrateSavedSettings({ DefaultSnoozeMinutes: { value: '12' } }).AlarmDefaults.snoozeMinutes, 12);
+  // already migrated, or nothing legacy: untouched
+  const done = { AlarmDefaults: { snoozeMinutes: 3 }, DefaultSnoozeMinutes: '99' };
+  assert.deepStrictEqual(migrateSavedSettings(done), done);
+  assert.strictEqual(migrateSavedSettings({ FirstDayOfWeek: '1' }).AlarmDefaults, undefined);
 });

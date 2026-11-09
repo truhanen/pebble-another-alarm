@@ -43,14 +43,14 @@ const visible = (page, sel) => page.locator(sel).first().isVisible();
 
 test('accordion: all sections closed on load, one open at a time', async () => {
   const { page, errors } = await open();
-  // Order matters: defaults first, Other last.
-  const names = ['New alarm defaults', 'Alarms', 'Tunes', 'Other'];
+  // Order matters: defaults first, Vibration patterns right after Tunes, Other last.
+  const names = ['New alarm defaults', 'Alarms', 'Tunes', 'Vibration patterns', 'Other'];
   const shown = (await page.locator('.component-heading').allInnerTexts()).map((t) => t.replace(/^\S+\s/, '').toLowerCase());
   assert.deepStrictEqual(shown, names.map((n) => n.toLowerCase()));
   assert.ok(!(await visible(page, '.al-add')), 'Alarms closed');
   assert.ok(!(await visible(page, '.tu-add')), 'Tunes closed');
   assert.ok(!(await page.getByText('Alarm volume').first().isVisible()), 'Other closed');
-  assert.ok(!(await page.getByText('Snooze enabled').first().isVisible()), 'New alarm defaults closed');
+  assert.ok(!(await visible(page, '.ad-sm')), 'New alarm defaults closed');
   assert.ok((await heading(page, 'Alarms').innerText()).includes('▸'), 'collapsed chevron');
 
   await heading(page, 'Alarms').click();
@@ -69,7 +69,7 @@ test('accordion: all sections closed on load, one open at a time', async () => {
 test('settings are split between "New alarm defaults" and "Other", without sub-header rows', async () => {
   const { page } = await open();
   await heading(page, 'New alarm defaults').click();
-  assert.ok(await page.getByText('Snooze enabled').first().isVisible());
+  assert.ok(await visible(page, '.ad-sm'));
   assert.ok(await page.getByText('Defaults for newly created alarms').first().isVisible());
   assert.ok(!(await page.getByText('First day of week').first().isVisible()), 'Other content not in defaults');
   assert.strictEqual(await page.locator('.component-text b').count(), 0, 'no bold header rows');
@@ -79,34 +79,210 @@ test('settings are split between "New alarm defaults" and "Other", without sub-h
   assert.ok(await page.getByText('First day of week').first().isVisible());
   assert.ok(await page.getByText('Date format').first().isVisible());
   assert.ok(await page.getByText('Alarm volume').first().isVisible());
-  assert.ok(!(await page.getByText('Snooze enabled').first().isVisible()), 'defaults closed');
+  assert.ok(!(await visible(page, '.ad-sm')), 'defaults closed');
   assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible');
   await heading(page, 'Other').click();
   assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible with all closed');
 });
 
-test('alarms: add, Basic/Cron toggle, validation tag, delete', async () => {
+test('"New alarm defaults" uses the same chips/grid layout as an alarm card', async () => {
+  const { page } = await open();
+  await heading(page, 'New alarm defaults').click();
+  const chips = await page.locator('.ad-opts .al-chip span').allInnerTexts();
+  assert.deepStrictEqual(chips, ['Vibration', 'Sound', 'Increasing']);
+  const labels = await page.locator('.ad-rootc .al-lbl').allInnerTexts();
+  assert.deepStrictEqual(labels, ['Vibration', 'Snooze (min)', 'Max snoozes']);
+  // same visual treatment as the card's chips (checked chips are accent-coloured) and grid
+  const bg = (sel) => page.locator(sel).first().evaluate((e) => getComputedStyle(e).backgroundColor);
+  assert.strictEqual(await bg('.ad-opts .ad-vib + span'), 'rgb(255, 71, 0)', 'Vibration on by default');
+  assert.strictEqual(await bg('.ad-opts .ad-inc + span'), 'rgb(102, 102, 102)', 'Increasing off by default');
+  assert.strictEqual(await page.locator('.ad-rootc .al-grid').evaluate((e) => getComputedStyle(e).display), 'grid');
+  // the 0-value notes, like the cards
+  await page.fill('.ad-sm', '0');
+  assert.strictEqual(await page.locator('.ad-sm-note').innerText(), 'snooze off');
+  await page.fill('.ad-sx', '0');
+  assert.strictEqual(await page.locator('.ad-sx-note').innerText(), 'unlimited');
+});
+
+test('a new alarm added on the page respects "New alarm defaults"', async () => {
+  const { page } = await open();
+  await heading(page, 'New alarm defaults').click();
+  await page.fill('.ad-sm', '5');
+  await page.fill('.ad-sx', '0');
+  await page.locator('.ad-opts .al-chip', { hasText: 'Vibration' }).click();   // vibration off
+  await page.locator('.ad-opts .al-chip', { hasText: 'Sound' }).click();       // sound off
+  await page.locator('.ad-opts .al-chip', { hasText: 'Increasing' }).click();  // increasing on
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-sm').inputValue(), '5');
+  assert.strictEqual(await page.locator('.al-sx').inputValue(), '0');
+  assert.strictEqual(await page.locator('.al-vib').isChecked(), false);
+  assert.strictEqual(await page.locator('.al-snd').isChecked(), false);
+  assert.strictEqual(await page.locator('.al-inc').isChecked(), true);
+
+  // and changing the defaults again affects only alarms added afterwards
+  await heading(page, 'New alarm defaults').click();
+  await page.fill('.ad-sm', '12');
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-sm').nth(0).inputValue(), '5', 'existing alarm unchanged');
+  assert.strictEqual(await page.locator('.al-sm').nth(1).inputValue(), '12');
+});
+
+test('Save flattens the defaults for the watch; legacy flat settings are migrated into the new section', async () => {
+  const legacy = JSON.stringify({ DefaultSnoozeEnabled: true, DefaultSnoozeMinutes: '15', DefaultSnoozeMax: '5',
+    DefaultSoundEnabled: false, DefaultVibrationEnabled: true, DefaultIncreasingVolume: true, AlarmVibePattern: '1', AudioVolume: 30 });
+  const t = await open({ 'clay-settings': legacy });
+  await heading(t.page, 'New alarm defaults').click();
+  assert.strictEqual(await t.page.locator('.ad-sm').inputValue(), '15');
+  assert.strictEqual(await t.page.locator('.ad-sx').inputValue(), '5');
+  assert.strictEqual(await t.page.locator('.ad-snd').isChecked(), false);
+  assert.strictEqual(await t.page.locator('.ad-inc').isChecked(), true);
+  assert.strictEqual(await t.page.locator('.ad-vp').inputValue(), '1');
+  await t.page.fill('.ad-sm', '20');
+  const sent = await t.save();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(sent[0])), {
+    FirstDayOfWeek: 1, DateFormat: 0, AlarmVibePattern: 1, DefaultSnoozeMinutes: 20, DefaultSnoozeMax: 5,
+    DefaultSoundEnabled: 0, DefaultVibrationEnabled: 1, DefaultIncreasingVolume: 1, AudioVolume: 30,
+  });
+});
+
+test('a plain launch sends the saved defaults (and migrates legacy ones)', async () => {
+  const phone = loadPhone({ 'clay-settings': JSON.stringify({ DefaultSnoozeMinutes: '8', AlarmVibePattern: '2' }) });
+  phone.fire('ready');
+  assert.strictEqual(phone.sent[0].DefaultSnoozeMinutes, 8);
+  assert.strictEqual(phone.sent[0].AlarmVibePattern, 2);
+  const fresh = loadPhone();
+  fresh.fire('ready');
+  assert.strictEqual(fresh.sent[0].DefaultSnoozeMinutes, 10, 'fresh install sends the real defaults');
+  assert.strictEqual(fresh.sent[0].DefaultSoundEnabled, 1);
+});
+
+test('alarms: add, Basic/Cron switch, validation tag, delete', async () => {
   const { page } = await open();
   await heading(page, 'Alarms').click();
   await page.click('.al-add');
-  assert.strictEqual(await page.locator('.al-row').count(), 1);
+  assert.strictEqual(await page.locator('.al-card').count(), 1);
+  assert.ok(await visible(page, '.al-body'), 'a new alarm opens ready to edit');
   assert.ok(await visible(page, '.al-time'), 'Basic shows time');
   assert.ok(!(await visible(page, '.al-cronin')), 'Basic hides cron field');
 
-  await page.selectOption('.al-mode', '1');
+  await page.click('.al-seg[data-v="1"]');
   assert.ok(!(await visible(page, '.al-time')), 'Cron hides time');
+  assert.ok(!(await visible(page, '.al-days')), 'Cron hides weekday chips');
   assert.ok(await visible(page, '.al-cronin'), 'Cron shows cron field');
-  assert.ok(!(await visible(page, '.al-d')), 'Cron hides weekday boxes');
+  assert.strictEqual(await page.locator('.al-seg.on').getAttribute('data-v'), '1');
 
   await page.fill('.al-cronin', '*/20 99');
   assert.ok((await page.locator('.al-err').innerText()).includes('Invalid'), 'invalid tag shown');
+  assert.strictEqual(await page.locator('.al-next').innerText(), '', 'no preview for an invalid pattern');
   await page.fill('.al-cronin', '*/20 9-17 * * 1-5');
   assert.strictEqual(await page.locator('.al-err').innerText(), '', 'tag cleared when valid');
+  assert.ok((await page.locator('.al-next').innerText()).startsWith('Next: '), 'preview shown');
 
   await page.click('.al-add');
-  assert.strictEqual(await page.locator('.al-row').count(), 2);
+  assert.strictEqual(await page.locator('.al-card').count(), 2);
   await page.locator('.al-del').first().click();
-  assert.strictEqual(await page.locator('.al-row').count(), 1);
+  assert.strictEqual(await page.locator('.al-card').count(), 1);
+});
+
+test('alarm cards are collapsed summaries that expand on tap', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  assert.ok(!(await visible(page, '.al-body')), 'collapsed by default');
+  const mains = await page.locator('.al-sum-main').allInnerTexts();
+  const subs = await page.locator('.al-sum-sub').allInnerTexts();
+  assert.deepStrictEqual(mains, ['06:30 \u00b7 Wake', 'Cronny']);
+  assert.deepStrictEqual(subs, ['Mon\u2013Fri', '*/20 9-17 * * 1-5 *']);
+
+  await page.locator('.al-sum').nth(0).click();
+  assert.ok(await page.locator('.al-body').nth(0).isVisible(), 'tap expands');
+  assert.ok(!(await page.locator('.al-body').nth(1).isVisible()), 'other card stays collapsed');
+  await page.locator('.al-sum').nth(0).click();
+  assert.ok(!(await page.locator('.al-body').nth(0).isVisible()), 'tap again collapses');
+
+  // The on/off switch toggles enabled and dims the summary without expanding.
+  assert.ok(await page.locator('.al-en').nth(0).isChecked());
+  await page.locator('.al-switch').nth(0).click();
+  assert.ok(!(await page.locator('.al-en').nth(0).isChecked()));
+  assert.ok(!(await page.locator('.al-body').nth(0).isVisible()), 'switch does not expand');
+  assert.ok(await page.locator('.al-card').nth(0).evaluate((e) => e.classList.contains('off')), 'dimmed when off');
+});
+
+test('expand triangle is a large target clear of the on/off switch', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  const chev = await page.locator('.al-chev').first().boundingBox();
+  const sw = await page.locator('.al-switch').first().boundingBox();
+  assert.ok(chev.width >= 40 && chev.height >= 40, `chevron target ${chev.width}x${chev.height}`);
+  assert.ok(chev.x >= sw.x + sw.width + 4, 'chevron target starts to the right of the switch');
+  // Pressing the very left edge of the triangle's area still expands, and leaves the switch alone.
+  const before = await page.locator('.al-en').first().isChecked();
+  await page.mouse.click(chev.x + 2, chev.y + chev.height / 2);
+  assert.ok(await page.locator('.al-body').first().isVisible(), 'chevron press expands');
+  assert.strictEqual(await page.locator('.al-en').first().isChecked(), before, 'switch untouched');
+});
+
+test('summary follows edits live; expanded state survives reordering weekday setting', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  await page.locator('.al-sum').nth(0).click();
+  await page.locator('.al-name').nth(0).fill('Gym');
+  await page.locator('.al-time').nth(0).fill('07:15');
+  assert.strictEqual(await page.locator('.al-sum-main').nth(0).innerText(), '07:15 \u00b7 Gym');
+  // weekday chips start on Monday by default; untick Mon..Fri, tick Sat+Sun
+  const chips = await page.locator('.al-card').nth(0).locator('.al-chip span').allInnerTexts();
+  assert.deepStrictEqual(chips.slice(0, 7), ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']);
+  for (const d of ['Mo', 'Tu', 'We', 'Th', 'Fr']) { await page.locator('.al-card').nth(0).locator('.al-days .al-chip', { hasText: d }).click(); }
+  assert.strictEqual(await page.locator('.al-sum-sub').nth(0).innerText(), 'Once');
+  for (const d of ['Sa', 'Su']) { await page.locator('.al-card').nth(0).locator('.al-days .al-chip', { hasText: d }).click(); }
+  assert.strictEqual(await page.locator('.al-sum-sub').nth(0).innerText(), 'Weekends');
+
+  // First day of week = Sunday reorders the chips in place, keeping values and open state.
+  await heading(page, 'Other').click();
+  await page.getByLabel('Sunday').check();
+  await heading(page, 'Alarms').click();
+  const after = await page.locator('.al-card').nth(0).locator('.al-days .al-chip span').allInnerTexts();
+  assert.deepStrictEqual(after, ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']);
+  assert.ok(await page.locator('.al-body').nth(0).isVisible(), 'card still open');
+  assert.strictEqual(await page.locator('.al-name').nth(0).inputValue(), 'Gym');
+  assert.strictEqual(await page.locator('.al-sum-sub').nth(0).innerText(), 'Weekends');
+});
+
+test('snooze fields explain their 0 values', async () => {
+  const { page } = await open();
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-sm-note').innerText(), '');
+  await page.fill('.al-sm', '0');
+  assert.strictEqual(await page.locator('.al-sm-note').innerText(), 'snooze off');
+  await page.fill('.al-sx', '0');
+  assert.strictEqual(await page.locator('.al-sx-note').innerText(), 'unlimited');
+  await page.fill('.al-sx', '3');
+  assert.strictEqual(await page.locator('.al-sx-note').innerText(), '');
+});
+
+test('cron preview shows the next ring time (fixed clock: Mon 9 Nov 2026 10:05)', async () => {
+  const phone = loadPhone();
+  const html = openConfigPage(phone);
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await page.clock.install({ time: new Date(2026, 10, 9, 10, 5, 0) });
+  await page.setContent(html);
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  await page.click('.al-seg[data-v="1"]');
+  const cases = [
+    ['*/20 9-17 * * 1-5', 'Next: today 10:20'],
+    ['0 7 * * *', 'Next: tomorrow 07:00'],
+    ['0 8 * * 0', 'Next: Sun 08:00'],
+    ['0 12 1 * *', 'Next: 1.12. 12:00'],
+    ['0 0 30 2 *', 'Next: never (nothing within a year)'],
+    ['0 9 * * 1 */2', 'Next: Mon 09:00'],
+  ];
+  for (const [pat, want] of cases) {
+    await page.fill('.al-cronin', pat);
+    assert.strictEqual(await page.locator('.al-next').innerText(), want, pat);
+  }
 });
 
 test('tunes: validation tag and delete', async () => {
@@ -127,7 +303,7 @@ test('max rows hides the Add button (16 alarms, 20 tunes)', async () => {
   const { page } = await open();
   await heading(page, 'Alarms').click();
   for (let i = 0; i < 16; i++) { await page.click('.al-add'); }
-  assert.strictEqual(await page.locator('.al-row').count(), 16);
+  assert.strictEqual(await page.locator('.al-card').count(), 16);
   assert.ok(!(await visible(page, '.al-add')), 'Add hidden at 16');
   await heading(page, 'Tunes').click();
   for (let i = 0; i < 20; i++) { await page.click('.tu-add'); }
@@ -178,27 +354,27 @@ test('Save sends tunes then alarms, with validation, padding and tune ids', asyn
   await page.click('.al-add');
   await page.locator('.al-name').nth(0).fill('Weekday');
   await page.fill('.al-time', '06:30');
-  await page.locator('.al-d[data-d="1"]').check();
-  await page.locator('.al-d[data-d="5"]').check();
+  await page.locator('.al-days .al-chip', { hasText: 'Mo' }).click();
+  await page.locator('.al-days .al-chip', { hasText: 'Fr' }).click();
   await page.locator('.al-tune').dispatchEvent('mousedown');
   await page.selectOption('.al-tune', { label: 'Mine' });
   await page.click('.al-add');
   await page.locator('.al-name').nth(1).fill('Cron');
-  await page.locator('.al-mode').nth(1).selectOption('1');
+  await page.locator('.al-card').nth(1).locator('.al-seg[data-v="1"]').click();
   await page.locator('.al-cronin').nth(1).fill('*/20 9-17');
   await page.click('.al-add');   // third alarm: invalid cron, must be dropped
-  await page.locator('.al-mode').nth(2).selectOption('1');
+  await page.locator('.al-card').nth(2).locator('.al-seg[data-v="1"]').click();
   await page.locator('.al-cronin').nth(2).fill('bogus');
 
   const sent = await t.save();
   const keys = sent.map((d) => Object.keys(d)[0]);
-  assert.deepStrictEqual(keys, ['FirstDayOfWeek', 'TuneConfig', 'AlarmConfig']);
-  const tunes = sent[1].TuneConfig.split('\x1e');
+  assert.deepStrictEqual(keys, ['FirstDayOfWeek', 'VibeConfig', 'TuneConfig', 'AlarmConfig']);
+  const tunes = sent[2].TuneConfig.split('\x1e');
   assert.strictEqual(tunes.length, 1, 'invalid tune dropped');
   const [tid, tname, tpat] = tunes[0].split('\x1f');
   assert.strictEqual(tname, 'Mine'); assert.strictEqual(tpat, 'C z E');
   assert.ok(parseInt(tid, 10) >= 0x10000);
-  const alarms = sent[2].AlarmConfig.split('\x1e').map((r) => r.split('\x1f'));
+  const alarms = sent[3].AlarmConfig.split('\x1e').map((r) => r.split('\x1f'));
   assert.strictEqual(alarms.length, 2, 'invalid-cron alarm dropped');
   assert.deepStrictEqual(alarms[0].slice(1, 8), ['Weekday', '1', '0', '6', '30', String((1 << 1) | (1 << 5)), '*']);
   assert.strictEqual(alarms[0][12], tid, 'alarm references the tune id');
@@ -262,12 +438,12 @@ const snapshot = (phone, alarms, tunes) => phone.fire('appmessage', { payload: {
 test('watch snapshot fills the page with existing alarms and tunes', async () => {
   const { page, errors } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
   await heading(page, 'Alarms').click();
-  assert.strictEqual(await page.locator('.al-row').count(), 2);
+  assert.strictEqual(await page.locator('.al-card').count(), 2);
   assert.strictEqual(await page.locator('.al-name').nth(0).inputValue(), 'Wake');
   assert.strictEqual(await page.locator('.al-time').nth(0).inputValue(), '06:30');
   assert.strictEqual(await page.locator('.al-d:checked').count(), 5, 'Mon-Fri ticked');
   assert.strictEqual(await page.locator('.al-tune').nth(0).evaluate((e) => e.options[e.selectedIndex].text), 'Watch tune');
-  assert.strictEqual(await page.locator('.al-mode').nth(1).inputValue(), '1');
+  assert.strictEqual(await page.locator('.al-card').nth(1).locator('.al-seg.on').getAttribute('data-v'), '1');
   assert.strictEqual(await page.locator('.al-cronin').nth(1).inputValue(), '*/20 9-17 * * 1-5 *');
   assert.strictEqual(await page.locator('.al-en').nth(1).isChecked(), false);
   assert.strictEqual(await page.locator('.al-ad').nth(1).inputValue(), '1');
@@ -289,6 +465,7 @@ test('a later snapshot replaces the stored lists', async () => {
 test('snapshots are ignored while page edits are pending delivery', async () => {
   const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
   await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-sum').nth(0).click();
   await t.page.locator('.al-name').nth(0).fill('Edited');
   t.phone.failSends = true;
   await t.save();
@@ -302,6 +479,7 @@ test('snapshots are ignored while page edits are pending delivery', async () => 
 test('deleting a snapshot item on the page sends an id-only tombstone, kept until delivered', async () => {
   const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
   await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-sum').nth(0).click();
   await t.page.locator('.al-del').nth(0).click();   // alarm 1 ("Wake")
   await heading(t.page, 'Tunes').click();
   await t.page.locator('.tu-del').nth(1).click();   // tune 4
@@ -327,6 +505,7 @@ test('items that appear on the watch after the page opened are not tombstoned', 
   const extra = ['9', 'New on watch', '1', '0', '8', '0', '2', '*', '10', '3', '1', '1', '0', '0', '0'].join(US);
   snapshot(t.phone, snapAlarms + RS + extra, snapTunes);   // arrives while the page is open
   await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-sum').nth(1).click();
   await t.page.locator('.al-del').nth(1).click();   // delete alarm 2 on the page
   await t.save();
   const sent = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
@@ -339,5 +518,374 @@ test('a plain unchanged Save does not tombstone anything', async () => {
   await t.save();
   const alarms = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
   assert.strictEqual(alarms.length, 2);
-  assert.ok(alarms.every((r) => r.split(US).length === 15));
+  assert.ok(alarms.every((r) => r.split(US).length === 17));
+});
+
+// ---- ordering (same as the watch's main list) ----
+
+const orderAlarms = [
+  ['10', 'Nine', '1', '0', '9', '0', '0', '*', '10', '3', '1', '1', '0', '0', '0'],
+  ['11', 'Six A', '1', '0', '6', '30', '0', '*', '10', '3', '1', '1', '0', '0', '0'],
+  ['12', 'Cron early', '1', '1', '7', '0', '0', '*/20 5-7 * * * *', '10', '3', '1', '1', '0', '0', '0'],
+  ['13', 'Six B', '1', '0', '6', '30', '0', '*', '10', '3', '1', '1', '0', '0', '0'],
+].map((r) => r.join(US)).join(RS);
+
+test('alarms are ordered by clock time like the watch: cron by earliest match, ties keep list order', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, orderAlarms, ''));
+  await heading(page, 'Alarms').click();
+  const names = async () => page.locator('.al-name').evaluateAll((els) => els.map((e) => e.value));
+  // 05:00 (cron: first hour 5, first minute 0), 06:30 Six A, 06:30 Six B (tie: list order), 09:00
+  assert.deepStrictEqual(await names(), ['Cron early', 'Six A', 'Six B', 'Nine']);
+});
+
+test('re-sorting waits until a card is collapsed, and a new alarm stays last while editing', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, orderAlarms, ''));
+  await heading(page, 'Alarms').click();
+  const names = async () => page.locator('.al-name').evaluateAll((els) => els.map((e) => e.value));
+
+  await page.locator('.al-sum').nth(3).click();                        // open "Nine"
+  await page.locator('.al-time').nth(3).fill('04:00');
+  assert.deepStrictEqual(await names(), ['Cron early', 'Six A', 'Six B', 'Nine'], 'no jump while editing');
+  assert.strictEqual(await page.locator('.al-sum-main').nth(3).innerText(), '04:00 · Nine');
+  await page.locator('.al-sum').nth(3).click();                        // collapse -> settle into order
+  assert.deepStrictEqual(await names(), ['Nine', 'Cron early', 'Six A', 'Six B']);
+
+  await page.click('.al-add');                                          // new alarm, default 07:00
+  await page.locator('.al-name').nth(4).fill('New');
+  assert.deepStrictEqual(await names(), ['Nine', 'Cron early', 'Six A', 'Six B', 'New'], 'new alarm stays at the bottom while open');
+  await page.locator('.al-sum').nth(4).click();
+  assert.deepStrictEqual(await names(), ['Nine', 'Cron early', 'Six A', 'Six B', 'New'], '07:00 sorts after the 06:30s');
+
+  await page.locator('.al-sum').nth(4).click();                         // reopen New, give it 05:30, collapse
+  await page.locator('.al-time').nth(4).fill('05:30');
+  await page.locator('.al-sum').nth(4).click();
+  assert.deepStrictEqual(await names(), ['Nine', 'Cron early', 'New', 'Six A', 'Six B']);
+});
+
+// ---- vibration patterns library ----
+
+const snapVibes = [['5', 'Heartbeat', '1 z/2 1 z 3'], ['6', 'Long buzz', '8']].map((r) => r.join(US)).join(RS);
+const snapAlarmsVibe = [
+  ['1', 'Uses library', '1', '0', '6', '30', '62', '*', '10', '3', '1', '1', '0', '0', '0', '5', '1'],
+  ['2', 'Uses preset', '1', '0', '7', '0', '0', '*', '10', '3', '1', '1', '0', '0', '0', '0', '2'],
+].map((r) => r.join(US)).join(RS);
+const snapshotAll = (phone, vibes, tunes, alarms) =>
+  phone.fire('appmessage', { payload: { VibeConfig: vibes, TuneConfig: tunes, AlarmConfig: alarms } });
+
+test('vibration patterns: add, validation tag, delete, row limit', async () => {
+  const { page, errors } = await open();
+  await heading(page, 'Vibration patterns').click();
+  assert.ok(await visible(page, '.vb-add'));
+  assert.ok(!(await visible(page, '.al-add')), 'other sections stay closed');
+  await page.click('.vb-add');
+  for (const bad of ['C', '9', '1 1 1 1 1 1 1 1 1', 'z9', '2  x']) {
+    await page.fill('.vb-pat', bad);
+    assert.ok((await page.locator('.vb-err').innerText()).includes('Invalid'), 'invalid: ' + bad);
+  }
+  for (const ok of ['2 z 2', '1/2', '/2 z/2 8', ' 2 ', '1 1 1 1 1 1 1 1']) {
+    await page.fill('.vb-pat', ok);
+    assert.strictEqual(await page.locator('.vb-err').innerText(), '', 'valid: ' + ok);
+  }
+  await page.locator('.vb-del').click();
+  assert.strictEqual(await page.locator('.vb-row').count(), 0);
+  for (let i = 0; i < 20; i++) { await page.click('.vb-add'); }
+  assert.ok(!(await visible(page, '.vb-add')), 'Add hidden at 20');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('alarm card has a Vibration select: Double/Short/Long plus only valid library vibrations', async () => {
+  const { page } = await open();
+  await heading(page, 'Vibration patterns').click();
+  await page.click('.vb-add');
+  await page.locator('.vb-name').nth(0).fill('Heartbeat'); await page.locator('.vb-pat').nth(0).fill('1 z/2 1');
+  await page.click('.vb-add');
+  await page.locator('.vb-name').nth(1).fill('Broken'); await page.locator('.vb-pat').nth(1).fill('C');
+  await page.click('.vb-add');
+  await page.locator('.vb-pat').nth(2).fill('2');   // valid but unnamed
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  await page.locator('.al-vibsel').dispatchEvent('mousedown');
+  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), ['Double', 'Short', 'Long', 'Heartbeat']);
+  // fixing the pattern makes it appear live
+  await heading(page, 'Vibration patterns').click();
+  await page.locator('.vb-pat').nth(1).fill('2 z 2');
+  await page.locator('.vb-pat').nth(1).dispatchEvent('change');
+  await heading(page, 'Alarms').click();
+  await page.locator('.al-vibsel').dispatchEvent('mousedown');
+  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), ['Double', 'Short', 'Long', 'Heartbeat', 'Broken']);
+});
+
+test('a new alarm takes its vibration preset from "New alarm defaults"', async () => {
+  const { page } = await open();
+  await heading(page, 'New alarm defaults').click();
+  await page.selectOption('.ad-vp', '2');   // Long
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-vibsel').inputValue(), 'p2');
+});
+
+test('Save sends VibeConfig first and the alarm\'s vibration choice (library id or preset)', async () => {
+  const t = await open();
+  const { page } = t;
+  await heading(page, 'Vibration patterns').click();
+  await page.click('.vb-add');
+  await page.locator('.vb-name').nth(0).fill('Heartbeat'); await page.locator('.vb-pat').nth(0).fill('1 z/2 1');
+  await page.click('.vb-add');
+  await page.locator('.vb-name').nth(1).fill('Nope'); await page.locator('.vb-pat').nth(1).fill('Q');
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  await page.locator('.al-vibsel').dispatchEvent('mousedown');
+  await page.selectOption('.al-vibsel', { label: 'Heartbeat' });
+  await page.click('.al-add');
+  await page.locator('.al-vibsel').nth(1).selectOption('p1');   // Short
+  const sent = await t.save();
+  assert.deepStrictEqual(sent.map((d) => Object.keys(d)[0]), ['FirstDayOfWeek', 'VibeConfig', 'TuneConfig', 'AlarmConfig']);
+  const vibes = sent[1].VibeConfig.split(RS);
+  assert.strictEqual(vibes.length, 1, 'invalid vibration dropped');
+  const [vid, vname, vpat] = vibes[0].split(US);
+  assert.strictEqual(vname, 'Heartbeat'); assert.strictEqual(vpat, '1 z/2 1');
+  assert.ok(parseInt(vid, 10) >= 0x10000);
+  const alarms = sent[3].AlarmConfig.split(RS).map((r) => r.split(US));
+  assert.strictEqual(alarms[0][15], vid, 'alarm 1 references the library vibration');
+  assert.strictEqual(alarms[1][15], '0');
+  assert.strictEqual(alarms[1][16], '1', 'alarm 2 uses the Short preset');
+});
+
+test('watch snapshot fills Vibration patterns and each alarm\'s Vibration select', async () => {
+  const { page, errors } = await open(undefined, (phone) => snapshotAll(phone, snapVibes, '', snapAlarmsVibe));
+  await heading(page, 'Vibration patterns').click();
+  assert.strictEqual(await page.locator('.vb-row').count(), 2);
+  assert.strictEqual(await page.locator('.vb-name').nth(0).inputValue(), 'Heartbeat');
+  assert.strictEqual(await page.locator('.vb-pat').nth(0).inputValue(), '1 z/2 1 z 3');
+  await heading(page, 'Alarms').click();
+  const sel = async (n) => page.locator('.al-vibsel').nth(n).evaluate((e) => e.options[e.selectedIndex].text);
+  assert.strictEqual(await sel(0), 'Heartbeat');
+  assert.strictEqual(await sel(1), 'Long');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('deleting a library vibration sends a tombstone and alarms using it fall back to a preset', async () => {
+  const t = await open(undefined, (phone) => snapshotAll(phone, snapVibes, '', snapAlarmsVibe));
+  await heading(t.page, 'Vibration patterns').click();
+  await t.page.locator('.vb-del').nth(0).click();   // vibration 5, used by alarm 1
+  await heading(t.page, 'Alarms').click();
+  const sel = await t.page.locator('.al-vibsel').nth(0).evaluate((e) => e.options[e.selectedIndex].text);
+  assert.strictEqual(sel, '(missing vibration)', 'the page flags the dangling reference');
+  const sent = await t.save();
+  const vibes = sent.find((d) => 'VibeConfig' in d).VibeConfig.split(RS);
+  assert.ok(vibes.includes('5'), 'vibration tombstone is a bare id: ' + JSON.stringify(vibes));
+  const alarms = sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS).map((r) => r.split(US));
+  assert.strictEqual(alarms[0][15], '0', 'the alarm no longer references the deleted vibration');
+});
+
+test('a snapshot without VibeConfig (older watch) leaves the stored vibration list alone', async () => {
+  const phone = loadPhone();
+  snapshotAll(phone, snapVibes, '', snapAlarmsVibe);
+  phone.fire('appmessage', { payload: { AlarmConfig: snapAlarmsVibe.split(RS)[0] } });
+  const cs = JSON.parse(phone.store['clay-settings']);
+  assert.strictEqual(cs.VibeList.length, 2);
+  assert.strictEqual(cs.AlarmList.length, 1);
+});
+
+// ---- read-only built-ins and the collapsible long help ----
+
+const TUNE_BUILTIN_NAMES = ['Triple', 'Double', 'Triple slow', 'Analog bell', 'Celebration', 'Lullaby', 'March'];
+
+test('Tunes lists the watch\'s built-in tunes read-only; they are not part of the saved lists', async () => {
+  const t = await open();
+  const { page, errors } = t;
+  await heading(page, 'Tunes').click();
+  assert.deepStrictEqual(await page.locator('.tu-biname').evaluateAll((els) => els.map((e) => e.textContent)), TUNE_BUILTIN_NAMES);
+  assert.strictEqual(await page.locator('.tu-bipat').nth(0).inputValue(), 'C z C z C');
+  assert.strictEqual(await page.locator('.tu-bipat').nth(5).inputValue(), 'G,8 _B,4 A,2 G,2 A,4 D4 D,6');
+  assert.strictEqual(await page.locator('.tu-bi input').evaluateAll((els) => els.every((e) => e.readOnly)), true, 'all read-only');
+  assert.strictEqual(await page.locator('.tu-row').count(), 0, 'built-ins are not editable rows');
+  // typing into a built-in changes nothing
+  await page.locator('.tu-bipat').nth(0).click();
+  await page.keyboard.type('XYZ');
+  assert.strictEqual(await page.locator('.tu-bipat').nth(0).inputValue(), 'C z C z C');
+  // adding/removing the user's own tunes is unaffected, and Save sends only those
+  await page.click('.tu-add');
+  await page.locator('.tu-name').fill('Mine'); await page.locator('.tu-pat').fill('C E G');
+  const sent = await t.save();
+  const tunes = sent.find((d) => 'TuneConfig' in d).TuneConfig.split(RS);
+  assert.strictEqual(tunes.length, 1);
+  assert.strictEqual(tunes[0].split(US)[1], 'Mine');
+  assert.ok(!sent.find((d) => 'TuneConfig' in d).TuneConfig.includes('Triple'), 'no built-in leaks into the push');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('Vibration patterns lists Double/Short/Long read-only', async () => {
+  const { page } = await open();
+  await heading(page, 'Vibration patterns').click();
+  assert.deepStrictEqual(await page.locator('.vb-biname').evaluateAll((els) => els.map((e) => e.textContent)), ['Double', 'Short', 'Long']);
+  assert.deepStrictEqual(await page.locator('.vb-bipat').evaluateAll((els) => els.map((e) => e.value)), ['2 z 2', '2', '8']);
+  assert.strictEqual(await page.locator('.vb-bi input').evaluateAll((els) => els.every((e) => e.readOnly)), true);
+  assert.strictEqual(await page.locator('.vb-row').count(), 0);
+});
+
+test('tapping a built-in value selects all of it, ready to copy (there is no Copy button)', async () => {
+  const { page } = await open();
+  await heading(page, 'Tunes').click();
+  const el = page.locator('.tu-bipat').nth(3);   // "C G C G C G C G"
+  await el.click();
+  const sel = await el.evaluate((e) => [e.selectionStart, e.selectionEnd, e.value.length]);
+  assert.deepStrictEqual(sel, [0, sel[2], sel[2]]);
+  assert.ok(sel[2] > 0);
+  assert.strictEqual(await page.locator('.tu-copy, .vb-copy').count(), 0);
+  assert.strictEqual(await page.locator('.tu-bi button').count(), 0);
+});
+
+test('the long syntax help is collapsible (collapsed by default) and replaces the short instruction', async () => {
+  const { page } = await open();
+  await heading(page, 'Tunes').click();
+  assert.strictEqual(await page.locator('.tu-helpbox').evaluate((e) => e.open), false, 'collapsed by default');
+  assert.ok(!(await page.getByText('A tune is a list of notes and rests').isVisible()), 'text hidden while collapsed');
+  await page.locator('.tu-helpbox summary').click();
+  assert.strictEqual(await page.locator('.tu-helpbox').evaluate((e) => e.open), true);
+  assert.ok(await page.getByText('A tune is a list of notes and rests').isVisible());
+  assert.ok(await page.getByText('A rest is "z" followed by the same optional ratio').first().isVisible(), 'long help body present');
+  assert.strictEqual(await page.locator('.tu-helptext p').count() >= 5, true, 'paragraphs preserved');
+  await page.locator('.tu-helpbox summary').click();
+  assert.ok(!(await page.getByText('A tune is a list of notes and rests').isVisible()), 'collapses again');
+  // the old one-line instruction is gone
+  assert.strictEqual(await page.getByText('Notes C D E F G A B, optional').count(), 0);
+
+  await heading(page, 'Vibration patterns').click();
+  assert.strictEqual(await page.locator('.vb-helpbox').evaluate((e) => e.open), false);
+  await page.locator('.vb-helpbox summary').click();
+  assert.ok(await page.getByText('A vibration pattern is a list of on-beats and rests').isVisible());
+  assert.strictEqual(await page.getByText('Steps separated by spaces, up to 8').count(), 0, 'old short vibration instruction gone');
+});
+
+test('each built-in is one line: a plain-text label and one read-only value field', async () => {
+  const { page } = await open();
+  for (const [sec, p, n] of [['Tunes', 'tu', 7], ['Vibration patterns', 'vb', 3]]) {
+    await heading(page, sec).click();
+    const rows = page.locator(`.${p}-bi`);
+    assert.strictEqual(await rows.count(), n);
+    for (let i = 0; i < n; i++) {
+      const row = rows.nth(i);
+      const label = row.locator(`.${p}-biname`);
+      assert.strictEqual(await label.evaluate((e) => e.tagName), 'SPAN', 'label is plain text, not a field');
+      assert.strictEqual(await row.locator('input').count(), 1, 'exactly one input per row');
+      assert.strictEqual(await row.locator('button').count(), 0);
+      // label and value sit on the same line (same vertical band) and the row is one field tall
+      const [lb, vb, rb] = await Promise.all([label.boundingBox(), row.locator('input').boundingBox(), row.boundingBox()]);
+      assert.ok(Math.abs((lb.y + lb.height / 2) - (vb.y + vb.height / 2)) < 6, 'label and value are vertically aligned');
+      assert.ok(vb.x > lb.x + lb.width - 2, 'value is to the right of the label');
+      assert.ok(rb.height < 50, `row is one line tall (${rb.height}px)`);
+    }
+  }
+});
+
+// ---- full cron help under the Basic/Cron selector ----
+
+test('cron alarms show the watch\'s full cron help, collapsible, under the Basic/Cron selector', async () => {
+  const { page, errors } = await open();
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  // Basic mode: no cron help
+  assert.ok(!(await visible(page, '.al-cronhelpbox')), 'hidden in Basic mode');
+  await page.click('.al-seg[data-v="1"]');
+  assert.ok(await visible(page, '.al-cronhelpbox'), 'shown in Cron mode');
+
+  // placed right under the selector and above the cron field
+  const seg = await page.locator('.al-seg-wrap').boundingBox();
+  const box = await page.locator('.al-cronhelpbox').boundingBox();
+  const field = await page.locator('.al-cronin').boundingBox();
+  assert.ok(box.y >= seg.y + seg.height - 1, 'below the Basic/Cron selector');
+  assert.ok(box.y + box.height <= field.y + 1, 'above the cron pattern field');
+
+  // collapsed by default; expands to the full text, collapses again
+  assert.strictEqual(await page.locator('.al-cronhelpbox').evaluate((e) => e.open), false);
+  assert.ok(!(await page.getByText('Alarm fires every minute that matches every cron item').isVisible()));
+  await page.locator('.al-cronhelpbox summary').click();
+  assert.ok(await page.getByText('Alarm fires every minute that matches every cron item').isVisible());
+  assert.ok(await page.getByText('Week (ISO week-of-year):').isVisible(), 'full text, not a summary');
+  assert.ok(await page.getByText('up biweekly alarms.').isVisible(), 'down to the last line');
+  assert.strictEqual(await page.locator('.al-cronhelptext p').count() >= 9, true, 'every paragraph present');
+  await page.locator('.al-cronhelpbox summary').click();
+  assert.strictEqual(await page.locator('.al-cronhelpbox').evaluate((e) => e.open), false);
+
+  // the short syntax line under the cron field is gone
+  assert.strictEqual(await page.getByText('weekday 0 = Sunday').count(), 0);
+  assert.strictEqual(await page.locator('.al-cronhelp').count(), 0);
+  assert.ok((await page.locator('.al-next').count()) === 1, 'the live Next: preview stays');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('an open cron help stays open when the cards re-render', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  await page.locator('.al-sum').nth(1).click();                       // open the cron alarm
+  await page.locator('.al-card').nth(1).locator('.al-cronhelpbox summary').click();
+  assert.strictEqual(await page.locator('.al-card').nth(1).locator('.al-cronhelpbox').evaluate((e) => e.open), true);
+  // collapsing the OTHER card re-sorts/re-renders every card
+  await page.locator('.al-sum').nth(0).click();
+  await page.locator('.al-sum').nth(0).click();
+  assert.strictEqual(await page.locator('.al-card').nth(1).locator('.al-cronhelpbox').evaluate((e) => e.open), true, 'still open');
+  assert.ok(await page.locator('.al-card').nth(1).locator('.al-cronhelptext').isVisible());
+});
+
+// ---- nothing touches the section outline ----
+
+test('content in every section keeps a margin from the section outline (sides and top)', async () => {
+  const { page } = await open(undefined, (phone) => {
+    phone.fire('appmessage', { payload: { VibeConfig: ['5', 'Heartbeat', '1 z/2 1'].join(US), TuneConfig: ['3', 'Mine', 'C z E'].join(US), AlarmConfig: snapAlarms } });
+  });
+  const MIN = 8;   // px between any content and the section's left/right edge
+  const sections = [['New alarm defaults', '.ad-rootc'], ['Alarms', '.al-rootc'], ['Tunes', '.tu-rootc'], ['Vibration patterns', '.vb-rootc']];
+  for (const [name, rootSel] of sections) {
+    await heading(page, name).click();
+    if (name === 'Alarms') {
+      await page.locator('.al-sum').nth(0).click();   // expanded content too
+      await page.locator('.al-sum').nth(1).click();
+      await page.locator('.al-card').nth(1).locator('.al-cronhelpbox summary').click();
+    }
+    if (name === 'Tunes' || name === 'Vibration patterns') { await page.locator(rootSel + ' details summary').click(); }
+    // let the chevron's rotation settle: mid-transition its bounding box is wider than the card
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+    const worst = await page.evaluate((sel) => {
+      const root = document.querySelector(sel);
+      const section = root.closest('.section');
+      const sb = section.getBoundingClientRect();
+      let left = Infinity, right = Infinity, who = '', whoR = '';
+      root.querySelectorAll('*').forEach((el) => {
+        const b = el.getBoundingClientRect();
+        if (b.width === 0 || b.height === 0) { return; }
+        if (el.offsetParent === null) { return; }
+        if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== 'visible') { return; }
+        const l = b.left - sb.left, r = sb.right - b.right;
+        if (l < left) { left = l; who = el.className || el.tagName; }
+        if (r < right) { right = r; whoR = el.className || el.tagName; }
+      });
+      return { left: Math.round(left), right: Math.round(right), who, whoR };
+    }, rootSel);
+    // gap between the heading and the first piece of content (a control, a box or a text line)
+    const topGap = await page.evaluate((nm) => {
+      const h = [...document.querySelectorAll('.component-heading')].find((e) => e.textContent.toLowerCase().includes(nm.toLowerCase()));
+      const sec = h.closest('.section');
+      const hb = h.getBoundingClientRect();
+      let top = Infinity;
+      sec.querySelectorAll('input,select,button,details,.al-card').forEach((el) => {
+        const b = el.getBoundingClientRect();
+        if (el.offsetParent !== null && !h.contains(el) && b.width && b.height && b.top < top) { top = b.top; }
+      });
+      const tw = document.createTreeWalker(sec, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = tw.nextNode())) {
+        if (!n.textContent.trim() || h.contains(n) || !n.parentElement.offsetParent) { continue; }
+        const r = document.createRange();
+        r.selectNodeContents(n);
+        const b = r.getBoundingClientRect();
+        if (b.width && b.height && b.top < top) { top = b.top; }
+      }
+      return Math.round(top - hb.bottom);
+    }, name);
+    assert.ok(topGap >= MIN, `${name}: first content only ${topGap}px below the heading`);
+    assert.ok(worst.left >= MIN, `${name}: content ${worst.left}px from the left edge (${worst.who})`);
+    assert.ok(worst.right >= MIN, `${name}: content ${worst.right}px from the right edge (${worst.whoR})`);
+    await heading(page, name).click();   // close before the next one
+  }
 });

@@ -131,12 +131,17 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmSoundPatternKind` | 10036 | int 0/2 | 0=Preset (use `sound_preset`), 2=Library (use `custom_tune_id`) — 1 ("inline Custom") is retired, see "Signal submenu / custom sound &amp; vibe patterns" below. Sets `sound_pattern_kind` directly; no test hook sets `sound_preset` itself, since main.c's own Tune picker already exercises that path directly. |
-| `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
+| `TestAlarmVibePatternKind` | 10038 | int 0-2 | 0=Preset (use `vibe_pattern`), 1=inline bytes (what a picked Double/Short/Long preset is stored as), 2=Library (use `custom_vibe_id`). Sets `vibe_pattern_kind` directly. |
 | `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/rest pattern in the current ABC-notation grammar (e.g. `"3 z 1"` — `z` is a rest; see "Custom sound/vibe patterns are a genuine ABC-notation subset" below), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. Logs a warning (field left unchanged) if unparseable — notably, the OLD pre-`STORE_SCHEMA`-20 digit+dash grammar (e.g. `"2 1- 2"`) no longer parses under this one. |
 | `TestClearTunes` | 10040 | int, nonzero | Wipes the entire custom-tune library (`s_tune_count = 0`), independent of `TestClearAlarms`. See "Custom-tune library" below. |
 | `TestTuneIndex` | 10041 | int | **Required** to touch tune fields, mirroring `TestAlarmIndex`'s own convention: `== s_tune_count` appends a new (empty-named) tune with a freshly allocated id; `< s_tune_count` edits that existing tune in place. |
 | `TestTuneName` | 10042 | string | |
 | `TestTuneCustomPattern` | 10043 | string | Space-separated note/rest pattern in the current ABC-notation grammar (e.g. `"C z E z G"` — `z` is a rest; see "Custom sound/vibe patterns are a genuine ABC-notation subset" below), parsed via `ac_sound_pattern_parse` into the tune's own `pattern`/`pattern_note`/`pattern_len` (`CustomTune`, unaffected by sound's own `kind==1` retirement — the tune library was always a separate representation). Logs a warning (left unchanged) if unparseable (the OLD pre-`STORE_SCHEMA`-20 note-then-duration-digit grammar, e.g. `"1C 2D"`, no longer parses under this one). `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
+| `TestClearVibes` | 10048 | int, nonzero | Wipes the custom-vibration library (`s_vibe_count = 0`). See "Custom-vibration library" below. |
+| `TestVibeIndex` | 10049 | int | **Required** to touch vibration fields, same convention as `TestTuneIndex`: `== s_vibe_count` appends a new (empty-named) vibration with a fresh id, `< s_vibe_count` edits that one. |
+| `TestVibeName` | 10050 | string | |
+| `TestVibePattern` | 10051 | string | Space-separated vibration pattern (e.g. `"1 z/2 1"`), parsed via `ac_vibe_pattern_parse`; unparseable = warning, left unchanged. |
+| `TestAlarmVibeId` | 10052 | int | Links an alarm to a vibration-library entry by id — sets `custom_vibe_id` and forces `vibe_pattern_kind = 2`. (`VibeConfig`, 10047, is the production key for the whole library.) |
 | `TestAlarmTuneId` | 10044 | int | Links an alarm directly to a tune by id — sets `custom_tune_id` and forces `sound_pattern_kind = 2`, skipping the Tune picker → Custom tunes → Custom tune → Apply chain for test setup. |
 
 Only keys present in the message are applied — anything omitted is left
@@ -183,17 +188,21 @@ library" below.
 
 ### Phone side (`src/ts/`)
 
-- **`config_clay.ts`** — two sections: (1) "New alarm defaults" —
-  everything here only pre-fills a newly created alarm's own fields, never
-  touches existing ones: a `DefaultSnoozeEnabled` toggle +
-  `DefaultSnoozeMinutes`/`DefaultSnoozeMax` number inputs (the latter
-  labeled "Repeats", matching the on-watch snooze editor's own field name
-  for the same value — see the snooze design point below),
-  `DefaultSoundEnabled`/`DefaultVibrationEnabled` (two independent
-  `toggle`s, in that order — Sound above Vibration) and `AlarmVibePattern`
-  (select, Double/Short/Long — only seeds a new alarm's own `vibe_pattern`;
-  see the per-alarm vibration pattern design point below); (2) "Other" —
-  `FirstDayOfWeek` (radiogroup, Sunday/Monday), `DateFormat` (select,
+- **`config_clay.ts`** — five accordion sections, in order: **New alarm
+  defaults** — one `alarmDefaults` component (`config_alarm_defaults.ts`)
+  laid out like an alarm card's signal/snooze block (chips for Vibration/
+  Sound/Increasing, aligned Vibration-preset/"Snooze (min)"/"Max snoozes"
+  grid, "snooze off"/"unlimited" notes); its value is
+  `{snoozeMinutes, snoozeMax, vibration, sound, increasing, vibePattern}` and
+  `dict.ts`'s `flattenAlarmDefaults()` turns it into the watch's original flat
+  keys (`DefaultSnoozeMinutes` — 0 means snooze off, which replaced the old
+  separate "Snooze enabled" toggle — `DefaultSnoozeMax`, `DefaultSoundEnabled`,
+  `DefaultVibrationEnabled`, `DefaultIncreasingVolume`, `AlarmVibePattern`),
+  and `migrateSavedSettings()` seeds it from those flat keys for users who
+  saved before it existed. Everything here only pre-fills a NEWLY created alarm
+  (on the watch, and for an alarm added on the config page) and never touches
+  existing ones; **Alarms**, **Tunes**, **Vibration patterns** (below); and
+  **Other** (last) — `FirstDayOfWeek` (radiogroup, Sunday/Monday), `DateFormat` (select,
   Day.Month/Month.Day, right after `FirstDayOfWeek` — read live by
   `format_relative_fire_time()`'s date-only tier, `main.c`, since Pebble's C
   API has no date-order equivalent of `clock_is_24h_style()` to fall back
@@ -253,6 +262,48 @@ library" below.
     (snooze, last-fired) and watch-only signal settings; `repeats` is only
     re-derived when the schedule actually differs (the page can't express the
     legacy "once on one weekday" state).
+  - **Alarm card UI** (`config_alarm_list.ts`): each alarm is a card collapsed
+    to a summary row (time · label, schedule, on/off switch; a new alarm opens
+    expanded, expanded state is kept per id across re-renders). Basic/Cron is a
+    segmented control, weekdays are chips in the order set by
+    `FirstDayOfWeek`, and a cron alarm shows a live "Next: ..." preview
+    (self-contained port of the watch's next-occurrence search, same 400-day
+    horizon and today/tomorrow/weekday-within-7-days/date tiers; the authoritative
+    `cronNext` lives in `list_config.ts` and is unit-tested, the browser copy is
+    checked against fixed-clock cases in `tests/config_page`). Under the
+    Basic/Cron selector, a cron alarm shows the watch's full cron help
+    (`resources/text/cron_help.txt`, via `CRON_HELP` in `pattern_help.ts` and the
+    alarmList item's `help` prop) as a collapsible `<details>`, collapsed by
+    default and remembered per card across re-renders; the old one-line syntax
+    reminder under the cron field is gone (the live "Next: ..." preview stays).
+    Every custom list component gives its root the same 12px inset Clay's
+    own components have — sides for all four (`.al-rootc`/`.tu-rootc`/`.vb-rootc`/
+    `.ad-rootc` padding), plus 12px above the first item for the three lists (the
+    defaults component sits under a text item that already has its own spacing):
+    Clay renders a custom component's template as-is, with none of the standard
+    components' padding, so without it content touches the section outline
+    (a test checks every section keeps at least 8px, at the sides and below the heading).
+    Cards are ordered
+    like the watch's main list (`rebuild_order`: raw time of day ascending, a cron
+    alarm by its earliest matching hour/minute, ties keep list order) — sorted on
+    load and when a card is collapsed, never while typing, so a card doesn't jump
+    away mid-edit and a new alarm stays last until collapsed. Clay's global
+    `label` CSS adds padding to any `<label>`, so custom chips/switches must
+    reset `padding`.
+  - **Vibration patterns** section (`vibeList`, `config_vibe_list.ts`, between
+    Tunes and Other): named custom vibration patterns, `VibeConfig` on the wire
+    (same record shape/tombstones as tunes; sent before tunes and alarms).
+  - **Built-ins and syntax help** (Tunes and Vibration patterns sections): the
+    watch's built-in presets (`SOUND_PRESETS`/`VIBE_PRESETS`) are listed
+    read-only above the user's own items, one line each — a plain-text label and
+    a readonly value field that selects all on tap, so it can be copied with the
+    system's own copy action (there is deliberately no Copy button) — and are
+    never part of the saved/pushed lists. The long pattern-syntax help
+    is a native `<details>` (collapsed by default) containing the watch's own help
+    text. Both come from `src/ts/pattern_help.ts` via the config items'
+    `builtins`/`help` props (read as `this.config` in the components, which can't
+    import); `tests/pattern_help.test.js` fails if they drift from `main.c`'s
+    preset tables or `resources/text/pattern_help_*.txt`.
   Known limitation: a Save from a page opened before a watch-side edit
   overwrites that item's fields with the page's older values.
 
@@ -260,7 +311,7 @@ AppMessage keys (`package.json`'s `pebble.messageKeys`, used as
 `MESSAGE_KEY_*` in C): `FirstDayOfWeek`, `AlarmVibePattern`,
 `DefaultSnoozeMinutes`, `DefaultSnoozeMax`, `AudioVolume`,
 `DefaultSoundEnabled`, `DefaultVibrationEnabled`, `DateFormat` — phone→watch
-only, all plain scalars, no array-type key; plus `AlarmConfig`/`TuneConfig` (list CStrings, appended last: 10045/10046). `DateFormat` was appended at the
+only, all plain scalars, no array-type key; plus `AlarmConfig`/`TuneConfig`/`VibeConfig` (list CStrings, both directions, appended near the end: 10045/10046/10047). `DateFormat` was appended at the
 very end of the declared list (after every `Test*` key) rather than next to
 `FirstDayOfWeek` despite being thematically related, per the "IDs are
 `10000 + declaration index`, never insert" rule below — it landed at 10034.
@@ -1076,10 +1127,11 @@ feature — see git history if curious):
     (rows 1..`VIBE_PRESET_COUNT` into the `VIBE_PRESETS[]` table, below)
     still commits as `vibe_pattern_kind=1` with that preset's exact bytes
     rather than a separate stored index, which `vibe_preset_match()`
-    re-matches by byte-identity to display it by name — **only Vibe's own
-    Custom row (the one past the presets) still opens the pattern-mode
-    keyboard pre-filled**, since reviewing/tweaking genuinely freehand
-    content before committing still makes sense there. Selecting a Sound
+    re-matches by byte-identity to display it by name. The Vibration picker is
+    laid out like the Tune picker: Off, presets, one row per library
+    vibration, "+ Custom" (creation wizard), Help — see "Custom-vibration
+    library" below (the old inline "Custom" row that opened the keyboard
+    pre-filled is gone). Selecting a Sound
     preset row (rows 1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]`
     table, below) sets `sound_pattern_kind=0`,
     `sound_preset=<that row's index>`, `sound_enabled=true`. `sound_preset`
@@ -1301,6 +1353,71 @@ feature — see git history if curious):
     library", applying is "I'm done"); since the tune's own row just
     disappeared from the picker, its selection is also reset to row 0
     ("Off") rather than risk pointing past the now-shorter row count.
+- **Persist key map** (watch storage; `alarm_store.h`, plus the keyboard's own
+  block): scalars 1-13, 14-16 (tune schema/count/next id), 17-19 (default
+  sound), 22 (armed wakeup), 23-25 (vibration schema/count/next id); alarms
+  100-115, alarm extensions 200-215, tunes 300-319, **the vendored keyboard's
+  settings block 400-411** (`MULTITAP_SETTINGS_BASE_KEY`, in this app's own
+  namespace — key wait time default 800 ms, auto-caps, extended characters,
+  theme; global to every keyboard in the app, edited via UP in any keyboard),
+  vibrations 500-519. An earlier revision put the vibration library at 400+i:
+  with a library entry at index 0 the keyboard read its blob as the "key wait
+  time" (150 ms), and saving keyboard settings overwrote library entries. Fixed by
+  moving the library to 500+; `store_load_vibes()` moves any entry still at the
+  old keys (recognised by their exact blob size) and `migrate_inline_vibes()`
+  recreates one the keyboard already overwrote from the alarm's retained inline
+  copy. Because the keyboard overwrote library slots with plain numbers (library
+  positions 1, 2, 4 and 11 -- its keys 400, 401, 403, 410), the move left blank
+  entries behind; `store_load_vibes()` therefore keeps only entries
+  `ac_custom_vibe_is_valid()` accepts (non-zero id, named, 1-8 sane segments, no
+  duplicate id), compacts them and rewrites the table at once. An entry the
+  keyboard overwrote is unrecoverable by itself; the alarm that used it gets a new
+  one ("<alarm> vibe") from its retained inline copy, and an entry no alarm used
+  is gone. Verified by reproducing the old layout on the emulator, changing the
+  keyboard's wait time/auto-caps, then installing the fixed build over it.
+  `tests/keys.test.js` and `_Static_assert`s in `alarm_store.c` keep every
+  range disjoint — add any new persist key to `alarm_store.h` and run it.
+- **Custom-vibration library** (vibration counterpart of the tune library;
+  `CustomVibe`/`MAX_CUSTOM_VIBES` 20, `alarm_calc.h`): named, reusable vibration
+  patterns an alarm references by id — a live reference, not a copy.
+  `Alarm.vibe_pattern_kind` now has three values: 0 = preset (`vibe_pattern`
+  index), 1 = inline bytes in `vibe_pattern_custom[]` (what a picked
+  Double/Short/Long preset is stored as, re-matched by `vibe_preset_match()`),
+  2 = **library** (`Alarm.custom_vibe_id`, appended at the end of the struct,
+  `STORE_SCHEMA` 21 — a pure append, zero-fills safely). The library lives in
+  `s_vibes[]`/`s_vibe_count` (`main.c`) with its own persisted table
+  (`store_load_vibes`/`store_save_vibes`/`store_alloc_vibe_id`, keys 23-25 and
+  500+i, `VIBE_STORE_SCHEMA`), like the tunes. `alarm_vibrate()`/
+  `alarm_vibe_duration_ms()` resolve kind 2 (a stale id falls through to the
+  preset). UI mirrors the Tune picker: library rows inlined in the Vibration
+  picker (`pattern_select_vibe_*` helpers), selecting one opens the "Custom
+  vibration" screen (Apply/Pattern/Name/Delete, `custom_vibe_*`), "+ Custom"
+  runs the pattern-keyboard -> name-keyboard wizard (`new_vibe_*`), Delete
+  reverts alarms using it to a preset (`revert_alarms_using_vibe`). Hand-typed
+  inline vibrations from before the library are moved into it at launch
+  (`migrate_inline_vibes()`: identical bytes share one entry, named
+  "<alarm name> vibe"; a preset-identical inline pattern is left alone; if the
+  library is full the alarm keeps its inline copy, which still plays). Synced
+  both ways like tunes: key `VibeConfig` (snapshot stage 1, before tunes and
+  alarms), and an alarm record carries two extra optional fields — field 15
+  `vibeId`, field 16 `vibePreset` (0-2) — so the page's per-alarm Vibration
+  select (Double/Short/Long + library vibrations) round-trips; a push only
+  rewrites the watch's stored vibration when it actually differs.
+  **Rule: never bump `VIBE_STORE_SCHEMA` (or `TUNE_STORE_SCHEMA`) without a
+  migration.** `store_load_vibes()`/`store_load_tunes()` wipe the whole library on
+  ANY schema mismatch, and an alarm whose `custom_vibe_id`/`custom_tune_id` no
+  longer resolves silently falls back to a preset — the pattern is lost (the
+  alarm's schedule is unaffected). A library layout change must instead keep old
+  data readable, the way `store_load()` does for alarms (read the old size into a
+  zeroed current-sized buffer; only a genuine hard break may reset, and then say
+  so here). Deliberately NOT done: playing a migrated alarm's retained inline copy
+  (`vibe_pattern_custom[]`, left in place by `migrate_inline_vibes()`) when the
+  library entry is missing — only migrated alarms have one, and it goes stale as
+  soon as the library entry is edited, so it would be a partial, misleading
+  safety net. Verified the schema 20 -> 21 upgrade over real persisted data
+  (alarms, a tune, inline vibrations; installed the new build over an old
+  test-hook build without wiping): all alarms/tune survived, identical inline
+  patterns became one shared entry, a preset-identical one was left alone.
 - **Custom sound/vibe patterns are a genuine ABC-notation subset** (reworked
   by the "ABC notation" commit, `STORE_SCHEMA` 20 -- see below; this replaced
   an earlier, ad-hoc "digit = fixed 100ms unit, `-` = break" grammar with
@@ -1404,13 +1521,10 @@ feature — see git history if curious):
     migration exactly like every prior signal-encoding bump (12-19) did --
     it does **not** wipe the alarm's schedule (time/repeat/cron), per the
     EXTENSION-blob-vs-MAIN-blob split described above (`ext_schema_is_
-    appendable()`). Selecting vibe's Custom row (sound no longer reaches
-    the keyboard at all) and submitting an unparseable pattern does NOT
-    touch the alarm's persisted fields at all -- `pattern_custom_done()`
-    just re-opens the pattern-select picker with its Custom row reading
-    "invalid" (a transient, unpersisted UI flag) instead of a formatted
-    pattern; a valid submission commits and exits straight back to the
-    Signal menu, skipping the picker. Applied at ring
+    appendable()`). An unparseable pattern typed in
+    the library wizards (`new_vibe_pattern_done`/`custom_vibe_pattern_done`, and
+    the tune equivalents) never touches persisted state: the same keyboard is
+    re-shown with the text still in it. Applied at ring
   time by `alarm_vibrate()`/`alarm_play_audio()` (`main.c`): sound builds
   one `SpeakerNote` per segment directly (each carries its own explicit
   duration/pitch, so consecutive on-beats need no special handling — they
@@ -1630,6 +1744,18 @@ feature — see git history if curious):
 
 ## Tests
 
+- **`tests/keys.test.js`** — key namespaces: every watch persist key (scalars,
+  alarm/tune/vibration ranges, the keyboard's settings block) is unique and
+  disjoint, no `persist_*()` call uses a literal key, and the AppMessage keys are
+  unique with ids = 10000 + declaration index (checked against the generated
+  `message_keys.auto.c` after a `pebble build`), every key the C code or the phone
+  JS uses is declared, Clay-only settings never share a wire key's name, and the
+  ids documented in this file match the real ones.
+- **`tests/pattern_parity.test.js`** — builds the real watch parser
+  (`tests/pattern_parity.c` + `alarm_calc.c`, needs `gcc`) and checks the phone's
+  tune/vibration pattern validators (`list_config.ts`) agree with it on a
+  hand-written plus a seeded-random corpus (it caught the phone accepting tabs as
+  separators; the watch splits on spaces only).
 - **`tests/config_page/`** — Playwright (headless Chromium) tests of the
   phone config page: `harness.js` loads the REAL bundled phone JS
   (`build/pebble-js-app.js`) into a Node `vm` with a stubbed `Pebble`/

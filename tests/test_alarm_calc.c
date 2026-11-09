@@ -1020,6 +1020,31 @@ static void test_cron_last_match_in_range(void) {
   (void)min_all;
 }
 
+
+// A library slot can be zeroed, missing or overwritten by something else (an
+// old key collision with the keyboard's settings): the loader must drop those
+// instead of listing a blank vibration.
+static void test_custom_vibe_validity(void) {
+  CustomVibe v;
+  memset(&v, 0, sizeof(v));
+  assert(!ac_custom_vibe_is_valid(&v));                     // fully zeroed slot
+  v.id = 7; strcpy(v.name, "Heartbeat"); v.pattern_len = 3;
+  uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], n;
+  assert(ac_vibe_pattern_parse("1 z/2 1", AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &n) && n == 3);
+  memcpy(v.pattern, parsed, n);
+  assert(ac_custom_vibe_is_valid(&v));                      // intact entry
+  CustomVibe bad = v; bad.id = 0;                      assert(!ac_custom_vibe_is_valid(&bad));   // no id
+  bad = v; bad.name[0] = '\0';                          assert(!ac_custom_vibe_is_valid(&bad));   // no name
+  bad = v; memset(bad.name, 'x', sizeof(bad.name));    assert(!ac_custom_vibe_is_valid(&bad));   // name not terminated
+  bad = v; bad.pattern_len = 0;                        assert(!ac_custom_vibe_is_valid(&bad));   // empty pattern
+  bad = v; bad.pattern_len = AC_VIBE_PATTERN_MAX_SEGMENTS + 1; assert(!ac_custom_vibe_is_valid(&bad));   // too long
+  bad = v; bad.pattern[1] |= 0x40;                     assert(!ac_custom_vibe_is_valid(&bad));   // impossible packed byte
+  // a 4-byte int (the keyboard's key wait time) written over the slot's first bytes
+  bad = v; int wait_ms = 800; memcpy(&bad, &wait_ms, sizeof(wait_ms));   // id = 800: still "valid"?
+  assert(ac_custom_vibe_is_valid(&bad));                    // id alone can't be told apart -- name/pattern still intact
+  CustomVibe all_ff; memset(&all_ff, 0xFF, sizeof(all_ff)); assert(!ac_custom_vibe_is_valid(&all_ff));
+}
+
 int main(void) {
   test_disabled();
   test_one_time_today();
@@ -1105,6 +1130,7 @@ int main(void) {
   test_sound_pattern_parse_max_segments_boundary();
   test_sound_pattern_format_round_trip();
   test_sound_pattern_format_empty();
+  test_custom_vibe_validity();
   printf("all alarm_calc tests passed\n");
   return 0;
 }

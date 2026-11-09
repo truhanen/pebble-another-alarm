@@ -50,7 +50,7 @@ test('alarmsToString basic + cron, tune id validation, separators scrubbed', () 
   const s = L.alarmsToString([base, cron, badCron], [123]);
   const recs = s.split('\x1e');
   assert.strictEqual(recs.length, 2);
-  assert.strictEqual(recs[0], ['70000', 'A B', '1', '0', '7', '5', '62', '*', '10', '3', '1', '0', '123', '1', '1'].join('\x1f'));
+  assert.strictEqual(recs[0], ['70000', 'A B', '1', '0', '7', '5', '62', '*', '10', '3', '1', '0', '123', '1', '1', '0', '0'].join('\x1f'));
   assert.strictEqual(recs[1].split('\x1f')[3], '1');
   assert.strictEqual(recs[1].split('\x1f')[7], '*/20 9-17 * * * *');
   assert.strictEqual(L.alarmsToString([base], []).split('\x1f')[12], '0');
@@ -72,9 +72,10 @@ test('tombstones: bare-id records, only for ids no longer present', () => {
 
 test('parseAlarms/parseTunes round-trip what the phone sends', () => {
   const base = { id: 3, name: 'W', enabled: false, isCron: false, hour: 6, minute: 30, repeatDays: 62, cron: '',
-    snoozeMinutes: 5, snoozeMax: 0, vibration: false, sound: true, tuneId: 4, autoDismiss: 2, increasingVolume: true };
+    snoozeMinutes: 5, snoozeMax: 0, vibration: false, sound: true, tuneId: 4, autoDismiss: 2, increasingVolume: true,
+    vibeId: 9, vibePreset: 2 };
   const cron = Object.assign({}, base, { id: 8, isCron: true, cron: '*/20 9-17' });
-  const str = L.alarmsToString([base, cron], [4]);
+  const str = L.alarmsToString([base, cron], [4], [], [9]);
   const back = L.parseAlarms(str);
   assert.strictEqual(back.length, 2);
   // A basic alarm has no cron text of its own; the page seeds a default.
@@ -83,6 +84,25 @@ test('parseAlarms/parseTunes round-trip what the phone sends', () => {
   assert.strictEqual(back[1].cron, '*/20 9-17 * * * *');
   const tunes = [{ id: 4, name: 'T', pattern: "^C,, z/2 E'3" }];
   assert.deepStrictEqual(L.parseTunes(L.tunesToString(tunes)), tunes);
+  const vibes = [{ id: 9, name: 'V', pattern: '2 z/2 1/2' }];
+  assert.deepStrictEqual(L.parseVibes(L.vibesToString(vibes)), vibes);
+  assert.strictEqual(L.vibesToString([{ id: 1, name: 'x', pattern: 'C' }]), '', 'invalid vibration pattern dropped');
+  assert.strictEqual(L.vibesToString([], [5]), '5', 'tombstone');
   assert.deepStrictEqual(L.parseAlarms(''), []);
   assert.deepStrictEqual(L.parseAlarms('7'), [], 'tombstone-only records are not alarms');
+});
+
+test('cronNext finds the next matching minute', () => {
+  // Monday 2026-11-09 10:05 local
+  const now = new Date(2026, 10, 9, 10, 5, 0);
+  const fmt = (d) => d && `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  assert.strictEqual(fmt(L.cronNext('*/20 9-17 * * 1-5', now)), '2026-11-9 10:20');
+  assert.strictEqual(fmt(L.cronNext('0 7 * * *', now)), '2026-11-10 7:00');
+  assert.strictEqual(fmt(L.cronNext('5 10 * * *', now)), '2026-11-10 10:05', 'strictly after now');
+  assert.strictEqual(fmt(L.cronNext('0 8 * * 0', now)), '2026-11-15 8:00', 'Sunday');
+  assert.strictEqual(fmt(L.cronNext('0 12 1 * *', now)), '2026-12-1 12:00', 'day of month');
+  assert.strictEqual(fmt(L.cronNext('0 0 * 2 *', now)), '2027-2-1 0:00', 'month');
+  assert.strictEqual(fmt(L.cronNext('0 9 * * 1 */2', now)), '2026-11-16 9:00', 'biweekly skips this even ISO week');
+  assert.strictEqual(L.cronNext('0 0 30 2 *', now), null, 'Feb 30 never matches');
+  assert.strictEqual(L.cronNext('nope', now), null);
 });

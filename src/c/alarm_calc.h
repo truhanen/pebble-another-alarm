@@ -325,6 +325,15 @@ typedef struct {
   // through). 0 zero-fills correctly on migration (same "already the safe
   // default" category as vibe_pattern's own index).
   uint8_t sound_preset;
+
+  // Vibration library reference (see CustomVibe below) -- valid iff
+  // vibe_pattern_kind == 2 ("Library"), a third value alongside 0 (Preset,
+  // use vibe_pattern) and 1 (inline bytes, use vibe_pattern_custom -- what a
+  // picked Double/Short/Long preset is stored as). The library is the
+  // vibration counterpart of the custom-tune library: a live reference, not a
+  // copy. 0 = no reference. Appended at the very end (STORE_SCHEMA 21), zero-
+  // fills correctly on migration.
+  uint32_t custom_vibe_id;
 } Alarm;
 
 // A named, separately-persisted sound pattern any alarm can reference by
@@ -344,6 +353,29 @@ typedef struct {
   uint8_t pattern[AC_SOUND_PATTERN_MAX_SEGMENTS];       // bit7=is_rest, bits0-6=packed N/D duration ratio (AC_PATTERN_DURATION_MASK)
   uint8_t pattern_note[AC_SOUND_PATTERN_MAX_SEGMENTS];  // (octave*AC_NOTE_COUNT+note_index)*AC_NOTE_ACCIDENTAL_COUNT+accidental
 } CustomTune;
+
+// A named, separately-persisted vibration pattern any alarm can reference by
+// id (Alarm.custom_vibe_id, when Alarm.vibe_pattern_kind == 2) -- the
+// vibration counterpart of CustomTune: same live-reference semantics (edits/
+// deletes affect every alarm pointing at it) and the same independent
+// persistence (VIBE_STORE_SCHEMA, alarm_store.h), but the pattern is
+// ac_vibe_pattern_parse's grammar (no pitch, at most AC_VIBE_PATTERN_MAX_
+// SEGMENTS segments), so there is no parallel note array.
+#define MAX_CUSTOM_VIBES 20
+
+typedef struct {
+  uint32_t id;              // stable, allocated once (store_alloc_vibe_id), never reused; 0 = unused slot
+  char name[NAME_LEN + 1];  // always non-empty for a saved vibration
+  uint8_t pattern_len;
+  uint8_t pattern[AC_VIBE_PATTERN_MAX_SEGMENTS];   // bit7=is_rest, bits0-6=packed N/D duration ratio (AC_PATTERN_DURATION_MASK)
+} CustomVibe;
+
+// True if `v` looks like a real, intact library entry: non-zero id, a name that
+// is non-empty and NUL-terminated within its buffer, a pattern of 1..
+// AC_VIBE_PATTERN_MAX_SEGMENTS segments, each a validly packed byte (bit 6 is
+// never used by the (N-1)*8+(D-1) ratio encoding). Used by the store loader to
+// drop zeroed or overwritten slots instead of listing them as blank vibrations.
+bool ac_custom_vibe_is_valid(const CustomVibe *v);
 
 // Day offset (0..14) from `now` to alarm `a`'s next occurrence, at its own
 // hour:minute. Returns -1 if `a` is disabled. Not repeating: offset 0 (today,
