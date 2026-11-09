@@ -45,11 +45,17 @@ TAP select
 SLEEP 1
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_empty
 
 # G (GHI key, one tap)
 TOUCH 33 113 0.1
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT after_g
 
 # y (WXYZ key, three taps, 0.3s apart - see this file's header note)
@@ -59,11 +65,17 @@ TOUCH 165 158 0.1
 SLEEP 0.3
 TOUCH 165 158 0.1
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT after_gy
 
 # m (MNO key, one tap - a different key, so it commits the pending "y")
 TOUCH 165 113 0.1
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT after_gym
 
 # Submit via the SELECT button (multitap_keyboard_submit).

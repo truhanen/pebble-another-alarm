@@ -23,11 +23,12 @@ platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
 [wizard_create_basic_alarm.seq:35] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
 [wizard_create_basic_alarm.seq:37] SLEEP 5
-[wizard_create_basic_alarm.seq:38] SCREENSHOT wizard_label_keyboard
+[wizard_create_basic_alarm.seq:40] SLEEP 5
+[wizard_create_basic_alarm.seq:41] SCREENSHOT wizard_label_keyboard
 + pebble screenshot --emulator emery --vnc --no-open 03_wizard_label_keyboard.png
-[wizard_create_basic_alarm.seq:42] TAP select
+[wizard_create_basic_alarm.seq:45] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[wizard_create_basic_alarm.seq:43] SLEEP 1
-[wizard_create_basic_alarm.seq:44] SCREENSHOT alarm_created --mask-rect 70x25+0+203
+[wizard_create_basic_alarm.seq:46] SLEEP 1
+[wizard_create_basic_alarm.seq:47] SCREENSHOT alarm_created --mask-rect 70x25+0+203
 + pebble screenshot --emulator emery --vnc --no-open 04_alarm_created.png
 sequence PASSED - log: run.log

@@ -7,80 +7,129 @@ platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
 [wipe_and_prep.seq:42] INSTALL
 + pebble install --emulator emery --vnc
 [wipe_and_prep.seq:43] SLEEP 3
-[signal_vibe_custom_pattern_entry.seq:21] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+[signal_vibe_custom_pattern_entry.seq:29] APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
 + pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
-[signal_vibe_custom_pattern_entry.seq:22] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:24] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:25] LONGPRESS select
-+ pebble emu-button --emulator emery --vnc click select --duration 700
-[signal_vibe_custom_pattern_entry.seq:26] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:27] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:28] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:29] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:30] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:31] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:30] SLEEP 1
 [signal_vibe_custom_pattern_entry.seq:32] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:33] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:34] TAP select
-+ pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_custom_pattern_entry.seq:35] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:36] TAP select
-+ pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_custom_pattern_entry.seq:37] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:33] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_vibe_custom_pattern_entry.seq:34] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:35] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:36] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:37] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:38] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
 [signal_vibe_custom_pattern_entry.seq:39] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
 [signal_vibe_custom_pattern_entry.seq:40] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:41] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:42] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:43] SCREENSHOT vibe_picker_custom_highlighted
-+ pebble screenshot --emulator emery --vnc --no-open 01_vibe_picker_custom_highlighted.png
+[signal_vibe_custom_pattern_entry.seq:41] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:42] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_vibe_custom_pattern_entry.seq:43] SLEEP 1
 [signal_vibe_custom_pattern_entry.seq:44] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
 [signal_vibe_custom_pattern_entry.seq:45] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:46] SCREENSHOT pattern_keyboard_empty_custom
-+ pebble screenshot --emulator emery --vnc --no-open 02_pattern_keyboard_empty_custom.png
-[signal_vibe_custom_pattern_entry.seq:49] TAP back
-+ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:47] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:48] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:49] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
 [signal_vibe_custom_pattern_entry.seq:50] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:51] SCREENSHOT signal_menu_unchanged_after_cancel --mask-rect 70x25+0+203
-+ pebble screenshot --emulator emery --vnc --no-open 03_signal_menu_unchanged_after_cancel.png
-[signal_vibe_custom_pattern_entry.seq:57] TAP back
-+ pebble emu-button --emulator emery --vnc click back --duration 150
-[signal_vibe_custom_pattern_entry.seq:58] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:59] TAP back
-+ pebble emu-button --emulator emery --vnc click back --duration 150
-[signal_vibe_custom_pattern_entry.seq:60] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:77] APPMSG --int 10009=0 10018=1 10038=1 --string 10039="3 z 1"
-+ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10018=1 10038=1 --string 10039=3 z 1
-[signal_vibe_custom_pattern_entry.seq:78] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:79] LONGPRESS select
-+ pebble emu-button --emulator emery --vnc click select --duration 700
-[signal_vibe_custom_pattern_entry.seq:80] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:81] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:82] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:83] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:84] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:85] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:86] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[signal_vibe_custom_pattern_entry.seq:87] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:88] TAP select
+[signal_vibe_custom_pattern_entry.seq:51] SCREENSHOT vibe_picker_custom_highlighted
++ pebble screenshot --emulator emery --vnc --no-open 01_vibe_picker_custom_highlighted.png
+[signal_vibe_custom_pattern_entry.seq:52] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[signal_vibe_custom_pattern_entry.seq:89] SLEEP 1
-[signal_vibe_custom_pattern_entry.seq:90] SCREENSHOT signal_menu_custom_pattern_applied --mask-rect 70x25+0+203
-+ pebble screenshot --emulator emery --vnc --no-open 04_signal_menu_custom_pattern_applied.png
+[signal_vibe_custom_pattern_entry.seq:53] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:56] SLEEP 5
+[signal_vibe_custom_pattern_entry.seq:57] SCREENSHOT pattern_keyboard_empty_custom
++ pebble screenshot --emulator emery --vnc --no-open 02_pattern_keyboard_empty_custom.png
+[signal_vibe_custom_pattern_entry.seq:61] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:62] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:63] SCREENSHOT vibe_picker_after_cancel
++ pebble screenshot --emulator emery --vnc --no-open 03_vibe_picker_after_cancel.png
+[signal_vibe_custom_pattern_entry.seq:66] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:67] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:68] SCREENSHOT signal_menu_unchanged_after_cancel --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 04_signal_menu_unchanged_after_cancel.png
+[signal_vibe_custom_pattern_entry.seq:73] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:74] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:75] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:76] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:83] APPMSG --int 10009=0 10018=1 10038=1 --string 10039="3 z 1"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10018=1 10038=1 --string 10039=3 z 1
+[signal_vibe_custom_pattern_entry.seq:84] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:85] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_vibe_custom_pattern_entry.seq:86] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:87] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:88] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:89] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:90] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:91] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:92] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:93] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:94] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_vibe_custom_pattern_entry.seq:95] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:96] SCREENSHOT signal_menu_custom_pattern_applied --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 05_signal_menu_custom_pattern_applied.png
+[signal_vibe_custom_pattern_entry.seq:101] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:102] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:103] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[signal_vibe_custom_pattern_entry.seq:104] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:105] APPMSG --int 10048=1 10049=0 --string 10050=Heartbeat "10051=1 z/2 1"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10048=1 10049=0 --string 10050=Heartbeat 10051=1 z/2 1
+[signal_vibe_custom_pattern_entry.seq:106] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:107] APPMSG --int 10009=0 10052=1
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 10052=1
+[signal_vibe_custom_pattern_entry.seq:108] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:109] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[signal_vibe_custom_pattern_entry.seq:110] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:111] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:112] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:113] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:114] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:115] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:116] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[signal_vibe_custom_pattern_entry.seq:117] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:118] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_vibe_custom_pattern_entry.seq:119] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:120] SCREENSHOT signal_menu_library_vibration --mask-rect 70x25+0+203
++ pebble screenshot --emulator emery --vnc --no-open 06_signal_menu_library_vibration.png
+[signal_vibe_custom_pattern_entry.seq:123] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_vibe_custom_pattern_entry.seq:124] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:125] SCREENSHOT vibe_picker_library_row_selected
++ pebble screenshot --emulator emery --vnc --no-open 07_vibe_picker_library_row_selected.png
+[signal_vibe_custom_pattern_entry.seq:128] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[signal_vibe_custom_pattern_entry.seq:129] SLEEP 1
+[signal_vibe_custom_pattern_entry.seq:130] SCREENSHOT custom_vibration_screen
++ pebble screenshot --emulator emery --vnc --no-open 08_custom_vibration_screen.png
 sequence PASSED - log: run.log

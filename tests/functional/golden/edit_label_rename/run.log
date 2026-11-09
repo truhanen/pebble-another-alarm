@@ -23,22 +23,23 @@ platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
 [edit_label_rename.seq:24] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
 [edit_label_rename.seq:25] SLEEP 1
-[edit_label_rename.seq:26] SCREENSHOT label_keyboard_prefilled_wakeup
+[edit_label_rename.seq:28] SLEEP 5
+[edit_label_rename.seq:29] SCREENSHOT label_keyboard_prefilled_wakeup
 + pebble screenshot --emulator emery --vnc --no-open 01_label_keyboard_prefilled_wakeup.png
-[edit_label_rename.seq:27] TAP select
+[edit_label_rename.seq:30] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[edit_label_rename.seq:28] SLEEP 1
-[edit_label_rename.seq:29] SCREENSHOT edit_menu_label_unchanged --mask-rect 70x25+0+203
+[edit_label_rename.seq:31] SLEEP 1
+[edit_label_rename.seq:32] SCREENSHOT edit_menu_label_unchanged --mask-rect 70x25+0+203
 + pebble screenshot --emulator emery --vnc --no-open 02_edit_menu_label_unchanged.png
-[edit_label_rename.seq:35] TAP back
+[edit_label_rename.seq:38] TAP back
 + pebble emu-button --emulator emery --vnc click back --duration 150
-[edit_label_rename.seq:36] SLEEP 1
-[edit_label_rename.seq:37] APPMSG --int 10009=0 --string 10020=Gym
+[edit_label_rename.seq:39] SLEEP 1
+[edit_label_rename.seq:40] APPMSG --int 10009=0 --string 10020=Gym
 + pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10009=0 --string 10020=Gym
-[edit_label_rename.seq:38] SLEEP 1
-[edit_label_rename.seq:39] LONGPRESS select
+[edit_label_rename.seq:41] SLEEP 1
+[edit_label_rename.seq:42] LONGPRESS select
 + pebble emu-button --emulator emery --vnc click select --duration 700
-[edit_label_rename.seq:40] SLEEP 1
-[edit_label_rename.seq:41] SCREENSHOT edit_menu_label_renamed_to_gym --mask-rect 70x25+0+203
+[edit_label_rename.seq:43] SLEEP 1
+[edit_label_rename.seq:44] SCREENSHOT edit_menu_label_renamed_to_gym --mask-rect 70x25+0+203
 + pebble screenshot --emulator emery --vnc --no-open 03_edit_menu_label_renamed_to_gym.png
 sequence PASSED - log: run.log

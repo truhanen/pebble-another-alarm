@@ -39,6 +39,9 @@ TAP down
 SLEEP 1
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT minute_field_numeric_keyboard_prefilled
 TAP select
 SLEEP 1

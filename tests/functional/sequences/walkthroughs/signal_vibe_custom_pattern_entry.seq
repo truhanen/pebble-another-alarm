@@ -1,6 +1,14 @@
 # Partially live-verified 2026-10-04: BACK on the pattern keyboard cancels
 # without touching the alarm's persisted fields (confirmed - Signal still
-# showed "Off" both before and after the cancel). Submitting the keyboard's
+# showed "Off" both before and after the cancel).
+#
+# UPDATED with the custom-vibration library: the picker's last row before Help
+# is now "+ Custom" (starts the pattern -> name creation wizard), not an inline
+# "Custom" row, and the wizard is pushed ON TOP of the picker like the Tune
+# picker's "+ Custom tune" -- so BACK from its keyboard lands on the picker
+# (not Signal), and one more BACK reaches Signal. The second half of this file
+# covers a library vibration: the Signal row shows its name, the picker lands
+# on its row, and selecting that row opens the "Custom vibration" screen. Submitting the keyboard's
 # pre-filled, already-valid text via SELECT (multitap_keyboard_submit) is
 # the same submit mechanism verified end-to-end elsewhere (e.g.
 # wizard_create_basic_alarm.seq's label step) - not independently re-
@@ -43,37 +51,35 @@ SLEEP 1
 SCREENSHOT vibe_picker_custom_highlighted
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT pattern_keyboard_empty_custom
 
-# BACK cancels - no mutation, straight back to the picker/Signal chain.
+# BACK cancels the wizard - nothing is created. The picker stays underneath
+# (the wizard is pushed on top of it), so BACK lands on the picker.
+TAP back
+SLEEP 1
+SCREENSHOT vibe_picker_after_cancel
+
+# One more BACK leaves the picker for Signal, still unchanged.
 TAP back
 SLEEP 1
 SCREENSHOT signal_menu_unchanged_after_cancel --mask-rect 70x25+0+203
 
-# Seed a valid custom vibe pattern directly via the test hook (bypassing
-# TOUCH typing, per this file's own header note). Back out to the main
-# list first - see common/wipe_and_prep.seq's own note on reload_ui() not
-# refreshing an already-open sub-window - then reopen Signal fresh.
+# Back out to the main list first - see common/wipe_and_prep.seq's own note on
+# reload_ui() not refreshing an already-open sub-window - then seed state
+# directly via the test hooks (typing on this device is touch-only).
 TAP back
 SLEEP 1
 TAP back
 SLEEP 1
-# TestAlarmVibrationEnabled=1 is also needed here - signal_draw_row shows
-# "Off" whenever vibration_enabled is false regardless of the underlying
-# pattern (CLAUDE.md's Signal submenu design point), and it's still false
-# from this file's own earlier "Off" row selection.
-#
-# Pattern syntax note, live-verified the hard way: "2 1- 2 1- 2" is the OLD
-# pre-STORE_SCHEMA-20 digit+dash grammar (CLAUDE.md's own Signal-submenu
-# section still has this stale example) - under the CURRENT ABC-notation
-# grammar "1-" isn't a valid token (rest is "z", not a trailing "-"), so it
-# fails to parse and ac_vibe_pattern_parse leaves the field UNCHANGED
-# (logged as a warning, not an error) rather than clearing it - confirmed
-# empirically: sending this bad string left the alarm's pattern as
-# whatever it was already (byte-identical to the "Short" preset from
-# earlier in this file, so Signal kept reading "Short", not "(custom)").
-# "3 z 1" below is valid current syntax and doesn't match any VIBE_PRESETS
-# entry, so it reads back as a genuine custom pattern.
+
+# 1. A legacy INLINE custom pattern (vibe_pattern_kind 1, bytes matching no
+# preset): Signal reads "Custom". TestAlarmVibrationEnabled=1 is needed -
+# signal_draw_row shows "Off" whenever vibration_enabled is false regardless of
+# the underlying pattern, and it's still false from the earlier "Off" row.
+# "3 z 1" is valid current ABC syntax and matches no VIBE_PRESETS entry.
 APPMSG --int 10009=0 10018=1 10038=1 --string 10039="3 z 1"
 SLEEP 1
 LONGPRESS select
@@ -88,3 +94,37 @@ SLEEP 1
 TAP select
 SLEEP 1
 SCREENSHOT signal_menu_custom_pattern_applied --mask-rect 70x25+0+203
+
+# 2. A LIBRARY vibration: create one and link the alarm to it (the first
+# library id on a freshly wiped emulator is 1). Back out to the main list again
+# before reopening Signal.
+TAP back
+SLEEP 1
+TAP back
+SLEEP 1
+APPMSG --int 10048=1 10049=0 --string 10050=Heartbeat "10051=1 z/2 1"
+SLEEP 1
+APPMSG --int 10009=0 10052=1
+SLEEP 1
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT signal_menu_library_vibration --mask-rect 70x25+0+203
+
+# The picker opens ON the library vibration's own row (name + its pattern).
+TAP select
+SLEEP 1
+SCREENSHOT vibe_picker_library_row_selected
+
+# Selecting it opens the "Custom vibration" screen (Apply/Pattern/Name/Delete).
+TAP select
+SLEEP 1
+SCREENSHOT custom_vibration_screen

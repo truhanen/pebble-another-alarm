@@ -1,0 +1,86 @@
+# Deleting a library vibration referenced by two alarms (via the "Custom
+# vibration" screen's Delete row -> confirm) pops only ONE window back to the
+# Vibration picker (not all the way to Signal, unlike Apply), resets the
+# picker's own selection to row 0 ("Off") since the deleted row vanished, and
+# reverts BOTH alarms to a preset (their vibe_pattern index, 0 = "Double", is
+# untouched; vibration itself stays on). The vibration counterpart of
+# tune_delete_reverts_alarms.seq.
+#
+# Vibration is the FIRST row of the Signal menu (Tune is the second), so
+# selecting it from Signal opens the picker directly. A library vibration
+# created on a freshly wiped emulator gets id 1, which TestAlarmVibeId links.
+#
+# Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
+# TestAlarmMinute=10011, TestAlarmName=10020, TestClearVibes=10048,
+# TestVibeIndex=10049, TestVibeName=10050, TestVibePattern=10051,
+# TestAlarmVibeId=10052
+IMPORT ../common/wipe_and_prep.seq
+APPMSG --int 10008=1 10009=0 10010=7 10011=0 --string 10020=Wakeup
+SLEEP 1
+APPMSG --int 10048=1 10049=0 --string 10050=Heartbeat "10051=1 z/2 1"
+SLEEP 1
+APPMSG --int 10009=0 10052=1
+SLEEP 1
+APPMSG --int 10009=1 10010=8 10011=0 10052=1 --string 10020=Backup
+SLEEP 1
+
+# Wakeup (row 1 on the main list) first: edit menu -> Signal (6 downs).
+TAP down
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT wakeup_signal_shows_heartbeat --mask-rect 70x25+0+203
+
+# The picker opens ON the library vibration's own row.
+TAP select
+SLEEP 1
+SCREENSHOT vibe_picker_heartbeat_selected
+
+# Select it -> "Custom vibration" screen; move to Delete (3 downs) and confirm.
+TAP select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+SLEEP 1
+SCREENSHOT custom_vibration_screen_delete_selected
+TAP select
+SLEEP 1
+SCREENSHOT confirm_delete_cancel_prompt
+TAP select
+SLEEP 1
+SCREENSHOT vibe_picker_off_selected_heartbeat_gone
+
+# Pops back to Signal - still WAKEUP's own Signal menu.
+TAP back
+SLEEP 1
+SCREENSHOT wakeup_signal_reverted_to_double --mask-rect 70x25+0+203
+
+# Back out to the main list (Signal -> edit menu -> main list), then DOWN to
+# Backup (row 2) and open its Signal menu: it was reverted too.
+TAP back
+SLEEP 1
+TAP back
+SLEEP 1
+TAP down
+SLEEP 1
+LONGPRESS select
+SLEEP 1
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+TAP down
+SLEEP 1
+TAP select
+SLEEP 1
+SCREENSHOT backup_signal_reverted_to_double --mask-rect 70x25+0+203

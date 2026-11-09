@@ -13,6 +13,9 @@ SLEEP 1
 SCREENSHOT cron_chord_defaults --mask-rect 70x25+0+203
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_after_cron_apply
 TAP select
 SLEEP 1

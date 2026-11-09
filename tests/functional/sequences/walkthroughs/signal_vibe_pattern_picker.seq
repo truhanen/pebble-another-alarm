@@ -9,9 +9,11 @@
 # below". Only vibe's own "Custom" row still opens the keyboard
 # pre-filled. This sequence reflects the real, current behavior.
 #
-# Row order: Off(0) Double(1) Short(2) Long(3) Custom(4) "Custom pattern
-# help"(5) - the trailing help row's label is "Custom pattern help", not a
-# bare "Help".
+# Row order: Off(0) Double(1) Short(2) Long(3) then one row per library vibration
+# (none here), "+ Custom" and "Custom vibration help". UPDATED with the
+# custom-vibration library: "+ Custom" now starts the pattern -> name creation
+# wizard (an EMPTY pattern keyboard), instead of the old inline "Custom" row that
+# opened the keyboard pre-filled with the stored pattern.
 #
 # Keys: TestClearAlarms=10008, TestAlarmIndex=10009, TestAlarmHour=10010,
 # TestAlarmMinute=10011, TestAlarmName=10020
@@ -59,7 +61,10 @@ SLEEP 1
 TAP down
 TAP down
 SLEEP 1
-SCREENSHOT vibe_picker_custom_highlighted
+SCREENSHOT vibe_picker_new_custom_highlighted
 TAP select
 SLEEP 1
-SCREENSHOT pattern_keyboard_prefilled_with_2
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
+SCREENSHOT pattern_keyboard_empty_new_vibration

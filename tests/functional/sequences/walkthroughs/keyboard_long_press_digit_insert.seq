@@ -49,11 +49,17 @@ TAP down
 SLEEP 1
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT pattern_keyboard_empty
 
 # A plain tap on "C" types the letter "C".
 TOUCH 33 68 0.1
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT after_plain_tap_c
 
 # A long-press (hold_s > the widget's own long-press threshold) on the
@@ -61,4 +67,7 @@ SCREENSHOT after_plain_tap_c
 # key's tap-time glyph is.
 TOUCH 33 68 1.0
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT after_long_press_inserts_digit_1

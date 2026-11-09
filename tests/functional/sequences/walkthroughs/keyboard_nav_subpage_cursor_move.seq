@@ -35,16 +35,28 @@ SLEEP 1
 TAP select
 # Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
 SLEEP 5
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_alpha_page_prefilled
 
 TAP down
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_numbers_page
 TAP down
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_symbols_page
 TAP down
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT label_keyboard_nav_page_arrow_keys
 
 # Move the cursor left 2 characters (from after "Wakeup" to between "ak"
@@ -55,12 +67,18 @@ TOUCH 33 113 0.1
 SLEEP 1
 # Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
 SLEEP 5
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT cursor_moved_left_2
 TAP down
 SLEEP 1
 TOUCH 99 68 0.1
 SLEEP 1
 # Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
+SLEEP 5
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
 SLEEP 5
 SCREENSHOT a_inserted_mid_string
 TAP select

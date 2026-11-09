@@ -56,11 +56,17 @@ SLEEP 1
 SCREENSHOT tune_picker_plus_custom_selected
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT pattern_keyboard_empty
 
 # Submitting empty re-shows the same keyboard rather than accepting it.
 TAP select
 SLEEP 1
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT pattern_keyboard_still_showing_after_empty_submit
 
 # BACK aborts the whole wizard - back to the Tune picker, nothing created.

@@ -57,82 +57,84 @@ platform=emery vnc=1 app_uuid=e3abb208-0d25-43eb-b6b5-c9d8abde0159
 [tune_create_via_wizard.seq:57] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
 [tune_create_via_wizard.seq:58] SLEEP 1
-[tune_create_via_wizard.seq:59] SCREENSHOT pattern_keyboard_empty
+[tune_create_via_wizard.seq:61] SLEEP 5
+[tune_create_via_wizard.seq:62] SCREENSHOT pattern_keyboard_empty
 + pebble screenshot --emulator emery --vnc --no-open 02_pattern_keyboard_empty.png
-[tune_create_via_wizard.seq:62] TAP select
+[tune_create_via_wizard.seq:65] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[tune_create_via_wizard.seq:63] SLEEP 1
-[tune_create_via_wizard.seq:64] SCREENSHOT pattern_keyboard_still_showing_after_empty_submit
+[tune_create_via_wizard.seq:66] SLEEP 1
+[tune_create_via_wizard.seq:69] SLEEP 5
+[tune_create_via_wizard.seq:70] SCREENSHOT pattern_keyboard_still_showing_after_empty_submit
 + pebble screenshot --emulator emery --vnc --no-open 03_pattern_keyboard_still_showing_after_empty_submit.png
-[tune_create_via_wizard.seq:67] TAP back
+[tune_create_via_wizard.seq:73] TAP back
 + pebble emu-button --emulator emery --vnc click back --duration 150
-[tune_create_via_wizard.seq:68] SLEEP 1
-[tune_create_via_wizard.seq:69] SCREENSHOT tune_picker_unchanged_after_cancel
+[tune_create_via_wizard.seq:74] SLEEP 1
+[tune_create_via_wizard.seq:75] SCREENSHOT tune_picker_unchanged_after_cancel
 + pebble screenshot --emulator emery --vnc --no-open 04_tune_picker_unchanged_after_cancel.png
-[tune_create_via_wizard.seq:76] TAP back
+[tune_create_via_wizard.seq:82] TAP back
 + pebble emu-button --emulator emery --vnc click back --duration 150
-[tune_create_via_wizard.seq:77] SLEEP 1
-[tune_create_via_wizard.seq:78] TAP back
-+ pebble emu-button --emulator emery --vnc click back --duration 150
-[tune_create_via_wizard.seq:79] SLEEP 1
-[tune_create_via_wizard.seq:80] TAP back
-+ pebble emu-button --emulator emery --vnc click back --duration 150
-[tune_create_via_wizard.seq:81] SLEEP 1
-[tune_create_via_wizard.seq:82] APPMSG --int 10040=1 10041=0 --string 10042=Chime 10043="C z E z G"
-+ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10040=1 10041=0 --string 10042=Chime 10043=C z E z G
 [tune_create_via_wizard.seq:83] SLEEP 1
-[tune_create_via_wizard.seq:84] LONGPRESS select
-+ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_create_via_wizard.seq:84] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
 [tune_create_via_wizard.seq:85] SLEEP 1
-[tune_create_via_wizard.seq:86] TAP down
+[tune_create_via_wizard.seq:86] TAP back
++ pebble emu-button --emulator emery --vnc click back --duration 150
+[tune_create_via_wizard.seq:87] SLEEP 1
+[tune_create_via_wizard.seq:88] APPMSG --int 10040=1 10041=0 --string 10042=Chime 10043="C z E z G"
++ pebble send-app-message --emulator emery --vnc --app-uuid e3abb208-0d25-43eb-b6b5-c9d8abde0159 --int 10040=1 10041=0 --string 10042=Chime 10043=C z E z G
+[tune_create_via_wizard.seq:89] SLEEP 1
+[tune_create_via_wizard.seq:90] LONGPRESS select
++ pebble emu-button --emulator emery --vnc click select --duration 700
+[tune_create_via_wizard.seq:91] SLEEP 1
+[tune_create_via_wizard.seq:92] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:87] TAP down
+[tune_create_via_wizard.seq:93] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:88] TAP down
+[tune_create_via_wizard.seq:94] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:89] TAP down
+[tune_create_via_wizard.seq:95] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:90] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:91] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:92] SLEEP 1
-[tune_create_via_wizard.seq:93] TAP select
-+ pebble emu-button --emulator emery --vnc click select --duration 150
-[tune_create_via_wizard.seq:94] SLEEP 1
 [tune_create_via_wizard.seq:96] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:97] SLEEP 1
-[tune_create_via_wizard.seq:98] TAP select
+[tune_create_via_wizard.seq:97] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:98] SLEEP 1
+[tune_create_via_wizard.seq:99] TAP select
 + pebble emu-button --emulator emery --vnc click select --duration 150
-[tune_create_via_wizard.seq:99] SLEEP 1
-[tune_create_via_wizard.seq:100] SCREENSHOT tune_picker_triple_still_default
+[tune_create_via_wizard.seq:100] SLEEP 1
+[tune_create_via_wizard.seq:102] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:103] SLEEP 1
+[tune_create_via_wizard.seq:104] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_create_via_wizard.seq:105] SLEEP 1
+[tune_create_via_wizard.seq:106] SCREENSHOT tune_picker_triple_still_default
 + pebble screenshot --emulator emery --vnc --no-open 05_tune_picker_triple_still_default.png
-[tune_create_via_wizard.seq:105] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:106] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:107] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:108] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:109] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:110] TAP down
-+ pebble emu-button --emulator emery --vnc click down --duration 150
 [tune_create_via_wizard.seq:111] TAP down
 + pebble emu-button --emulator emery --vnc click down --duration 150
-[tune_create_via_wizard.seq:112] SLEEP 1
-[tune_create_via_wizard.seq:113] SCREENSHOT tune_picker_with_chime_tune
-+ pebble screenshot --emulator emery --vnc --no-open 06_tune_picker_with_chime_tune.png
-[tune_create_via_wizard.seq:114] TAP select
-+ pebble emu-button --emulator emery --vnc click select --duration 150
-[tune_create_via_wizard.seq:115] SLEEP 1
-[tune_create_via_wizard.seq:116] SCREENSHOT custom_tune_screen_apply_tune_name_delete
-+ pebble screenshot --emulator emery --vnc --no-open 07_custom_tune_screen_apply_tune_name_delete.png
-[tune_create_via_wizard.seq:117] TAP select
-+ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_create_via_wizard.seq:112] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:113] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:114] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:115] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:116] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
+[tune_create_via_wizard.seq:117] TAP down
++ pebble emu-button --emulator emery --vnc click down --duration 150
 [tune_create_via_wizard.seq:118] SLEEP 1
-[tune_create_via_wizard.seq:119] SCREENSHOT signal_menu_tune_chime_applied --mask-rect 70x25+0+203
+[tune_create_via_wizard.seq:119] SCREENSHOT tune_picker_with_chime_tune
++ pebble screenshot --emulator emery --vnc --no-open 06_tune_picker_with_chime_tune.png
+[tune_create_via_wizard.seq:120] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_create_via_wizard.seq:121] SLEEP 1
+[tune_create_via_wizard.seq:122] SCREENSHOT custom_tune_screen_apply_tune_name_delete
++ pebble screenshot --emulator emery --vnc --no-open 07_custom_tune_screen_apply_tune_name_delete.png
+[tune_create_via_wizard.seq:123] TAP select
++ pebble emu-button --emulator emery --vnc click select --duration 150
+[tune_create_via_wizard.seq:124] SLEEP 1
+[tune_create_via_wizard.seq:125] SCREENSHOT signal_menu_tune_chime_applied --mask-rect 70x25+0+203
 + pebble screenshot --emulator emery --vnc --no-open 08_signal_menu_tune_chime_applied.png
 sequence PASSED - log: run.log

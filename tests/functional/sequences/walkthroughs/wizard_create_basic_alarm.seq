@@ -35,6 +35,9 @@ SCREENSHOT wizard_repeat_step
 TAP select
 # Let the keyboard caret rest solid-on (CARET_IDLE_MS) before capturing.
 SLEEP 5
+# The keyboard's text cursor blinks until the keyboard has been idle ~5s, then stops:
+# wait that out so the screenshot never lands on a different blink phase.
+SLEEP 5
 SCREENSHOT wizard_label_keyboard
 
 # SELECT submits the keyboard's current (empty) text immediately - see this
