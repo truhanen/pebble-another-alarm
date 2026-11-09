@@ -16,18 +16,15 @@
 #define PERSIST_KEY_DEFAULT_SOUND_ENABLED     11
 #define PERSIST_KEY_DEFAULT_INCREASING_VOLUME 12
 #define PERSIST_KEY_DATE_FORMAT          13   // 0=Day.Month ("1.6."), 1=Month/Day ("6/1")
-// Which alarm the currently-armed wakeup belongs to, and (cron only) what
-// that wakeup's ORIGINAL, un-adjusted target minute was -- see
-// rearm_wakeup()'s wakeup-conflict handling (main.c) for the full story.
-// 0 = no cron target currently armed (ARMED_CRON_TARGET is meaningless in
-// that case). Only ever written for a cron alarm -- legacy/snooze firing
-// doesn't need this, since legacy's own dedup is day-granularity (tolerant
-// of a few minutes' adjustment) and snooze has no mask to dedupe against at
-// all. Kept as small top-level scalars, not a new Alarm field -- this is
-// transient "what's currently armed" state, not per-alarm persisted data,
-// so it doesn't touch STORE_SCHEMA at all.
-#define PERSIST_KEY_ARMED_CRON_ALARM_ID 20
-#define PERSIST_KEY_ARMED_CRON_TARGET_MIN 21   // opaque "epoch minutes", same unit as Alarm.cron_last_fired_min
+// The (un-adjusted) minute the currently-armed wakeup was scheduled for, in
+// opaque "epoch minutes" (same unit as Alarm.cron_last_fired_min), 0 = none.
+// The OS deletes a wakeup's entry before dispatching it, so a wakeup that
+// fires late can't ask "when was I meant to fire" -- sweep_due_alarms() uses
+// this as the start of its catch-up window instead. A top-level scalar, not
+// an Alarm field, so it doesn't touch STORE_SCHEMA.
+// (22, not 20/21: those briefly held an unrelated alarm id/target from an
+// earlier dev build, which a stale value there would otherwise misread.)
+#define PERSIST_KEY_ARMED_TARGET 22
 // Default sound for NEWLY CREATED alarms -- a watch-side equivalent of
 // PERSIST_KEY_VIBE_PATTERN's own "seed new alarms with this" role, but
 // needing three fields instead of one since sound's default can be either
@@ -360,14 +357,10 @@ uint32_t store_alloc_tune_id(void);
 int32_t store_load_wakeup_id(void);
 void store_save_wakeup_id(int32_t id);
 
-// Which alarm (by persistent id, 0 = none) the currently-armed wakeup was
-// scheduled for a CRON occurrence of, and that occurrence's original
-// un-adjusted target (opaque epoch minutes) -- see PERSIST_KEY_ARMED_CRON_*
-// above and rearm_wakeup()'s wakeup-conflict handling (main.c).
-uint32_t store_load_armed_cron_alarm_id(void);
-void store_save_armed_cron_alarm_id(uint32_t id);
-int32_t store_load_armed_cron_target_min(void);
-void store_save_armed_cron_target_min(int32_t epoch_min);
+// Armed wakeup's target minute (opaque epoch minutes, 0 = none) -- see
+// PERSIST_KEY_ARMED_TARGET above.
+int32_t store_load_armed_target(void);
+void store_save_armed_target(int32_t epoch_min);
 
 // First day of week for the weekday picker / repeat summary (0=Sunday,
 // 1=Monday; defaults to 1/Monday when unset).

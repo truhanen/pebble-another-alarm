@@ -977,6 +977,49 @@ static void test_sound_pattern_format_empty(void) {
   assert(strcmp(buf, "") == 0);
 }
 
+// ac_cron_last_match_in_range: window of `count` minutes from a start clock
+// time; epoch-minute 1000 corresponds to the start minute in every case.
+static void test_cron_last_match_in_range(void) {
+  uint64_t m5, min_all, min_0, hour_all, hour_7;
+  assert(ac_cron_parse_field("*/5", 0, 59, &m5));
+  assert(ac_cron_parse_field("*", 0, 59, &min_all));
+  assert(ac_cron_parse_field("0", 0, 59, &min_0));
+  assert(ac_cron_parse_field("*", 0, 23, &hour_all));
+  assert(ac_cron_parse_field("7", 0, 23, &hour_7));
+  // 10:02 .. 10:11 (10 minutes): */5 matches 10:05 (1003) and 10:10 (1008) -> last wins.
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, -1) == 1008);
+  // last_fired_min excludes earlier matches (and the one equal to it).
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, 1008) == -1);
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, 1003) == 1008);
+  // Match exactly at the window start, and none at all.
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 5, 1000, 3, -1) == 1000);
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 6, 1000, 4, -1) == -1);
+  // Disabled never matches.
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     false, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, -1) == -1);
+  // Crossing an hour boundary: 10:58 .. 11:02, "0 * * * *" matches 11:00 (epoch 1002).
+  assert(ac_cron_last_match_in_range(min_0, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 58, 1000, 5, -1) == 1002);
+  // Crossing midnight into the next month: 2024-01-31 23:58 .. 2024-02-01 00:02, "0 0 1 * *"-style
+  // (minute 0, any hour, day-of-month 1) matches Feb 1 00:00 (epoch 1002).
+  uint64_t dom_1;
+  assert(ac_cron_parse_field("1", 1, 31, &dom_1));
+  assert(ac_cron_last_match_in_range(min_0, (uint32_t)hour_all, (uint32_t)dom_1, AC_MONTH_ALL, AC_DAY_ALL,
+                                     AC_WEEK_ALL, true, 2024, 1, 31, 23, 58, 1000, 5, -1) == 1002);
+  // Day/hour restrictions are respected: hour 7 only, window at 10:xx -> none.
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_7, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_ALL, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, -1) == -1);
+  // Weekday restriction: REF date is a Wednesday, Monday-only pattern doesn't match.
+  assert(ac_cron_last_match_in_range(m5, (uint32_t)hour_all, AC_DOM_ALL, AC_MONTH_ALL, AC_DAY_MON, AC_WEEK_ALL,
+                                     true, REF_YEAR, REF_MONTH, REF_DAY, 10, 2, 1000, 10, -1) == -1);
+  (void)min_all;
+}
+
 int main(void) {
   test_disabled();
   test_one_time_today();
@@ -1023,6 +1066,7 @@ int main(void) {
   test_cron_next_offset_days_dom_restricted_skips_short_month();
   test_cron_next_offset_days_leap_day_with_safe_fallback();
   test_cron_is_due_matches_and_not_yet_fired_this_minute();
+  test_cron_last_match_in_range();
   test_cron_is_due_already_fired_this_exact_minute();
   test_cron_is_due_older_last_fired_still_due();
   test_cron_is_due_field_mismatch();

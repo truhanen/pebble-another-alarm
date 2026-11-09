@@ -241,8 +241,7 @@ static void reload_ui(void) {
 
 // ---- forward decls (defined further down) ----
 static void rearm_wakeup(void);
-static bool sweep_due_alarms(int forced_idx);
-static void notify_wakeup_unschedulable(const Alarm *a);
+static bool sweep_due_alarms(void);
 static void trigger_alarm(int idx, int count);
 static void open_edit_window(int idx);
 static void signal_edit_window_push(void);
@@ -713,194 +712,52 @@ static bool compute_next_fire_time(int64_t *out_time, int *out_idx) {
   return true;
 }
 
-// Resolves a persistent Alarm.id back to its current index in s_alarms, or
-// -1 if there's no such alarm (id 0, or a stale/deleted id). This app has no
-// id-based lookup anywhere else -- every other call site threads a raw
-// index through instead -- but a wakeup's cookie (see rearm_wakeup()) can
-// only carry an id, never an index, so this is the one place that
-// genuinely needs it.
-static int find_alarm_index_by_id(uint32_t id) {
-  if (id == 0) { return -1; }
-  for (int i = 0; i < s_count; i++) {
-    if (s_alarms[i].id == id) { return i; }
-  }
-  return -1;
-}
-
-// Resolves a firing wakeup's cookie (the target alarm's own persistent id,
-// tagged by rearm_wakeup()) back to the alarm it was specifically armed
-// for, so the caller can fire it unconditionally via sweep_due_alarms()'s
-// forced_idx instead of re-deriving "is this due" from its own mask/time
-// fields (which could say "not yet" if adjusted early, or no longer match
-// at all for cron if adjusted late). Returns -1 when there's no specific
-// target to force: cookie 0 (a pre-existing wakeup from before this
-// feature, or a wakeup this app itself never armed), a stale/deleted alarm
-// id, or -- cron only -- the separately-persisted "armed cron target"
-// record (PERSIST_KEY_ARMED_CRON_*) doesn't match this alarm's id, in which
-// case it's safer to fall back to the ordinary scan than risk stamping
-// cron_last_fired_min with a wrong value.
-static int resolve_forced_due_idx(int32_t cookie) {
-  if (cookie == 0) { return -1; }
-  int idx = find_alarm_index_by_id((uint32_t)cookie);
-  if (idx < 0) { return -1; }
-  if (s_alarms[idx].is_cron && store_load_armed_cron_alarm_id() != s_alarms[idx].id) {
-    return -1;
-  }
-  return idx;
-}
-
-#ifdef APP_TEST_HOOKS
-// Lets an automated harness fake wakeup_schedule() failing within Pebble's
-// real ~60s exclusion window of a configured "blocked" minute, without a
-// second real app occupying an actual OS wakeup slot -- mirrors
-// pebble-another-timer's own TestBlockedSystemWakeupMinuteOffsetsPos/Neg
-// mechanism (tests/wakeup_test_app there is the companion-app alternative
-// for validating against a REAL cross-app collision; this app has no
-// equivalent of that second mechanism, only this stub). Collapsed to one
-// signed-offset list here rather than timer's separate before/after lists,
-// since this app's search is a single ordered backward-then-forward scan,
-// not a two-sided search. Offsets are in whole MINUTES relative to
-// whichever target rearm_wakeup() is currently trying to arm (positive =
-// after, negative = before) -- not an absolute epoch time, so a harness
-// doesn't need to know the device's clock. Compiled out unless built with
-// `APP_TEST_HOOKS=1 pebble build` (see wscript) -- a shipped build never
-// has this stub at all; WAKEUP_SCHEDULE_FOR falls through to a direct
-// wakeup_schedule() in that case.
-#define TEST_BLOCKED_OFFSETS_MAX 8
-static int s_test_blocked_offsets[TEST_BLOCKED_OFFSETS_MAX];
-static int s_test_blocked_offset_count;
-
-// Hand-rolled comma-split (no strtok -- avoids pulling in its own static
-// state/buffer handling for what's otherwise a few bytes of parsing, and
-// scans `csv` directly rather than needing a mutable copy).
-static void test_set_blocked_offsets(const char *csv) {
-  s_test_blocked_offset_count = 0;
-  if (!csv) { return; }
-  int value = 0, sign = 1;
-  bool have_digit = false;
-  for (const char *p = csv; ; p++) {
-    char c = *p;
-    if (c == '-' && !have_digit) {
-      sign = -1;
-    } else if (c >= '0' && c <= '9') {
-      value = value * 10 + (c - '0');
-      have_digit = true;
-    } else if (c == ',' || c == '\0') {
-      if (have_digit && s_test_blocked_offset_count < TEST_BLOCKED_OFFSETS_MAX) {
-        s_test_blocked_offsets[s_test_blocked_offset_count++] = sign * value;
-      }
-      value = 0; sign = 1; have_digit = false;
-      if (c == '\0') { break; }
-    }
-  }
-}
-
-// `ref_target` is the un-adjusted target rearm_wakeup() is currently
-// arming -- every candidate (`at`) tried for that same target, whether the
-// exact attempt or one of wakeup_find_nearby_slot()'s nearby candidates,
-// is checked against the same fixed set of "occupied" minutes derived from
-// it, so a configured offset consistently blocks the same real minute
-// across the whole search regardless of which candidate is being tried.
-static WakeupId test_wakeup_schedule(time_t at, time_t ref_target, int32_t cookie) {
-  time_t ref_min = (ref_target / 60) * 60;
-  for (int i = 0; i < s_test_blocked_offset_count; i++) {
-    time_t occupied = ref_min + (time_t)s_test_blocked_offsets[i] * 60;
-    time_t diff = at - occupied;
-    // Deliberately matches PebbleOS's own real exclusion check (boundary-
-    // exclusive ~60s on each side), not a convenient approximation.
-    if (diff > -60 && diff < 60) { return -1; }
-  }
-  return wakeup_schedule(at, cookie, true);
-}
-#define WAKEUP_SCHEDULE_FOR(at, ref_target, cookie) test_wakeup_schedule((at), (ref_target), (cookie))
-#else
-#define WAKEUP_SCHEDULE_FOR(at, ref_target, cookie) wakeup_schedule((at), (cookie), true)
-#endif // APP_TEST_HOOKS
-
-#define WAKEUP_NEARBY_BACKWARD_MAX_MIN 15
-#define WAKEUP_NEARBY_FORWARD_MAX_MIN 5
-
-// Scans backward from `target` minute-by-minute for up to
-// WAKEUP_NEARBY_BACKWARD_MAX_MIN attempts (stopping early once a candidate
-// would fall at-or-before "now"), then forward for up to
-// WAKEUP_NEARBY_FORWARD_MAX_MIN attempts, trying wakeup_schedule() at each
-// candidate -- backward is tried first and given far more room, since
-// oversleeping is worse than waking a little early. Each successful
-// wakeup_schedule() call IS the reservation -- no speculative
-// search-then-reschedule. Returns true and fills *out_time/*out_id on the
-// first success; false if nothing in the whole window is free.
-static bool wakeup_find_nearby_slot(time_t target, int32_t cookie, time_t *out_time, WakeupId *out_id) {
-  time_t nowt = time(NULL);
-  time_t candidate = target - 60;
-  for (int attempt = 0; attempt < WAKEUP_NEARBY_BACKWARD_MAX_MIN; attempt++) {
-    if (candidate <= nowt) { break; }
-    WakeupId id = WAKEUP_SCHEDULE_FOR(candidate, target, cookie);
-    if (id >= 0) { *out_time = candidate; *out_id = id; return true; }
-    candidate -= 60;
-  }
-  candidate = target + 60;
-  for (int attempt = 0; attempt < WAKEUP_NEARBY_FORWARD_MAX_MIN; attempt++) {
-    WakeupId id = WAKEUP_SCHEDULE_FOR(candidate, target, cookie);
-    if (id >= 0) { *out_time = candidate; *out_id = id; return true; }
-    candidate += 60;
-  }
-  return false;
-}
+// Latest minute a late-firing wakeup is allowed to reach back to when
+// sweep_due_alarms() catches up on occurrences it missed (see there).
+#define WAKEUP_CATCHUP_MAX_MIN 10
 
 // Keep exactly ONE wakeup armed for the soonest due alarm (snoozed or
 // regular), same "arm new before cancelling old" ordering as
 // pebble-another-timer's rearm_wakeup so a transiently-refused reschedule
 // never leaves the app with no wakeup at all.
 //
-// The wakeup's cookie is always the target alarm's own persistent id
-// (never 0) -- see resolve_forced_due_idx()/sweep_due_alarms() for how
-// that's used when the wakeup actually fires: whichever minute this
-// function ends up committing to (the exact target, or an adjusted nearby
-// one via wakeup_find_nearby_slot()) becomes that occurrence's real fire
-// time outright, rather than something re-derived from the alarm's own
-// mask/time fields at firing time.
+// The OS may dispatch this wakeup a little late when another app's wakeup is
+// due at about the same time, and it deletes its own entry before dispatching,
+// so the intended minute is persisted here (store_save_armed_target) for
+// sweep_due_alarms() to use as the start of its catch-up window.
 static void rearm_wakeup(void) {
   int32_t old = store_load_wakeup_id();
   int64_t fire_time;
   int idx;
   if (!compute_next_fire_time(&fire_time, &idx)) {
     if (old >= 0) { wakeup_cancel(old); store_save_wakeup_id(-1); }
+    store_save_armed_target(0);
     return;
   }
-  Alarm *target = &s_alarms[idx];
-  int32_t cookie = (int32_t)target->id;
   time_t nowt = time(NULL);
   time_t base = (time_t)fire_time;
   if (base <= nowt) { base = nowt + 1; }
 
-  WakeupId id = WAKEUP_SCHEDULE_FOR(base, base, cookie);
+  // Already armed for exactly this time (the common case: most mutations
+  // don't move the soonest alarm): nothing to do. Asking the OS again would be
+  // refused, since the existing wakeup is within this app's own minute window.
+  time_t armed_at;
+  if (old >= 0 && wakeup_query(old, &armed_at) && armed_at == base) {
+    store_save_armed_target((int32_t)(base / 60));
+    return;
+  }
+
+  WakeupId id = wakeup_schedule(base, 0, true);
   if (id >= 0) {
     if (old >= 0 && old != id) { wakeup_cancel(old); }
     store_save_wakeup_id(id);
-    if (target->is_cron) {
-      store_save_armed_cron_alarm_id(target->id);
-      store_save_armed_cron_target_min((int32_t)(base / 60));
-    }
+    store_save_armed_target((int32_t)(base / 60));
     return;
   }
-
-  time_t found_time;
-  WakeupId found_id;
-  if (wakeup_find_nearby_slot(base, cookie, &found_time, &found_id)) {
-    if (old >= 0 && old != found_id) { wakeup_cancel(old); }
-    store_save_wakeup_id(found_id);
-    if (target->is_cron) {
-      store_save_armed_cron_alarm_id(target->id);
-      store_save_armed_cron_target_min((int32_t)(base / 60));
-    }
-    return;
-  }
-
-  // Total failure: every minute in the whole search window is also blocked.
-  // Leave whatever wakeup was already armed (old) alone rather than cancel
-  // it -- something firing late is strictly better than nothing firing at
-  // all. This should be an extremely rare condition.
-  notify_wakeup_unschedulable(target);
+  // Refused (e.g. one of this app's own wakeups within a minute): leave
+  // whatever was already armed alone rather than cancel it -- something firing
+  // a little off is strictly better than nothing firing at all.
+  APP_LOG(APP_LOG_LEVEL_WARNING, "wakeup_schedule failed: %d", (int)id);
 }
 
 // For each alarm, check whether its due instant (a live snooze deadline, or
@@ -910,16 +767,19 @@ static void rearm_wakeup(void) {
 // resets the moment the next scheduled occurrence fires) — done exactly
 // once here, guarded by alarm_pending itself so it never re-fires.
 //
-// `forced_idx` (-1 = none) is the alarm whose cookie identified it as the
-// specific target the just-fired wakeup was armed for (see
-// resolve_forced_due_idx()) -- rearm_wakeup() may have had to adjust that
-// wakeup a few minutes off this alarm's own real schedule to dodge another
-// app's wakeup, so it's fired unconditionally here rather than re-checked
-// against its own mask/time fields, which could otherwise say "not due" or
-// (for cron) no longer match at all. Every other alarm is still checked the
-// ordinary way, so anything else that independently became due (e.g. after
-// a long sleep) is still caught.
-static bool sweep_due_alarms(int forced_idx) {
+// A cron alarm is checked against a catch-up window, not just the current
+// minute: the OS can dispatch this app's wakeup late (another app's wakeup at
+// about the same time delays it), and a cron alarm only matches its exact
+// minute. The window runs from the persisted armed target (rearm_wakeup()),
+// capped at WAKEUP_CATCHUP_MAX_MIN, to now; a cron alarm with any match in it
+// rings once, stamped with the LAST matched minute so the next-occurrence math
+// resumes right after it. Several matches inside one window therefore
+// coalesce into a single ring -- a deliberate carve-out of cron's otherwise
+// ring-on-every-match rule, only reachable via a late dispatch. With no usable
+// armed target (none stored, or not yet in the past) the window is just the
+// current minute. Legacy and snoozed alarms need no window: ac_is_due and
+// "now >= snooze_until" already catch up on their own.
+static bool sweep_due_alarms(void) {
   int64_t now = now_s();
   int wday, hour, min;
   now_wall(&wday, &hour, &min);
@@ -927,32 +787,23 @@ static bool sweep_due_alarms(int forced_idx) {
   int32_t epoch_min = (int32_t)(now / 60);
   int cal_year, month, day;
   now_calendar(&cal_year, &month, &day);
+  int32_t armed = store_load_armed_target();
+  int32_t win_start = epoch_min;
+  if (armed > 0 && armed < epoch_min) {
+    win_start = armed > epoch_min - WAKEUP_CATCHUP_MAX_MIN ? armed : epoch_min - WAKEUP_CATCHUP_MAX_MIN;
+  }
+  int win_len = epoch_min - win_start + 1;
+  int win_year, win_month, win_day, win_hour, win_min;
+  {
+    time_t wt = (time_t)win_start * 60;
+    struct tm *wtm = localtime(&wt);
+    win_year = wtm->tm_year + 1900; win_month = wtm->tm_mon + 1; win_day = wtm->tm_mday;
+    win_hour = wtm->tm_hour; win_min = wtm->tm_min;
+  }
   bool any = false;
   for (int i = 0; i < s_count; i++) {
     Alarm *a = &s_alarms[i];
     if (a->alarm_pending) { any = true; continue; }
-    if (i == forced_idx) {
-      // Fire right now, unconditionally -- see the function comment above.
-      // What gets RECORDED about this firing differs by shape: cron's dedup
-      // stamp must use the ORIGINAL un-adjusted target minute, not "now",
-      // or a dense pattern could near-duplicate-ring (if adjusted early) or
-      // swallow its own next occurrence (if adjusted late) -- see
-      // resolve_forced_due_idx()'s own comment for why that value is
-      // already verified safe to use by the time we get here.
-      if (a->snooze_until > 0) {
-        a->snooze_until = 0;
-        a->snooze_count = 0;
-      } else if (a->is_cron) {
-        a->cron_last_fired_min = store_load_armed_cron_target_min();
-        a->snooze_count = 0;
-        if (a->skip_next) { a->skip_next = false; }
-      } else {
-        ac_mark_fired(a, today);
-      }
-      a->alarm_pending = true;
-      any = true;
-      continue;
-    }
     if (a->snooze_until > 0) {
       if (now >= a->snooze_until) {
         a->alarm_pending = true;
@@ -962,14 +813,24 @@ static bool sweep_due_alarms(int forced_idx) {
       continue;
     }
     if (a->is_cron) {
-      if (!ac_cron_is_due(a->cron_min_mask, a->cron_hour_mask, a->cron_dom_mask, a->cron_month_mask,
-                           a->repeat_days, a->cron_week_mask, a->enabled,
-                           cal_year, month, day, wday, hour, min, epoch_min, a->cron_last_fired_min)) { continue; }
+      int32_t match_min;
+      if (win_len > 1) {
+        match_min = ac_cron_last_match_in_range(a->cron_min_mask, a->cron_hour_mask, a->cron_dom_mask,
+                                                 a->cron_month_mask, a->repeat_days, a->cron_week_mask, a->enabled,
+                                                 win_year, win_month, win_day, win_hour, win_min, win_start,
+                                                 win_len, a->cron_last_fired_min);
+      } else {
+        match_min = ac_cron_is_due(a->cron_min_mask, a->cron_hour_mask, a->cron_dom_mask, a->cron_month_mask,
+                                    a->repeat_days, a->cron_week_mask, a->enabled,
+                                    cal_year, month, day, wday, hour, min, epoch_min, a->cron_last_fired_min)
+                    ? epoch_min : -1;
+      }
+      if (match_min < 0) { continue; }
       // Multi-fire, deliberately no suppression window beyond the exact-
       // minute dedup above: the very next matching minute (e.g. every
       // minute for "*") fires again right after this one is stopped/
       // snoozed — intended cron behavior, not a bug.
-      a->cron_last_fired_min = epoch_min;
+      a->cron_last_fired_min = match_min;
       a->snooze_count = 0;
       // This is the resumed (non-skipped) occurrence actually ringing --
       // rearm_wakeup()'s cron scan (compute_next_fire_time) already skipped
@@ -2237,10 +2098,7 @@ static const char *s_confirm_labels[2];
 static ConfirmChoiceCb s_confirm_cb;
 static void *s_confirm_ctx;
 
-// label1 == NULL means a single-row acknowledgement (e.g.
-// notify_wakeup_unschedulable()'s rare notice) rather than a real 2-choice
-// prompt -- row 0 is still drawn/selected exactly the same way.
-static uint16_t confirm_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return s_confirm_labels[1] ? 2 : 1; }
+static uint16_t confirm_num_rows(MenuLayer *ml, uint16_t section, void *ctx) { return 2; }
 // 34px row height + GOTHIC_24_BOLD text: matches timer's itemized "detail"
 // menu exactly (dl_cell_height/dl_draw_row, pebble-another-timer/src/c/main.c:1197,1253).
 static int16_t confirm_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) { return 34; }
@@ -2281,37 +2139,6 @@ static void confirm_window_push(const char *label0, const char *label1, ConfirmC
       .load = confirm_window_load, .unload = confirm_window_unload });
   }
   window_stack_push(s_confirm_window, true);
-}
-
-// rearm_wakeup()'s rare "every minute in the whole nearby-slot search
-// window is also blocked" notice -- a plain acknowledgement, not a
-// decision: nothing the user picks changes any alarm data, so this just
-// reuses confirm_window_push's single-row mode with no callback.
-static uint32_t s_unschedulable_alarm_id;      // which alarm the next/current notice is about (0 = none)
-static bool s_unschedulable_notice_scheduled;  // a deferred push is already queued -- don't stack another
-
-static void notify_wakeup_unschedulable_deferred(void *data) {
-  s_unschedulable_notice_scheduled = false;
-  int idx = find_alarm_index_by_id(s_unschedulable_alarm_id);
-  if (idx < 0) { return; }   // alarm vanished before we got a chance to show this
-  static char s_unschedulable_msg[72];
-  snprintf(s_unschedulable_msg, sizeof(s_unschedulable_msg), "%s: couldn't schedule, adjust its time",
-           s_alarms[idx].name);
-  confirm_window_push(s_unschedulable_msg, NULL, NULL, NULL);
-}
-
-static void notify_wakeup_unschedulable(const Alarm *a) {
-  s_unschedulable_alarm_id = a->id;
-  if (s_unschedulable_notice_scheduled) { return; }   // already queued; will pick up the id set just above
-  s_unschedulable_notice_scheduled = true;
-  // Deferred by one event-loop tick rather than pushed synchronously, so it
-  // never interrupts an in-progress ring-dismiss sequence (rearm_wakeup()
-  // can run mid alarm_do_stop()/alarm_snooze(), while the ring window is
-  // still on the stack and about to be popped/chained by alarm_finish_ring())
-  // or any other window push already under way in the same call chain -- by
-  // the time this fires, whatever triggered rearm_wakeup() has already
-  // finished pushing/popping whatever it needed to.
-  app_timer_register(0, notify_wakeup_unschedulable_deferred, NULL);
 }
 
 // ============================ shared "box-type duration dial" renderer ============================
@@ -2557,28 +2384,16 @@ static Layer *s_cron_help_header;
 
 #define CRON_HELP_HEADER_H 30
 
-// The on-watch help screens (cron / pattern-vibe / pattern-sound) used to
-// each hold their own text as a compiled-in `static const char *const`
-// string constant -- together the three of them were ~2KB of permanently-
-// resident .rodata for screens opened rarely, on request (see CLAUDE.md's
-// own note on this app's virtual_size ceiling). They're shipped as raw app
-// resources instead now (declared in package.json, plain text files under
-// resources/text/ -- regenerated from the original C constants once via
-// scripts/extract_help_text_resources.py; those .txt files are the source
-// of truth for this text going forward, edit them directly), loaded into
-// this one shared buffer only while the relevant help window is actually
-// open. One buffer, not three, because only one of these help screens is
-// ever open at a time in practice (each is reached from a different,
-// mutually-exclusive edit flow) -- sized for the largest of the three
-// texts (cron help, 873 bytes) with a little headroom for future edits.
+// The on-watch help screens (cron / pattern-vibe / pattern-sound) are raw app
+// resources (declared in package.json, plain text files under
+// resources/text/ -- those .txt files are the source of truth for this text,
+// edit them directly), loaded into this one shared buffer only while the
+// relevant help window is open. One buffer, not three, because only one of
+// these help screens is ever open at a time (each is reached from a
+// different, mutually-exclusive edit flow) -- sized for the largest of the
+// three texts (cron help, 873 bytes) with a little headroom for future edits.
 // Heap-allocated on first use and freed by whichever *_help_window_unload
-// closes (see free_help_text_buf()), rather than a plain `static char[900]`
-// -- a static array reserves its bytes in .bss for the entire life of the
-// running app regardless of whether any help screen is ever opened, and
-// .bss counts toward virtual_size exactly like compiled code does; a
-// malloc'd buffer only costs that space while a help window is actually on
-// screen, coming out of the much roomier runtime heap instead (this app
-// already mallocs elsewhere, e.g. multitap_keyboard_create).
+// closes (see free_help_text_buf()).
 // Same GOTHIC_24 (not bold) used by the time editor's own cron-mode hint --
 // see the "secret long-press-SELECT" comment below.
 #define HELP_TEXT_BUF_LEN 900
@@ -5491,16 +5306,6 @@ static bool handle_test_message(DictionaryIterator *iter) {
   }
   if (tunes_touched) { persist_tunes(); changed = true; }
 
-  // See WAKEUP_SCHEDULE_FOR/test_wakeup_schedule() near rearm_wakeup() --
-  // not an Alarm field, so `changed=true` here just rides the caller's
-  // existing persist_all()/rearm_wakeup()/reload_ui() wiring to re-trigger
-  // rearm_wakeup() immediately with the newly configured blocked offsets,
-  // the same way every other test-hook mutation does.
-  if ((t = dict_find(iter, MESSAGE_KEY_TestBlockedWakeupOffsets))) {
-    test_set_blocked_offsets(t->value->cstring);
-    changed = true;
-  }
-
   return changed;
 }
 #endif // APP_TEST_HOOKS
@@ -5537,8 +5342,7 @@ static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, voi
 // a wakeup firing while the app happened to be open silently did nothing:
 // no ring, no state change, until the app was later closed and reopened.
 static void handle_wakeup_event(WakeupId id, int32_t cookie) {
-  int forced_idx = resolve_forced_due_idx(cookie);
-  bool fired = sweep_due_alarms(forced_idx);
+  bool fired = sweep_due_alarms();
   if (fired) { persist_all(); }
   rearm_wakeup();
   reload_ui();
@@ -5566,22 +5370,14 @@ static void init(void) {
   WakeupId wid; int32_t cookie;
   s_launched_by_wakeup = wakeup_get_launch_event(&wid, &cookie);
   if (s_launched_by_wakeup) { store_save_wakeup_id(-1); }
-  int forced_idx = s_launched_by_wakeup ? resolve_forced_due_idx(cookie) : -1;
 
-  // Push the main window BEFORE any rearm_wakeup() call that could trigger
-  // notify_wakeup_unschedulable()'s rare "couldn't schedule" notice --
-  // otherwise that notice could end up as the sole window on the stack,
-  // and a plain BACK press would pop it and exit the app right after
-  // launch. handle_wakeup_event() never has this risk, since it only runs
-  // while the app is already foregrounded with some window already on the
-  // stack.
   s_window = window_create();
   window_set_window_handlers(s_window, (WindowHandlers){
     .load = main_window_load, .unload = main_window_unload });
   window_stack_push(s_window, true);
   rebuild_order();
 
-  bool fired = sweep_due_alarms(forced_idx);
+  bool fired = sweep_due_alarms();
   if (fired) { persist_all(); }
   rearm_wakeup();
   wakeup_service_subscribe(handle_wakeup_event);

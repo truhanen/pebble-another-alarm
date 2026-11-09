@@ -278,19 +278,11 @@ static Window     *s_help_window;
 static ScrollLayer *s_help_scroll;
 static TextLayer  *s_help_text;
 
-// This screen's own text used to be a compiled-in string constant here (~530
-// bytes of permanently-resident .text for a screen opened rarely, on
-// request). Shipped as a raw app resource instead now (declared in
-// package.json, resources/text/keyboard_help.txt is the editable source),
-// loaded into a heap-allocated buffer only while this window is actually
-// open -- unlike a `static char[]` buffer (which reserves its bytes in .bss
-// for the app's entire runtime regardless of whether help is ever opened,
-// costing about as much as the string it replaced for a single, standalone
-// text like this one with no sibling texts to share that reservation with),
-// a malloc'd buffer costs ~0 bytes when idle, so the swap is a clear win
-// even for just one text. Same technique as main.c's own load_help_text(),
-// duplicated here in miniature rather than shared across the two
-// compilation units for one string.
+// This screen's text is a raw app resource (declared in package.json,
+// resources/text/keyboard_help.txt is the editable source), loaded into a
+// heap-allocated buffer only while this window is open. Same technique as
+// main.c's own load_help_text(), duplicated here in miniature rather than
+// shared across the two compilation units for one string.
 #define HELP_TEXT_BUF_LEN 560
 static char *s_help_text_buf;
 

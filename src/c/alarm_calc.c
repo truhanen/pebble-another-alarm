@@ -616,6 +616,36 @@ bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, ui
   return true;
 }
 
+int32_t ac_cron_last_match_in_range(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, uint16_t month_mask,
+                                    uint8_t dow_mask, uint64_t week_mask, bool enabled,
+                                    int start_year, int start_month, int start_day, int start_hour, int start_min,
+                                    int32_t start_epoch_min, int count, int32_t last_fired_min) {
+  if (!enabled) { return -1; }
+  int year = start_year, month = start_month, day = start_day, hour = start_hour, minute = start_min;
+  bool day_ok = false, day_known = false;
+  int32_t best = -1;
+  for (int i = 0; i < count; i++) {
+    if (i > 0) {
+      if (++minute == 60) {
+        minute = 0;
+        if (++hour == 24) { hour = 0; ac_advance_calendar_day(&year, &month, &day); day_known = false; }
+      }
+    }
+    if (!day_known) {
+      day_ok = (month_mask & AC_MONTH_BIT(month))
+            && (dom_mask & AC_DOM_BIT(day))
+            && (dow_mask & AC_DAY_BIT(ac_day_of_week(year, month, day)))
+            && (week_mask & AC_WEEK_BIT(ac_iso_week_number(year, month, day)));
+      day_known = true;
+    }
+    int32_t epoch_min = start_epoch_min + i;
+    if (day_ok && (hour_mask & (1u << hour)) && (min_mask & (1ULL << minute)) && epoch_min > last_fired_min) {
+      best = epoch_min;
+    }
+  }
+  return best;
+}
+
 void ac_format_cron_summary(char *buf, size_t n, const char *min_str, const char *hour_str,
                              const char *dom_str, const char *month_str, const char *dow_str,
                              const char *week_str) {

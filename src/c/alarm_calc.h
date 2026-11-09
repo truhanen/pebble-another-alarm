@@ -535,6 +535,19 @@ bool ac_cron_is_due(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, ui
                      int now_year, int now_month, int now_day, int now_wday, int now_hour, int now_min,
                      int32_t now_epoch_min, int32_t last_fired_min);
 
+// Catch-up sibling of ac_cron_is_due for a wakeup that fired late: scans
+// `count` consecutive minutes starting at the given local calendar/clock
+// fields (whose epoch-minute is start_epoch_min) and returns the epoch-minute
+// of the LAST minute matching the pattern that is also strictly after
+// last_fired_min, or -1 if none. The caller stamps cron_last_fired_min with
+// the returned value (not "now"), so the next-occurrence math resumes right
+// after the real last match. Assumes local minutes advance 1:1 with epoch
+// minutes across the (short) window, i.e. ignores a DST jump inside it.
+int32_t ac_cron_last_match_in_range(uint64_t min_mask, uint32_t hour_mask, uint32_t dom_mask, uint16_t month_mask,
+                                    uint8_t dow_mask, uint64_t week_mask, bool enabled,
+                                    int start_year, int start_month, int start_day, int start_hour, int start_min,
+                                    int32_t start_epoch_min, int count, int32_t last_fired_min);
+
 // Space-joined raw cron field strings in cron field order, e.g.
 // "0-59/20 * 1 3-9 1-5 27" (min hour dom month dow week) — truncated by the
 // caller's own draw call (GTextOverflowModeTrailingEllipsis), same as every

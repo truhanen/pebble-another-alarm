@@ -68,8 +68,7 @@
       "TestTuneIndex",
       "TestTuneName",
       "TestTuneCustomPattern",
-      "TestAlarmTuneId",
-      "TestBlockedWakeupOffsets"
+      "TestAlarmTuneId"
     ],
     "resources": {
       "media": [

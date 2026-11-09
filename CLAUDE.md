@@ -132,13 +132,12 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronWeek` | 10035 | string | Raw cron ISO week-of-year field (range 1-53), parsed into `cron_week_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmSoundPatternKind` | 10036 | int 0/2 | 0=Preset (use `sound_preset`), 2=Library (use `custom_tune_id`) — 1 ("inline Custom") is retired, see "Signal submenu / custom sound &amp; vibe patterns" below. Sets `sound_pattern_kind` directly; no test hook sets `sound_preset` itself, since main.c's own Tune picker already exercises that path directly. |
 | `TestAlarmVibePatternKind` | 10038 | int 0/1 | 0=Preset (use `vibe_pattern`), 1=Custom. Sets `vibe_pattern_kind` directly. |
-| `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/break pattern (e.g. `"2 1- 2 1- 2"`), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. |
+| `TestAlarmVibeCustomPattern` | 10039 | string | Space-separated duration/rest pattern in the current ABC-notation grammar (e.g. `"3 z 1"` — `z` is a rest; see "Custom sound/vibe patterns are a genuine ABC-notation subset" below), parsed via `ac_vibe_pattern_parse` into `vibe_pattern_custom`/`vibe_pattern_len`. Logs a warning (field left unchanged) if unparseable — notably, the OLD pre-`STORE_SCHEMA`-20 digit+dash grammar (e.g. `"2 1- 2"`) no longer parses under this one. |
 | `TestClearTunes` | 10040 | int, nonzero | Wipes the entire custom-tune library (`s_tune_count = 0`), independent of `TestClearAlarms`. See "Custom-tune library" below. |
 | `TestTuneIndex` | 10041 | int | **Required** to touch tune fields, mirroring `TestAlarmIndex`'s own convention: `== s_tune_count` appends a new (empty-named) tune with a freshly allocated id; `< s_tune_count` edits that existing tune in place. |
 | `TestTuneName` | 10042 | string | |
-| `TestTuneCustomPattern` | 10043 | string | Space-separated note/break pattern (e.g. `"1C 2D 1- 1C 2D"`), parsed via `ac_sound_pattern_parse` into the tune's own `pattern`/`pattern_note`/`pattern_len` (`CustomTune`, unaffected by sound's own `kind==1` retirement — the tune library was always a separate representation). Logs a warning (left unchanged) if unparseable. `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
+| `TestTuneCustomPattern` | 10043 | string | Space-separated note/rest pattern in the current ABC-notation grammar (e.g. `"C z E z G"` — `z` is a rest; see "Custom sound/vibe patterns are a genuine ABC-notation subset" below), parsed via `ac_sound_pattern_parse` into the tune's own `pattern`/`pattern_note`/`pattern_len` (`CustomTune`, unaffected by sound's own `kind==1` retirement — the tune library was always a separate representation). Logs a warning (left unchanged) if unparseable (the OLD pre-`STORE_SCHEMA`-20 note-then-duration-digit grammar, e.g. `"1C 2D"`, no longer parses under this one). `10037` (`TestAlarmSoundCustomPattern`) used to be this same grammar's alarm-level equivalent, setting `Alarm.sound_pattern`/`sound_pattern_note`/`sound_pattern_len` directly — removed along with those fields; the key id is still declared (harmless, an unused integer) but has no handler any more. |
 | `TestAlarmTuneId` | 10044 | int | Links an alarm directly to a tune by id — sets `custom_tune_id` and forces `sound_pattern_kind = 2`, skipping the Tune picker → Custom tunes → Custom tune → Apply chain for test setup. |
-| `TestBlockedWakeupOffsets` | 10045 | string | Comma-separated list of signed integers, e.g. `"-1,0,1"` — minute offsets, relative to whichever target `rearm_wakeup()` is currently trying to arm, to fake as already occupied by another app's wakeup. Not an `Alarm` field at all (applies globally to whatever `rearm_wakeup()` next tries to arm, not to one specific alarm) — see the wakeup-conflict-handling design point below for the mechanism this exercises. |
 
 Only keys present in the message are applied — anything omitted is left
 untouched on an existing alarm (or defaulted, per above, on a new one).
@@ -252,92 +251,31 @@ in this app at all, so every message key is now just an ordinary scalar at
   before cancelling the old" ordering as timer's `rearm_wakeup`, so a
   transiently-refused reschedule can never leave the app with zero wakeups
   armed. Call `rearm_wakeup()` after every mutation.
-- **Wakeup-schedule-conflict handling**: Pebble's `wakeup_schedule()` refuses
-  a new wakeup within ~60s of any other already-scheduled wakeup on the
-  device (including other apps') — a real, regularly-hit condition, not an
-  edge case. `rearm_wakeup()` used to handle this by retrying the exact same
-  minute every 60s for up to 5 attempts and silently giving up — exactly the
-  anti-pattern `pebble-another-timer`'s own `rearm_wakeup()` deliberately
-  moved away from after reverting an identical mistake. Fixed instead by a
-  small, silent, fully automatic adjustment, deliberately simpler than
-  Timer's accept/decline conflict-resolution prompt (this app's own bar: an
-  alarm missing its exact minute by a little is fine; oversleeping or never
-  ringing at all is not):
-  - On the exact-time attempt failing, `wakeup_find_nearby_slot()` scans
-    **backward** minute-by-minute for up to 15 attempts (stopping early if a
-    candidate would fall at-or-before "now"), then **forward** for up to 5 —
-    backward is tried first and given far more room, since oversleeping is
-    worse than waking a little early. Whichever minute the first successful
-    `wakeup_schedule()` call lands on becomes that occurrence's real fire
-    time outright, with no user prompt at all.
-  - Every `wakeup_schedule()` call is tagged with the target alarm's own
-    persistent `id` as its wakeup *cookie* (previously always `0` and never
-    read back) — this is what makes "fire exactly at the resolved minute"
-    work without any new persisted field on `Alarm`: when that wakeup
-    actually fires, `handle_wakeup_event()`/`init()`'s `wakeup_get_launch_
-    event()` path resolve the cookie back to an alarm index
-    (`find_alarm_index_by_id()`/`resolve_forced_due_idx()`) and pass it into
-    `sweep_due_alarms()` as `forced_idx` — that one alarm fires
-    unconditionally, bypassing its own mask/time check entirely (which could
-    otherwise say "not yet due" if adjusted early, or no longer match at all
-    for a cron alarm if adjusted late), while every other alarm is still
-    checked the ordinary way.
-  - **Cron's dedup bookkeeping needs the ORIGINAL target, not the actual
-    fire time** — the one genuinely subtle part of this feature. Stamping
-    `cron_last_fired_min` to the adjusted (early or late) minute, rather
-    than the real un-adjusted target, breaks a dense pattern's own
-    next-occurrence math: an early adjustment would make the next
-    computation immediately re-target the *same* occurrence that just
-    rang (a near-duplicate ring minutes later), and a late adjustment risks
-    landing on or past the pattern's own next legitimate match (silently
-    swallowing it). Fixed by always stamping the original target's own
-    epoch minute instead — re-deriving "what's after the original target"
-    then correctly lands on the real next occurrence either way. This is
-    the one piece that genuinely needs small persisted state surviving an
-    app relaunch (an in-memory value wouldn't survive one, and alarms
-    commonly fire via exactly that kind of relaunch): two new top-level
-    scalar persist keys, `PERSIST_KEY_ARMED_CRON_ALARM_ID`/
-    `PERSIST_KEY_ARMED_CRON_TARGET_MIN` (`alarm_store.h`/`.c`) — mirroring
-    the scope of the existing single `PERSIST_KEY_WAKEUPID` scalar, **not**
-    a change to `Alarm`'s own struct/`STORE_SCHEMA`. `resolve_forced_due_idx()`
-    refuses to force-fire a cron alarm at all if the stored armed-alarm-id
-    doesn't match (stale/corrupted state), falling back to the ordinary
-    scan rather than risk stamping a wrong value.
-  - **The rare case where nothing in the whole −15..+5 window is free**
-    (every minute also blocked) is the one condition this feature still
-    surfaces to the user at all: `notify_wakeup_unschedulable()` reuses
-    `confirm_window_push()`/`confirm_window` with a small additive
-    extension (`label1 == NULL` means a single acknowledgement row instead
-    of a real 2-choice prompt) rather than a new window class. It's a pure
-    "OK" dismissal — nothing the user picks changes any alarm data, the
-    alarm's previous wakeup (if any) is left untouched rather than
-    cancelled, and the push is deferred by one event-loop tick
-    (`app_timer_register(0, ...)`) so it never interrupts an in-progress
-    ring-dismiss sequence or any other window push already under way in the
-    same call chain (`rearm_wakeup()` can run mid `alarm_do_stop()`/
-    `alarm_snooze()`, while the ring window is still on the stack).
-  - **Deliberately no exit-guard sentinel window**, unlike Timer's — that
-    mechanism exists there to protect a "keep app in foreground" mode and a
-    generic idle-timeout auto-exit path, neither of which this app has:
-    every conflict here resolves synchronously within a single
-    `rearm_wakeup()` call, and the only real topology risk (the rare notice
-    ending up as the sole window on the stack) is fixed by `init()`'s own
-    push ordering — the main window is always pushed before the first
-    `rearm_wakeup()` call that could trigger it.
-  - **Test-only `TestBlockedWakeupOffsets` hook** (see the Test hooks table
-    above) fakes `wakeup_schedule()` failing within Pebble's real ~60s
-    exclusion window of a configured offset, mirroring
-    `pebble-another-timer`'s own `TestBlockedSystemWakeupMinuteOffsetsPos`/
-    `Neg` mechanism (collapsed to one signed-offset list here, matching this
-    app's single ordered backward-then-forward search rather than timer's
-    two-sided one) — lets a harness exercise the adjustment and the rare
-    notice deterministically, without a second real app occupying an actual
-    OS wakeup slot (unlike timer's `tests/wakeup_test_app/` companion app,
-    which this project has no equivalent of). Its parser is hand-rolled
-    rather than `strtok`-based — pulling in `strtok` for this one hook
-    measurably ate into this app's already-tight `APP_TEST_HOOKS=1`
-    `virtual_size` budget (see the cursor-navigation feature's own history
-    further down for why that budget matters).
+- **Late wakeups and the catch-up window**: PebbleOS no longer refuses a
+  `wakeup_schedule()` that falls near another app's wakeup — it dispatches
+  close-together wakeups in turn instead, so this app's wakeup may fire a
+  little *late* but is never denied. `rearm_wakeup()` therefore just calls
+  `wakeup_schedule(target, 0, true)` (cookie unused); if the call is refused
+  anyway (e.g. one of this app's own wakeups within a minute) the previously
+  armed wakeup is left alone and a warning is logged. The OS deletes a
+  wakeup's entry before dispatching it, so a late wakeup can't ask when it
+  was meant to fire: `rearm_wakeup()` persists the intended minute itself
+  (`PERSIST_KEY_ARMED_TARGET`, `store_load_armed_target()`/
+  `store_save_armed_target()`, opaque epoch minutes, 0 = none — a top-level
+  scalar like `PERSIST_KEY_WAKEUPID`, not an `Alarm` field, so no
+  `STORE_SCHEMA` change). `sweep_due_alarms()` uses it as the start of a
+  catch-up window running to now, capped at `WAKEUP_CATCHUP_MAX_MIN` (10).
+  Legacy and snoozed alarms need nothing extra (`ac_is_due` and
+  `now >= snooze_until` already catch up). A cron alarm, which only matches
+  its exact minute, is checked with `ac_cron_last_match_in_range()`
+  (`alarm_calc.c`, host-tested): it rings once if any minute in the window
+  matches and `cron_last_fired_min` is stamped with the LAST matched minute,
+  so the next-occurrence math resumes right after it. Several matches in one
+  window coalesce into a single ring — a deliberate carve-out of cron's
+  ring-on-every-match rule, only reachable via a late dispatch. With no
+  usable armed target the window is just the current minute and the plain
+  `ac_cron_is_due()` check runs. `skip_next` can't be resurrected by the
+  window: the skipped match precedes the armed target (the second match).
 - **`wakeup_service_subscribe(handle_wakeup_event)`** (in `init()`) is a real
   bug fix, not boilerplate: `wakeup_get_launch_event()` only covers a wakeup
   that had to *relaunch* the app because it wasn't running. If the app was
@@ -782,15 +720,20 @@ in this app at all, so every message key is now just an ordinary scalar at
     window's root `Layer`, creates/adds the bar child, returns it) and
     `bottom_bar_top_for_bounds()` are shared, forward-declared near the top
     of `main.c` so the window-load functions defined earlier in the file
-    (time/cron editors, the alarm edit menu) can call them before the bar's
-    own implementation appears later in the file. Each of those three
-    windows shrinks its own content (the custom time-editor `Layer`, or a
-    `MenuLayer` for cron/edit) to `bottom_bar_top_for_bounds()` (minus its
-    own header height, for the cron editor) and calls `bottom_bar_attach()`
-    in `_window_load`, destroying the returned layer in `_window_unload` —
-    same shape as the main window's own `s_bottom_bar_layer`, just one
-    static `Layer*` per window (`s_time_bottom_bar`/`s_cron_bottom_bar`/
-    `s_edit_bottom_bar`). `handle_minute_tick` checks all four against
+    (time/cron editors, the alarm edit menu, **and the Signal submenu** —
+    easy to miss reading this file top-to-bottom, since `signal_window_load`
+    sits far below this design point's own original four-window account and
+    was never added to it; confirmed via every real `bottom_bar_attach(`
+    call site, not just this prose) can call them before the bar's own
+    implementation appears later in the file. Each of those four windows
+    shrinks its own content (the custom time-editor `Layer`, or a
+    `MenuLayer` for cron/edit/signal) to `bottom_bar_top_for_bounds()`
+    (minus its own header height, for the cron editor and the Signal
+    submenu) and calls `bottom_bar_attach()` in `_window_load`, destroying
+    the returned layer in `_window_unload` — same shape as the main
+    window's own `s_bottom_bar_layer`, just one static `Layer*` per window
+    (`s_time_bottom_bar`/`s_cron_bottom_bar`/`s_edit_bottom_bar`/
+    `s_signal_bottom_bar`). `handle_minute_tick` checks all five against
     `window_stack_get_top_window()` individually rather than a single
     shared flag, since exactly one of them (if any) is on top at a time.
     The "+ New alarm" wizard reuses the same cached time/cron windows as
@@ -844,10 +787,7 @@ in this app at all, so every message key is now just an ordinary scalar at
     helper, defined alongside `signal_draw_row` below, in `edit_draw_row`/
     `repeat_preset_draw_row`/`repeat_draw_row`, which used to each duplicate
     its font/`GRect`/draw-call boilerplate inline instead) recovered just
-    over 1KB in the `APP_TEST_HOOKS=1` build — meaningful given this app
-    sits close to its own `virtual_size` ceiling (a hard `uint16_t` limit;
-    see the cursor-navigation feature's own history further down for that
-    whole story).
+    over 1KB in the `APP_TEST_HOOKS=1` build.
   - The time and snooze editors both render through the shared
     `dial_draw_number_boxes`/`dial_box_area` helpers, a direct port of
     timer's non-touch box-type duration dial (`dial_update_proc`,
@@ -1090,24 +1030,28 @@ feature — see git history if curious):
     set before. `PATTERN_SELECT_VIBE_ROW_COUNT`/`PATTERN_SELECT_SOUND_ROW_COUNT`
     and the `_CUSTOM_ROW` constants all account for this extra leading row
     (every preset/Custom row index is its old index + 1).
-  - **Vibe's presets/Custom row still open the pattern-mode keyboard
-    pre-filled with that row's text**, rather than committing instantly:
-    rows 1..`VIBE_PRESET_COUNT` are the `VIBE_PRESETS[]` table (below), and
-    the last row is Custom. Only pressing Select *inside* the keyboard
-    (`pattern_custom_done`) actually commits — selecting a preset is "start
-    from this template", not "apply immediately" (an earlier version
-    instant-applied the first preset as a special `_kind=0` row 0; that
-    special case is gone — selecting it now commits like any other preset,
-    as `_kind=1` with that preset's exact bytes, which `vibe_preset_match()`
-    still recognizes and displays by name). **Sound's presets are the one
-    exception, on request**: selecting a Tune preset row (rows
-    1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]` table, below) commits
-    immediately from `pattern_select_select` itself — `sound_pattern_kind=0`,
-    `sound_preset=<that row's index>`, `sound_enabled=true`, straight back
-    to Signal — with no keyboard step at all; the audible preview already
-    happened as the row was navigated to (`pattern_select_preview_
-    current_row`), so there's nothing left to review by the time Select is
-    pressed. `sound_preset` is a plain index into `SOUND_PRESETS[]`
+  - **Both Vibe's and Sound's preset rows commit immediately** from
+    `pattern_select_select` itself, straight back to Signal with no
+    keyboard step at all — the audible/haptic preview already happened as
+    the row was navigated to (`pattern_select_preview_current_row`), so
+    there's nothing left to review by the time Select is pressed. This is
+    a later unification: Vibe's presets used to open the pattern-mode
+    keyboard pre-filled with that row's text instead (selecting a preset
+    was "start from this template", not "apply immediately"), but that was
+    changed on request to match Sound's own presets, which had always
+    committed instantly (see `pattern_select_select`'s own comment: "on
+    request, matching Tune's own presets below"). A selected Vibe preset
+    (rows 1..`VIBE_PRESET_COUNT` into the `VIBE_PRESETS[]` table, below)
+    still commits as `vibe_pattern_kind=1` with that preset's exact bytes
+    rather than a separate stored index, which `vibe_preset_match()`
+    re-matches by byte-identity to display it by name — **only Vibe's own
+    Custom row (the one past the presets) still opens the pattern-mode
+    keyboard pre-filled**, since reviewing/tweaking genuinely freehand
+    content before committing still makes sense there. Selecting a Sound
+    preset row (rows 1..`SOUND_PRESET_COUNT` into the `SOUND_PRESETS[]`
+    table, below) sets `sound_pattern_kind=0`,
+    `sound_preset=<that row's index>`, `sound_enabled=true`. `sound_preset`
+    is a plain index into `SOUND_PRESETS[]`
     (`alarm_calc.h`, mirroring `vibe_pattern`'s own approach) — sound used
     to instead copy the preset's parsed bytes verbatim into its own
     `sound_pattern_kind=1` ("Custom") representation, but tracing every
@@ -1616,8 +1560,7 @@ feature — see git history if curious):
   `multitap_keyboard.c`): a "navigation" sub-page whose keys 3/5 (middle-row
   left/right) move the text cursor left/right instead of typing anything,
   drawn as small arrow icons (`prv_draw_nav_arrow`, a stroked shaft+chevron,
-  not a filled `GPath` asset — kept deliberately cheap; see the flash-size
-  note below for why that specific choice mattered). The same navigation
+  not a filled `GPath` asset). The same navigation
   sub-page exists for the plain/label keyboard too (a real 4th `Page` value,
   `PAGE_NAV`, appended after Symbols) and for pattern mode's own SOUND/VIBE
   sub-pages — see `multitap_keyboard.c`'s own doc comments (`cursor_pos`,
@@ -1644,46 +1587,14 @@ feature — see git history if curious):
   generic long-press-inserts-a-keypad-digit behavior (unmodified for every
   other key) would otherwise type "4"/"6" there, which never had a glyph to
   begin with.
-- **This app sits close to its `PebbleProcessInfo.virtual_size` ceiling
-  (65535 bytes, a hard `uint16_t` limit — `.text+.data+.bss` combined,
-  checked at build time by `inject_metadata.py`)**: adding the navigation
-  feature above initially pushed the `APP_TEST_HOOKS=1` build (which is
-  larger than a plain build — the test-hook handling in `main.c` adds its
-  own code) to within single-digit bytes of this ceiling, forcing several
-  individually-reasonable implementation choices (a filled `GPath` icon for
-  the nav arrows, byte-precise tap-to-position hit-testing, splitting the
-  caret/tail into two draw colors for an interior cursor) to be traded for
-  cheaper equivalents just to fit. Moving the three on-watch help texts
-  (cron / pattern-vibe / pattern-sound — ~2KB combined) out of compiled-in
-  `main.c` string constants into raw app resources (loaded on demand via
-  `load_help_text()`, see that function's own doc comment) freed enough
-  margin (~1KB) to restore the byte-precise tap-to-position and the split
-  caret/tail coloring; the `GPath` arrow icon was the one cut left in place,
-  since the cheaper stroked version already looks and works fine.
-  `load_help_text()`'s own backing buffer (`s_help_text_buf`) is
-  heap-allocated (`malloc`'d on first use, `free`'d by whichever of
-  `cron_help_window_unload`/`pattern_help_window_unload` closes) rather than
-  a plain `static char[900]` — a static array reserves its bytes in `.bss`
-  for the app's entire runtime regardless of whether any help screen is ever
-  opened, and `.bss` counts toward `virtual_size` exactly like compiled code
-  does, so `malloc`'ing it (~824 bytes recovered) is a strict improvement
-  over the static version with no behavior change, since text_layer only
-  needs the pointer to stay valid for as long as the window showing it is
-  loaded — exactly the buffer's own malloc/free lifetime. The **same**
-  `malloc`-backed-buffer technique is used a second time, independently, for
-  `keyboard_settings.c`'s own "How to type" help screen (`load_help_text()`/
-  `free_help_text_buf()` duplicated there in miniature, since it's a
-  separate compilation unit) — even though that one has no sibling texts to
-  share a buffer with (unlike the three in `main.c`, sized for the *largest*
-  of the three rather than their sum), `malloc` still wins there over a
-  plain compiled string constant (~530 bytes, ~396 bytes recovered) because
-  a heap allocation costs ~0 bytes of `virtual_size` while idle, unlike a
-  `static char[]` buffer of the same size, which would have made that
-  specific swap a net **loss** (confirmed by trying it) — the "needs
-  siblings to share with" reasoning only applies to the static-buffer
-  version, not the `malloc`'d one. Any future addition to this file, to
-  `keyboard_settings.c`, or bigger features elsewhere should check
-  `APP_TEST_HOOKS=1 pebble build` specifically, not just a plain build.
+- **On-watch help texts are raw app resources**, not compiled-in string
+  constants: the cron / pattern-vibe / pattern-sound help screens (`main.c`)
+  and the keyboard's own "How to type" screen (`keyboard_settings.c`) load
+  their text via `load_help_text()` from `resources/text/*.txt` (declared in
+  `package.json`; those `.txt` files are the source of truth, edit them
+  directly) into a `malloc`'d buffer that the owning window's unload frees
+  (`free_help_text_buf()`). The three `main.c` texts share one buffer, sized
+  for the largest.
 
 ## Tests
 
@@ -1705,3 +1616,83 @@ feature — see git history if curious):
 - `tests/dict.test.js` — Node's built-in `node:test` + `node:assert`, run
   against **compiled** `src/pkjs/dict.js` (not `src/ts` directly), which is
   why `npm test` has a `pretest: tsc` step.
+- **`tests/functional/`** — emulator-driven functional/E2E tests, a direct
+  port of `pebble-another-timer`'s own functional-test framework:
+  `tests/functional_framework/` is a git submodule
+  (`truhanen/pebble-functional-test-framework`, the same one timer uses),
+  consumed via `tests/functional/app.conf` (this app's own UUID/platform/
+  container settings) and `tests/functional/run_sequence.sh` (a thin shim
+  pinning `--conf`). Scenarios are plain-text `.seq` files under
+  `sequences/walkthroughs/` (40 of them, covering the main list, the "+ New
+  alarm" wizard, every field editor, cron alarms, the Signal submenu/
+  pattern pickers, the custom-tune library, ring/snooze/dismiss (incl. all
+  3 `auto_dismiss_mode` values and multi-alarm chaining)) — each one drives real button presses and
+  `APP_TEST_HOOKS` AppMessages against the real `pebble-tool` QEMU
+  emulator and captures screenshots at meaningful checkpoints. Golden-file
+  (approval-based) screenshot/log diffing against `tests/functional/golden/`
+  is the regression-test mechanism; see `make build_functional_test_image`/
+  `test_functional`/`test_functional_golden`/`update_functional_golden` in
+  the Makefile, and `tests/functional_framework/README.md` for the full
+  DSL/golden-testing reference.
+  - **No new `APP_TEST_HOOKS` keys were added for this** (unlike timer's
+    own `TestSetClockDisplay`/`TestSetTimerRemainingDisplay` display-
+    override family). Instead: the framework's container runs under a
+    pinned-then-ticking-forward virtual clock (`libfaketime`, baked into
+    `tests/functional_framework/container/entrypoint.sh`, not something
+    this app's own conf configures) for *behavioral* determinism (today-
+    vs-tomorrow scheduling decisions, which cron tier a pattern lands in).
+  - **Every live-clock-showing screenshot masks just its own clock digits**,
+    via that one `SCREENSHOT` instruction's own `--mask-rect` right in the
+    `.seq` file — not a whole-run default. Two geometries are in play:
+    `--mask-rect 70x25+0+203` for the main window's bottom bar (also drawn
+    by the time/cron editors, the edit menu, and the Signal submenu — see
+    the "bottom bar isn't main-window-only" design point above, including
+    its own Signal-submenu correction) and `--mask-rect 70x30+0+198` for the
+    ring screen's own, differently-positioned current-time text (a separate
+    window, own geometry — `ALARM_CLOCK_LEFT_MARGIN`/`s_alarm_time`'s own
+    `GRect`). Neither masks the bottom bar's `"Next: ..."` side, which
+    several sequences genuinely assert on. A whole-run default (one
+    `--mask-rect` applied to every screenshot via `tests/functional/
+    run_sequence.sh` and the Makefile, requiring a small local patch to
+    `run_batch.sh` to even forward the flag) was tried first and
+    deliberately reverted in favor of this — it over-masked every
+    screenshot that shows neither live display at all, and the one time it
+    "fixed" the ring screen too, that was pure coincidence of the two
+    regions' pixel ranges overlapping on this display size, not a real,
+    intentional fix (confirmed by actually computing the ring screen's own
+    text geometry afterward and finding it only partially covered anyway).
+    This is a real, confirmed-the-hard-way fix, not a preemptive one: a
+    handful of otherwise-correct, already-fixed sequences started failing
+    golden comparison purely from a screenshot landing one real minute
+    later than the golden was captured at (`"12:00"` vs. `"12:01"`, a
+    71-pixel mismatch confined to the last digit) — ordinary run-to-run
+    timing variance, not a regression.
+  - **Typing on this device is TOUCH-only** — a real, live-verified finding
+    worth knowing before writing or trusting any sequence that opens the
+    multitap keyboard (label entry, cron field entry, vibe/sound pattern
+    entry): the keyboard's own physical-button click config
+    (`multitap_keyboard_window.c`) has SELECT always submit the keyboard's
+    *current* text immediately, UP open its settings menu, and DOWN cycle
+    page/hold-to-backspace — there is no button-driven "type this
+    highlighted key" path at all, unlike what a cursory reading of the
+    pattern-entry design notes above might suggest. Actual letter/digit/
+    note entry only happens via `TOUCH` on the on-screen grid (this is
+    `emery`/Pebble Time 2, which has a real touchscreen) — container-only
+    in this framework (see `container/README.md`'s TOUCH section), so a
+    sequence that needs to type something either computes `TOUCH`
+    coordinates from `multitap_keyboard.c`'s own grid geometry constants
+    (`keyboard_label_touch_entry.seq`/`keyboard_long_press_digit_insert.seq`
+    are the worked examples) or uses a `Test*` hook to set the resulting
+    text/pattern directly and only exercises the surrounding UI mechanics
+    with real button presses (most of the Signal/pattern/tune-library
+    sequences take this second approach).
+  - Live-verifying these sequences also surfaced two stale spots this pass
+    fixed directly rather than just noting here: the Signal-submenu design
+    point above used to say only Sound's presets commit immediately
+    (Vibration's do too, on the same "on request" basis — see that point's
+    own text now), and two of the Test hooks table's own example patterns
+    above (`TestAlarmVibeCustomPattern`/`TestTuneCustomPattern`) were still
+    showing the OLD pre-`STORE_SCHEMA`-20 digit+dash/note-then-digit
+    grammar, which no longer parses under the current ABC notation. One
+    more finding that's just a fact to know, not a doc fix: a saved custom
+    tune's own id allocation (`store_alloc_tune_id`) starts at **1**, not 0.
