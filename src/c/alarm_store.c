@@ -237,7 +237,7 @@ void store_save_date_format(int format) {
 }
 
 int store_load_vibe_pattern(void) {
-  if (!persist_exists(PERSIST_KEY_VIBE_PATTERN)) { return 0; }   // default Double
+  if (!persist_exists(PERSIST_KEY_VIBE_PATTERN)) { return 0; }   // default: Double
   return persist_read_int(PERSIST_KEY_VIBE_PATTERN);
 }
 
@@ -270,6 +270,24 @@ uint32_t store_load_default_custom_tune_id(void) {
 
 void store_save_default_custom_tune_id(uint32_t id) {
   persist_write_int(PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID, (int32_t)id);
+}
+
+int store_load_default_vibe_pattern_kind(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_VIBE_PATTERN_KIND)) { return 0; }   // default Preset
+  return persist_read_int(PERSIST_KEY_DEFAULT_VIBE_PATTERN_KIND);
+}
+
+void store_save_default_vibe_pattern_kind(int kind) {
+  persist_write_int(PERSIST_KEY_DEFAULT_VIBE_PATTERN_KIND, kind);
+}
+
+uint32_t store_load_default_custom_vibe_id(void) {
+  if (!persist_exists(PERSIST_KEY_DEFAULT_CUSTOM_VIBE_ID)) { return 0; }   // no reference
+  return (uint32_t)persist_read_int(PERSIST_KEY_DEFAULT_CUSTOM_VIBE_ID);
+}
+
+void store_save_default_custom_vibe_id(uint32_t id) {
+  persist_write_int(PERSIST_KEY_DEFAULT_CUSTOM_VIBE_ID, (int32_t)id);
 }
 
 int store_load_default_snooze_minutes(void) {

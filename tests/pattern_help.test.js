@@ -42,3 +42,11 @@ test('long help text is the watch\'s own help text', () => {
   assert.strictEqual(H.VIBE_HELP, read('pattern_help_vibe.txt'));
   assert.strictEqual(H.CRON_HELP, read('cron_help.txt'));
 });
+
+test('vibration display order matches VIBE_PRESET_DISPLAY_ORDER on the watch', () => {
+  const m = /VIBE_PRESET_DISPLAY_ORDER\[\]\s*=\s*\{([^}]*)\}/.exec(mainC);
+  assert.ok(m, 'VIBE_PRESET_DISPLAY_ORDER not found in main.c');
+  assert.deepStrictEqual(m[1].split(',').map((x) => parseInt(x, 10)), H.VIBE_PRESET_DISPLAY_ORDER);
+  assert.deepStrictEqual(H.VIBE_PRESET_DISPLAY_ORDER.map((i) => H.BUILTIN_VIBES[i].name),
+    ['Double', 'Double long', 'Double short', 'Long', 'Short']);
+});

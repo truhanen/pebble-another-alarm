@@ -36,6 +36,12 @@
 #define PERSIST_KEY_DEFAULT_SOUND_PATTERN_KIND 17   // 0=Preset, 2=Library
 #define PERSIST_KEY_DEFAULT_SOUND_PRESET       18   // valid iff kind==0
 #define PERSIST_KEY_DEFAULT_CUSTOM_TUNE_ID     19   // valid iff kind==2
+// The vibration counterpart: which vibration new alarms are seeded with, set by
+// long-pressing a row in the watch's Vibration picker (or from the phone). The
+// preset itself is PERSIST_KEY_VIBE_PATTERN above. 26-27 are free (see the key
+// map in CLAUDE.md; tests/keys.test.js keeps every key unique).
+#define PERSIST_KEY_DEFAULT_VIBE_PATTERN_KIND  26   // 0=Preset (PERSIST_KEY_VIBE_PATTERN), 2=Library
+#define PERSIST_KEY_DEFAULT_CUSTOM_VIBE_ID     27   // valid iff kind==2
 // Custom-tune library -- a separate persisted table from Alarm/STORE_SCHEMA
 // below, with its own schema counter (TUNE_STORE_SCHEMA) since it's a
 // logically independent concern: a future Alarm-only schema bump shouldn't
@@ -407,6 +413,10 @@ int store_load_default_sound_preset(void);
 void store_save_default_sound_preset(int preset);
 uint32_t store_load_default_custom_tune_id(void);
 void store_save_default_custom_tune_id(uint32_t id);
+int store_load_default_vibe_pattern_kind(void);
+void store_save_default_vibe_pattern_kind(int kind);
+uint32_t store_load_default_custom_vibe_id(void);
+void store_save_default_custom_vibe_id(uint32_t id);
 
 // Default snooze duration (minutes) pre-filled for newly created alarms
 // (defaults to 9 when unset).

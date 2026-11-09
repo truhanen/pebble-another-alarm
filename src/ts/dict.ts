@@ -10,6 +10,9 @@ export interface ClaySettings {
   FirstDayOfWeek?: string;
   DateFormat?: string;
   AlarmVibePattern?: string;
+  DefaultTuneId?: string | number;      // 0 = built-in tune DefaultTunePreset, else a library tune's id
+  DefaultTunePreset?: string | number;
+  DefaultVibeId?: string | number;      // 0 = built-in vibration AlarmVibePattern, else a library vibration's id
   DefaultSnoozeMinutes?: string;
   DefaultSnoozeMax?: string;
   DefaultSnoozeEnabled?: boolean;    // Clay's toggle type returns a boolean
@@ -29,11 +32,15 @@ export interface AlarmDefaults {
   vibration: boolean;
   sound: boolean;
   increasing: boolean;     // increasing volume
-  vibePattern: number;     // 0 Double, 1 Short, 2 Long
+  vibePattern: number;     // index of the watch's built-in vibration preset (config_clay.ts / pattern_help.ts)
+  vibeId: number;          // 0, or the id of a library vibration (then vibePattern is ignored)
+  tuneId: number;          // 0, or the id of a library tune (then soundPreset is ignored)
+  soundPreset: number;     // index of the watch's built-in tune
 }
 
 export const DEFAULT_ALARM_DEFAULTS: AlarmDefaults = {
   snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true, increasing: false, vibePattern: 0,
+  vibeId: 0, tuneId: 0, soundPreset: 0,
 };
 
 function asBool(v: any, fb: boolean): boolean { return v === undefined || v === null ? fb : !!v; }
@@ -59,6 +66,7 @@ export function migrateSavedSettings(saved: Record<string, any>): Record<string,
     sound: asBool(unwrapped('DefaultSoundEnabled'), true),
     increasing: asBool(unwrapped('DefaultIncreasingVolume'), false),
     vibePattern: asNum(unwrapped('AlarmVibePattern'), 0),
+    vibeId: 0, tuneId: 0, soundPreset: 0,
   };
   return out;
 }
@@ -79,6 +87,9 @@ export function flattenAlarmDefaults(s: Record<string, any>): Record<string, any
     DefaultVibrationEnabled: asBool(d.vibration, true),
     DefaultIncreasingVolume: asBool(d.increasing, false),
     AlarmVibePattern: String(asNum(d.vibePattern, 0)),
+    DefaultVibeId: String(asNum(d.vibeId, 0)),
+    DefaultTuneId: String(asNum(d.tuneId, 0)),
+    DefaultTunePreset: String(asNum(d.soundPreset, 0)),
   };
 }
 
@@ -120,6 +131,9 @@ export function buildDict(settings: ClaySettings): Record<string, number> {
     FirstDayOfWeek: toInt(settings.FirstDayOfWeek, 1),
     DateFormat: toInt(settings.DateFormat, 0),
     AlarmVibePattern: toInt(settings.AlarmVibePattern, 0),
+    DefaultTuneId: toInt(settings.DefaultTuneId, 0),
+    DefaultTunePreset: toInt(settings.DefaultTunePreset, 0),
+    DefaultVibeId: toInt(settings.DefaultVibeId, 0),
     // 0 reuses the watch's existing "snooze disabled outright" convention
     // (snooze_minutes == 0) rather than sending a wholly separate flag for
     // the watch to also track — when snooze is off, the actual duration

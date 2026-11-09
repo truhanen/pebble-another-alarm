@@ -84,6 +84,9 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       sound: d.sound,
       increasingVolume: d.increasing,
       vibePreset: d.vibePattern,
+      vibeId: d.vibeId,
+      tuneId: d.tuneId,
+      soundPreset: d.soundPreset,
     };
   }
   function dayOrder(): number[] {
@@ -259,11 +262,20 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       return out;
     } catch (e) { return []; }
   }
-  // Option values: "p0".."p2" = Double/Short/Long preset, "v<id>" = library vibration.
+  // The watch's built-in vibration presets (names from the item's config, see
+  // config_clay.ts), listed ahead of the user's own.
+  function builtinVibes(): string[] {
+    const cfg: any = self.config || {};
+    return Array.isArray(cfg.vibePresets) ? cfg.vibePresets : [];
+  }
+  // Option values: "p0".."pN" = built-in preset, "v<id>" = library vibration.
   function vibeOptions(vibeId: number, preset: number): string {
-    const names = ['Double', 'Short', 'Long'];
+    const names = builtinVibes();
+    const cfgv: any = self.config || {};
+    const order: number[] = Array.isArray(cfgv.vibeOrder) ? cfgv.vibeOrder : names.map(function(_n: string, k: number) { return k; });
     let html = '';
-    for (let i = 0; i < 3; i++) {
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
       html += '<option value="p' + i + '"' + (vibeId === 0 && preset === i ? ' selected' : '') + '>' + names[i] + '</option>';
     }
     const list = vibes();
@@ -279,9 +291,9 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
   // Current selection of a vibration <select>: { vibeId, vibePreset }.
   function readVibe(sel: HTMLSelectElement): any {
     const v = sel.value || 'p0';
-    const last = num(sel.getAttribute('data-preset'), 0, 2, 0);
+    const last = num(sel.getAttribute('data-preset'), 0, 255, 0);
     if (v.charAt(0) === 'v') { return { vibeId: num(v.slice(1), 0, 0x7fffffff, 0), vibePreset: last }; }
-    return { vibeId: 0, vibePreset: num(v.slice(1), 0, 2, 0) };
+    return { vibeId: 0, vibePreset: num(v.slice(1), 0, 255, 0) };
   }
 
   // ---- markup ----
@@ -381,7 +393,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
       autoDismiss: num(e.autoDismiss, 0, 2, 0),
       increasingVolume: !!e.increasingVolume,
       vibeId: num(e.vibeId, 0, 0x7fffffff, 0),
-      vibePreset: num(e.vibePreset, 0, 2, 0),
+      vibePreset: num(e.vibePreset, 0, 255, 0),
     };
   }
 

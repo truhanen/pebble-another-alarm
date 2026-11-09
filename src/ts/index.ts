@@ -85,7 +85,9 @@ function sendLists(s: Record<string, any>) {
 // what the config page is built from), unless unsent page edits are pending.
 Pebble.addEventListener('appmessage', (e: any) => {
   const p = e && e.payload;
-  if (!p || (typeof p.TuneConfig !== 'string' && typeof p.AlarmConfig !== 'string' && typeof p.VibeConfig !== 'string')) { return; }
+  if (!p) { return; }
+  const hasDefaults = p.DefaultTuneId !== undefined || p.DefaultVibeId !== undefined;
+  if (typeof p.TuneConfig !== 'string' && typeof p.AlarmConfig !== 'string' && typeof p.VibeConfig !== 'string' && !hasDefaults) { return; }
   let pending = false;
   try { pending = localStorage.getItem(LISTS_PENDING_KEY) === '1'; } catch (err) { /* ignore */ }
   if (pending) { console.log('ignoring watch snapshot: unsent page edits pending'); return; }
@@ -93,6 +95,17 @@ Pebble.addEventListener('appmessage', (e: any) => {
   if (typeof p.VibeConfig === 'string') { cs.VibeList = parseVibes(p.VibeConfig); }
   if (typeof p.TuneConfig === 'string') { cs.TuneList = parseTunes(p.TuneConfig); }
   if (typeof p.AlarmConfig === 'string') { cs.AlarmList = parseAlarms(p.AlarmConfig); }
+  if (hasDefaults) {
+    // The watch's current default tune/vibration (it can change them by long-pressing a picker row).
+    const raw = cs.AlarmDefaults;
+    const cur: Record<string, any> = (raw && typeof raw === 'object' && 'value' in raw) ? raw.value : (raw || {});
+    const n = (v: any) => { const x = parseInt(String(v), 10); return isNaN(x) ? 0 : x; };
+    if (p.DefaultTuneId !== undefined) { cur.tuneId = n(p.DefaultTuneId); }
+    if (p.DefaultTunePreset !== undefined) { cur.soundPreset = n(p.DefaultTunePreset); }
+    if (p.DefaultVibeId !== undefined) { cur.vibeId = n(p.DefaultVibeId); }
+    if (p.AlarmVibePattern !== undefined) { cur.vibePattern = n(p.AlarmVibePattern); }
+    cs.AlarmDefaults = cur;
+  }
   writeJson('clay-settings', cs);
   console.log('watch snapshot stored: ' + (Array.isArray(cs.AlarmList) ? cs.AlarmList.length : '-') +
     ' alarms, ' + (Array.isArray(cs.TuneList) ? cs.TuneList.length : '-') + ' tunes, ' +
@@ -112,6 +125,9 @@ function sendConfigToWatch(raw: Record<string, any>) {
     FirstDayOfWeek: s.FirstDayOfWeek,
     DateFormat: s.DateFormat,
     AlarmVibePattern: s.AlarmVibePattern,
+    DefaultTuneId: s.DefaultTuneId,
+    DefaultTunePreset: s.DefaultTunePreset,
+    DefaultVibeId: s.DefaultVibeId,
     DefaultSnoozeMinutes: s.DefaultSnoozeMinutes,
     DefaultSnoozeMax: s.DefaultSnoozeMax,
     DefaultSnoozeEnabled: s.DefaultSnoozeEnabled,

@@ -91,7 +91,7 @@ test('"New alarm defaults" uses the same chips/grid layout as an alarm card', as
   const chips = await page.locator('.ad-opts .al-chip span').allInnerTexts();
   assert.deepStrictEqual(chips, ['Vibration', 'Sound', 'Increasing']);
   const labels = await page.locator('.ad-rootc .al-lbl').allInnerTexts();
-  assert.deepStrictEqual(labels, ['Vibration', 'Snooze (min)', 'Max snoozes']);
+  assert.deepStrictEqual(labels, ['Vibration', 'Tune', 'Snooze (min)', 'Max snoozes']);
   // same visual treatment as the card's chips (checked chips are accent-coloured) and grid
   const bg = (sel) => page.locator(sel).first().evaluate((e) => getComputedStyle(e).backgroundColor);
   assert.strictEqual(await bg('.ad-opts .ad-vib + span'), 'rgb(255, 71, 0)', 'Vibration on by default');
@@ -138,11 +138,11 @@ test('Save flattens the defaults for the watch; legacy flat settings are migrate
   assert.strictEqual(await t.page.locator('.ad-sx').inputValue(), '5');
   assert.strictEqual(await t.page.locator('.ad-snd').isChecked(), false);
   assert.strictEqual(await t.page.locator('.ad-inc').isChecked(), true);
-  assert.strictEqual(await t.page.locator('.ad-vp').inputValue(), '1');
+  assert.strictEqual(await t.page.locator('.ad-vp').inputValue(), 'p1');
   await t.page.fill('.ad-sm', '20');
   const sent = await t.save();
   assert.deepStrictEqual(JSON.parse(JSON.stringify(sent[0])), {
-    FirstDayOfWeek: 1, DateFormat: 0, AlarmVibePattern: 1, DefaultSnoozeMinutes: 20, DefaultSnoozeMax: 5,
+    FirstDayOfWeek: 1, DateFormat: 0, AlarmVibePattern: 1, DefaultTuneId: 0, DefaultTunePreset: 0, DefaultVibeId: 0, DefaultSnoozeMinutes: 20, DefaultSnoozeMax: 5,
     DefaultSoundEnabled: 0, DefaultVibrationEnabled: 1, DefaultIncreasingVolume: 1, AudioVolume: 30,
   });
 });
@@ -599,7 +599,7 @@ test('vibration patterns: add, validation tag, delete, row limit', async () => {
   assert.deepStrictEqual(errors, []);
 });
 
-test('alarm card has a Vibration select: Double/Short/Long plus only valid library vibrations', async () => {
+test('alarm card has a Vibration select: the five built-in presets plus only valid library vibrations', async () => {
   const { page } = await open();
   await heading(page, 'Vibration patterns').click();
   await page.click('.vb-add');
@@ -611,20 +611,20 @@ test('alarm card has a Vibration select: Double/Short/Long plus only valid libra
   await heading(page, 'Alarms').click();
   await page.click('.al-add');
   await page.locator('.al-vibsel').dispatchEvent('mousedown');
-  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), ['Double', 'Short', 'Long', 'Heartbeat']);
+  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), [...VIBE_BUILTIN_NAMES, 'Heartbeat']);
   // fixing the pattern makes it appear live
   await heading(page, 'Vibration patterns').click();
   await page.locator('.vb-pat').nth(1).fill('2 z 2');
   await page.locator('.vb-pat').nth(1).dispatchEvent('change');
   await heading(page, 'Alarms').click();
   await page.locator('.al-vibsel').dispatchEvent('mousedown');
-  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), ['Double', 'Short', 'Long', 'Heartbeat', 'Broken']);
+  assert.deepStrictEqual(await page.locator('.al-vibsel option').allInnerTexts(), [...VIBE_BUILTIN_NAMES, 'Heartbeat', 'Broken']);
 });
 
 test('a new alarm takes its vibration preset from "New alarm defaults"', async () => {
   const { page } = await open();
   await heading(page, 'New alarm defaults').click();
-  await page.selectOption('.ad-vp', '2');   // Long
+  await page.selectOption('.ad-vp', 'p2');   // Long
   await heading(page, 'Alarms').click();
   await page.click('.al-add');
   assert.strictEqual(await page.locator('.al-vibsel').inputValue(), 'p2');
@@ -695,6 +695,8 @@ test('a snapshot without VibeConfig (older watch) leaves the stored vibration li
 
 // ---- read-only built-ins and the collapsible long help ----
 
+// listed in the watch picker's order: double, double long, double short, long, short
+const VIBE_BUILTIN_NAMES = ['Double', 'Double long', 'Double short', 'Long', 'Short'];
 const TUNE_BUILTIN_NAMES = ['Triple', 'Double', 'Triple slow', 'Analog bell', 'Celebration', 'Lullaby', 'March'];
 
 test('Tunes lists the watch\'s built-in tunes read-only; they are not part of the saved lists', async () => {
@@ -721,11 +723,11 @@ test('Tunes lists the watch\'s built-in tunes read-only; they are not part of th
   assert.deepStrictEqual(errors, []);
 });
 
-test('Vibration patterns lists Double/Short/Long read-only', async () => {
+test('Vibration patterns lists the five built-in presets read-only (PebbleOS timings)', async () => {
   const { page } = await open();
   await heading(page, 'Vibration patterns').click();
-  assert.deepStrictEqual(await page.locator('.vb-biname').evaluateAll((els) => els.map((e) => e.textContent)), ['Double', 'Short', 'Long']);
-  assert.deepStrictEqual(await page.locator('.vb-bipat').evaluateAll((els) => els.map((e) => e.value)), ['2 z 2', '2', '8']);
+  assert.deepStrictEqual(await page.locator('.vb-biname').evaluateAll((els) => els.map((e) => e.textContent)), VIBE_BUILTIN_NAMES);
+  assert.deepStrictEqual(await page.locator('.vb-bipat').evaluateAll((els) => els.map((e) => e.value)), ['2 z 2', '4 z2 4', '3/5 z3/5 3/5', '5', '5/2']);
   assert.strictEqual(await page.locator('.vb-bi input').evaluateAll((els) => els.every((e) => e.readOnly)), true);
   assert.strictEqual(await page.locator('.vb-row').count(), 0);
 });
@@ -766,7 +768,7 @@ test('the long syntax help is collapsible (collapsed by default) and replaces th
 
 test('each built-in is one line: a plain-text label and one read-only value field', async () => {
   const { page } = await open();
-  for (const [sec, p, n] of [['Tunes', 'tu', 7], ['Vibration patterns', 'vb', 3]]) {
+  for (const [sec, p, n] of [['Tunes', 'tu', 7], ['Vibration patterns', 'vb', 5]]) {
     await heading(page, sec).click();
     const rows = page.locator(`.${p}-bi`);
     assert.strictEqual(await rows.count(), n);
@@ -1171,4 +1173,44 @@ test('a watch snapshot preselects the alarm\'s built-in tune; switching to your 
   await first.selectOption({ label: 'Watch tune' });
   await first.selectOption({ label: 'March' });
   assert.strictEqual(await shown(0), 'March');
+});
+
+test('"New alarm defaults" offers the same five vibration presets, and a new alarm can pick the last one', async () => {
+  const { page } = await open();
+  await heading(page, 'New alarm defaults').click();
+  assert.deepStrictEqual(await page.locator('.ad-vp option').allInnerTexts(), VIBE_BUILTIN_NAMES);
+  await page.selectOption('.ad-vp', 'p3');   // Double long: beyond the old three-entry range
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-vibsel').inputValue(), 'p3');
+  const t = await open(undefined, undefined);
+  await heading(t.page, 'Alarms').click();
+  await t.page.click('.al-add');
+  await t.page.locator('.al-card .al-vibsel').selectOption({ label: 'Double long' });
+  const sent = await t.save();
+  const alarms = sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS).map((r) => r.split(US));
+  assert.strictEqual(alarms[0][16], '3', 'the preset index (not clamped to the old 0-2 range) is what is sent');
+});
+
+test('"New alarm defaults" has a Tune select (built-ins, then the user\'s own) that new alarms follow', async () => {
+  const { page, errors } = await open();
+  await heading(page, 'Tunes').click();
+  await page.click('.tu-add');
+  await page.locator('.tu-name').fill('Mine'); await page.locator('.tu-pat').fill('C E G');
+  await heading(page, 'New alarm defaults').click();
+  assert.deepStrictEqual(await page.locator('.ad-tn option').allInnerTexts(), [...TUNE_BUILTIN_NAMES, 'Mine']);
+  await page.selectOption('.ad-tn', { label: 'Mine' });
+  await heading(page, 'Alarms').click();
+  await page.click('.al-add');
+  assert.strictEqual(await page.locator('.al-tune option:checked').innerText(), 'Mine');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('a watch snapshot of the defaults preselects the default tune and vibration', async () => {
+  const { page } = await open(undefined, (phone) => {
+    phone.fire('appmessage', { payload: { DefaultTuneId: 0, DefaultTunePreset: 4, DefaultVibeId: 0, AlarmVibePattern: 3 } });
+  });
+  await heading(page, 'New alarm defaults').click();
+  assert.strictEqual(await page.locator('.ad-tn').inputValue(), 'p4');
+  assert.strictEqual(await page.locator('.ad-vp').inputValue(), 'p3');
 });

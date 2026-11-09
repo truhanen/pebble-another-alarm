@@ -76,7 +76,10 @@
       "TestVibeIndex",
       "TestVibeName",
       "TestVibePattern",
-      "TestAlarmVibeId"
+      "TestAlarmVibeId",
+      "DefaultTuneId",
+      "DefaultTunePreset",
+      "DefaultVibeId"
     ],
     "resources": {
       "media": [

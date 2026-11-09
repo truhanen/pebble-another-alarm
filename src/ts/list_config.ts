@@ -19,7 +19,7 @@
 // far below that, so the two can never collide (see main.c's
 // apply_alarm_config/apply_tune_config).
 
-import { BUILTIN_TUNES } from './pattern_help';
+import { BUILTIN_TUNES, BUILTIN_VIBES } from './pattern_help';
 
 export const RS = '\x1e';
 export const US = '\x1f';
@@ -269,7 +269,7 @@ export function alarmsToString(list: AlarmRec[], validTuneIds: number[], removed
       clampInt(a.autoDismiss, 0, 2, 0),
       b(a.increasingVolume),
       vibeId,
-      clampInt(a.vibePreset, 0, 2, 0),
+      clampInt(a.vibePreset, 0, BUILTIN_VIBES.length - 1, 0),
       clampInt(a.soundPreset, 0, BUILTIN_TUNES.length - 1, 0),
     ].join(US));
   }

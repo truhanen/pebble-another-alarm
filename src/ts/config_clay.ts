@@ -1,4 +1,4 @@
-import { BUILTIN_TUNES, BUILTIN_VIBES, TUNE_HELP, VIBE_HELP, CRON_HELP } from './pattern_help';
+import { BUILTIN_TUNES, BUILTIN_VIBES, VIBE_PRESET_DISPLAY_ORDER, TUNE_HELP, VIBE_HELP, CRON_HELP } from './pattern_help';
 
 const config = [
   {
@@ -14,8 +14,11 @@ const config = [
       // original DefaultSnooze*/DefaultSound*/... keys. "Repeats"/"Max
       // snoozes" is the same value the on-watch snooze editor calls Repeats.
       { type: 'alarmDefaults', messageKey: 'AlarmDefaults',
+        vibePresets: BUILTIN_VIBES.map((b) => b.name),   // the Vibration select's entries (this.config)
+        vibeOrder: VIBE_PRESET_DISPLAY_ORDER,
+        soundPresets: BUILTIN_TUNES.map((b) => b.name),
         defaultValue: { snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true,
-                        increasing: false, vibePattern: 0 } },
+                        increasing: false, vibePattern: 0, vibeId: 0, tuneId: 0, soundPreset: 0 } },
     ],
   },
   {
@@ -28,7 +31,9 @@ const config = [
       // watch's full cron help (collapsible under each cron alarm's Basic/Cron
       // selector) and the names of its built-in tunes (the Tune dropdown's first entries).
       { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP,
-        soundPresets: BUILTIN_TUNES.map((b) => b.name) },
+        soundPresets: BUILTIN_TUNES.map((b) => b.name),
+        vibePresets: BUILTIN_VIBES.map((b) => b.name),
+        vibeOrder: VIBE_PRESET_DISPLAY_ORDER },
     ],
   },
   {
@@ -48,7 +53,7 @@ const config = [
       // Named custom vibration patterns (the library alarms pick from);
       // Clay-only key serialized into the real `VibeConfig` key by index.ts.
       { type: 'vibeList', messageKey: 'VibeList', defaultValue: [],
-        builtins: BUILTIN_VIBES, help: VIBE_HELP },
+        builtins: VIBE_PRESET_DISPLAY_ORDER.map((i) => BUILTIN_VIBES[i]), help: VIBE_HELP },
     ],
   },
   {

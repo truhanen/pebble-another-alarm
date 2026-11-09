@@ -126,7 +126,11 @@ static int s_first_day_of_week = 1;   // 0=Sunday, 1=Monday
 // alarm's own vibe_pattern at creation -- no longer read at ring time
 // (ring reads the firing alarm's own vibe_pattern instead), since the
 // pattern is now a per-alarm attribute, editable independently afterward.
-static int s_default_vibe_pattern = 0;
+static int s_default_vibe_pattern = 0;   // Double
+// ...and the vibration default can ALSO be one of the user's library vibrations (set
+// by long-pressing its row in the Vibration picker, like the Tune picker's default):
+static int s_default_vibe_pattern_kind = 0;    // 0=Preset (s_default_vibe_pattern), 2=Library
+static uint32_t s_default_custom_vibe_id = 0;  // valid iff kind==2
 // The phone's "Enable snooze" toggle has no watch-side counterpart: when
 // off, dict.ts sends DefaultSnoozeMinutes as 0 outright, reusing the
 // existing "0 = snooze disabled" convention (see alarm_snooze()) instead of
@@ -184,6 +188,8 @@ static void persist_all(void) {
   store_save_default_sound_pattern_kind(s_default_sound_pattern_kind);
   store_save_default_sound_preset(s_default_sound_preset);
   store_save_default_custom_tune_id(s_default_custom_tune_id);
+  store_save_default_vibe_pattern_kind(s_default_vibe_pattern_kind);
+  store_save_default_custom_vibe_id(s_default_custom_vibe_id);
 }
 
 // Lowest set bit in cron_hour_mask/cron_min_mask -- the day's earliest
@@ -974,20 +980,54 @@ static const SoundPreset SOUND_PRESETS[] = {
 };
 #define SOUND_PRESET_COUNT (int)(sizeof(SOUND_PRESETS) / sizeof(SOUND_PRESETS[0]))
 
-// Ready-made Vibration presets -- same shape and treatment as SOUND_PRESETS
-// above (selecting any row, including "Double", opens the pattern keyboard
-// pre-filled with its text rather than committing immediately; see
-// pattern_select_select). alarm_vibrate()'s vibe_pattern_kind==0 fallback
-// (a brand new, never-touched alarm) reuses these same literal patterns via
-// a->vibe_pattern as an index, so "what Double/Short/Long feels like" can
-// never drift apart from what this table shows/offers as a starting point.
+// Ready-made Vibration presets, modelled on PebbleOS's own simple vibe scores
+// (coredevices/PebbleOS, resources/normal/snowy/vibes) with their timings:
+//   Double       = two 200 ms buzzes 100 ms apart (the app's original Double)
+//   Short        = the standard short pulse, one 250 ms buzz
+//   Long         = the standard long pulse, one 500 ms buzz
+//   Double short = "Double Tap": two 60 ms taps (45 ms buzz + 15 ms brake) 60 ms apart
+//   Double long  = "Double Pulse Medium": two 400 ms buzzes 200 ms apart
+// Durations are N/D x 100 ms (see ac_vibe_pattern_parse), exact for all four.
+//
+// A picked preset is stored as `vibe_pattern_kind = 0` plus its INDEX in this
+// table (`Alarm.vibe_pattern`), so an alarm follows the preset's definition;
+// alarm_vibrate() parses the entry fresh at ring time. The order below is part
+// of the stored format (an alarm keeps its index): new entries go at the END.
+// Indices 0-2 used to be "Double" (2 z 2), "Short" (2) and "Long" (8);
+// LEGACY_VIBE_PRESET_PATTERNS below maps alarms that stored those old byte
+// patterns onto the new entries at the same index (see migrate_inline_vibes).
 typedef struct { const char *label; const char *pattern; } VibePreset;
 static const VibePreset VIBE_PRESETS[] = {
-  { "Double", "2 z 2" },
-  { "Short", "2" },
-  { "Long", "8" },
+  { "Double", "2 z 2" },            // the original default: two 200 ms buzzes 100 ms apart
+  { "Short", "5/2" },
+  { "Long", "5" },
+  { "Double long", "4 z2 4" },
+  { "Double short", "3/5 z3/5 3/5" },
 };
+static const char *const LEGACY_VIBE_PRESET_PATTERNS[] = { "2 z 2", "2", "8" };
+#define LEGACY_VIBE_PRESET_COUNT (int)(sizeof(LEGACY_VIBE_PRESET_PATTERNS) / sizeof(LEGACY_VIBE_PRESET_PATTERNS[0]))
 #define VIBE_PRESET_COUNT (int)(sizeof(VIBE_PRESETS) / sizeof(VIBE_PRESETS[0]))
+
+// The order the presets are LISTED in -- the Vibration picker's rows, and the
+// same on the config page (VIBE_PRESET_DISPLAY_ORDER in src/ts/pattern_help.ts,
+// kept in step by tests/pattern_help.test.js): Double, Double long, Double short,
+// Long, Short. Kept separate from the table's STORED order above because an alarm
+// stores a preset's table index, which can't change meaning.
+static const uint8_t VIBE_PRESET_DISPLAY_ORDER[] = { 0, 3, 4, 2, 1 };
+_Static_assert(sizeof(VIBE_PRESET_DISPLAY_ORDER) == sizeof(VIBE_PRESETS) / sizeof(VIBE_PRESETS[0]),
+               "VIBE_PRESET_DISPLAY_ORDER must list every preset exactly once");
+
+// Picker row (1-based: row 0 is "Off") -> the preset it shows, or -1 past the presets.
+static int vibe_preset_at_row(int row) {
+  return (row >= 1 && row <= VIBE_PRESET_COUNT) ? (int)VIBE_PRESET_DISPLAY_ORDER[row - 1] : -1;
+}
+// Preset table index -> the picker row that shows it.
+static int vibe_row_for_preset(int idx) {
+  for (int r = 0; r < VIBE_PRESET_COUNT; r++) {
+    if (VIBE_PRESET_DISPLAY_ORDER[r] == idx) { return r + 1; }
+  }
+  return 1;
+}
 
 // vibe_preset_match finds which VIBE_PRESETS entry (if any) `a`'s
 // currently-stored custom vibe pattern is byte-identical to, by re-parsing
@@ -1011,32 +1051,17 @@ static int vibe_preset_match(const Alarm *a) {
   return -1;
 }
 
-// Writes at most the first 6 space-separated tokens of `pattern` into
-// `out`, appending "..." if there were more -- the Vibration picker shows
-// this instead of a preset's full pattern text, which got cluttered once
-// presets started running to a dozen-plus segments (e.g. SOS). (Sound's
-// presets/tunes don't use this any more -- they show no preview at all
-// when collapsed, expanding to their full pattern text on navigate instead;
-// this cap only still applies to Vibration, which never expands.)
-static void pattern_preset_preview(const char *pattern, char *out, size_t out_size) {
-  const char *p = pattern;
-  const char *end_of_last = pattern;
-  int tokens = 0;
-  for (int i = 0; i < 6 && *p; i++) {
-    while (*p == ' ') { p++; }
-    if (!*p) { break; }
-    while (*p && *p != ' ') { p++; }
-    end_of_last = p;
-    tokens++;
+// Index of the OLD preset (Double/Short/Long, see LEGACY_VIBE_PRESET_PATTERNS)
+// whose bytes `a` stored when it picked one (a preset used to be copied into the
+// alarm as inline bytes, vibe_pattern_kind 1), or -1.
+static int legacy_vibe_preset_match(const Alarm *a) {
+  if (a->vibe_pattern_kind != 1 || a->vibe_pattern_len == 0) { return -1; }
+  for (int i = 0; i < LEGACY_VIBE_PRESET_COUNT; i++) {
+    uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], len;
+    if (!ac_vibe_pattern_parse(LEGACY_VIBE_PRESET_PATTERNS[i], AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) { continue; }
+    if (len == a->vibe_pattern_len && memcmp(parsed, a->vibe_pattern_custom, len) == 0) { return i; }
   }
-  const char *rest = end_of_last;
-  while (*rest == ' ') { rest++; }
-  bool more = (*rest != '\0');
-  size_t len = (size_t)(end_of_last - pattern);
-  if (len > out_size - 1) { len = out_size - 1; }
-  memcpy(out, pattern, len);
-  out[len] = '\0';
-  if (more && len + 4 <= out_size) { strcat(out, "..."); }
+  return -1;
 }
 
 // A custom vibe pattern (vibe_pattern_kind==1) plays via the SDK's own
@@ -3314,6 +3339,17 @@ static void migrate_inline_vibes(void) {
   bool alarms_changed = false, vibes_changed = false;
   for (int i = 0; i < s_count; i++) {
     Alarm *a = &s_alarms[i];
+    // An alarm that picked one of the OLD presets stored its bytes inline; point
+    // it at the preset's slot instead, so it follows the new definition (and is
+    // not mistaken for a hand-typed pattern below).
+    int legacy = legacy_vibe_preset_match(a);
+    if (legacy >= 0 && vibe_preset_match(a) < 0) {
+      a->vibe_pattern_kind = 0;
+      a->vibe_pattern = (uint8_t)legacy;
+      a->custom_vibe_id = 0;
+      alarms_changed = true;
+      continue;
+    }
     // Candidates: a hand-typed inline pattern (kind 1 matching no preset), or --
     // the repair case -- a library reference whose entry no longer exists but
     // whose inline copy is still there (a migrated alarm keeps its bytes; see
@@ -3997,10 +4033,18 @@ static bool pattern_select_row_is_selected(MenuLayer *ml, int row) {
 // other row stays the usual fixed 34px. Computed from the wrapped height
 // of the notes text at GOTHIC_14_BOLD, since that's what draw_row below
 // will actually render.
+static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, size_t out_size);
 static int16_t pattern_select_cell_height(MenuLayer *ml, MenuIndex *idx, void *ctx) {
-  if (s_pattern_select_kind == PATTERN_SELECT_SOUND && pattern_select_row_is_selected(ml, idx->row)) {
+  if (pattern_select_row_is_selected(ml, idx->row)) {
     char pattern[PATTERN_KEYBOARD_MAX_LEN + 1];
-    if (pattern_select_sound_row_pattern(idx->row, pattern, sizeof(pattern))) {
+    bool has = false;
+    if (s_pattern_select_kind == PATTERN_SELECT_SOUND) {
+      has = pattern_select_sound_row_pattern(idx->row, pattern, sizeof(pattern));
+    } else if (s_edit_idx >= 0 && s_edit_idx < s_count) {
+      pattern_select_vibe_row_text(&s_alarms[s_edit_idx], idx->row, pattern, sizeof(pattern));
+      has = pattern[0] != '\0';
+    }
+    if (has) {
       GRect mb = layer_get_bounds(menu_layer_get_layer(ml));
       GFont nf = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
       GSize sz = graphics_text_layout_get_content_size(
@@ -4089,10 +4133,12 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
     bool is_off = (row == 0);
     bool is_new = (row == pattern_select_vibe_new_row());
     bool is_help = (row == pattern_select_vibe_help_row());
-    int preset_idx = (row >= 1 && row <= VIBE_PRESET_COUNT) ? row - 1 : -1;
+    int preset_idx = vibe_preset_at_row(row);
     int vibe_idx = (!is_off && !is_new && !is_help && preset_idx < 0) ? row - PATTERN_SELECT_VIBES_BASE : -1;
     const char *label = "";
     char value[64] = "";
+    char pattern_text[PATTERN_KEYBOARD_MAX_LEN + 1] = "";
+    bool has_pattern = false;
     if (is_help) {
       label = "Custom vibration help";
     } else if (is_off) {
@@ -4101,14 +4147,22 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
       label = "+ Custom";
     } else if (preset_idx >= 0) {
       label = VIBE_PRESETS[preset_idx].label;
-      pattern_preset_preview(VIBE_PRESETS[preset_idx].pattern, value, sizeof(value));
+      pattern_select_vibe_row_text(&s_alarms[s_edit_idx], row, pattern_text, sizeof(pattern_text));
+      has_pattern = true;
+      if (s_default_vibe_pattern_kind == 0 && preset_idx == s_default_vibe_pattern) {
+        snprintf(value, sizeof(value), "default");
+      }
     } else if (vibe_idx >= 0 && vibe_idx < s_vibe_count) {
-      // A saved library vibration: its name, with its pattern (shortened)
-      // as the value, like a preset row shows its own.
-      char full[PATTERN_KEYBOARD_MAX_LEN + 1];
       label = s_vibes[vibe_idx].name;
-      ac_vibe_pattern_format(full, sizeof(full), s_vibes[vibe_idx].pattern, s_vibes[vibe_idx].pattern_len);
-      pattern_preset_preview(full, value, sizeof(value));
+      pattern_select_vibe_row_text(&s_alarms[s_edit_idx], row, pattern_text, sizeof(pattern_text));
+      has_pattern = true;
+      bool is_default = (s_default_vibe_pattern_kind == 2 && s_vibes[vibe_idx].id == s_default_custom_vibe_id);
+      snprintf(value, sizeof(value), is_default ? "*, default" : "*");
+    }
+    // Like the Tune picker: only the selected row shows its pattern.
+    if (has_pattern && pattern_select_row_is_selected(s_pattern_select_menu, row)) {
+      draw_label_and_notes_row(ctx, b, label, pattern_text, value);
+      return;
     }
     draw_key_value_row(ctx, b, label, value);
     return;
@@ -4176,8 +4230,8 @@ static void pattern_select_draw_row(GContext *ctx, const Layer *cell_layer, Menu
 // notes line.)
 static void pattern_select_vibe_row_text(const Alarm *a, int row, char *out, size_t out_size) {
   out[0] = '\0';
-  if (row >= 1 && row <= VIBE_PRESET_COUNT) {
-    strncpy(out, VIBE_PRESETS[row - 1].pattern, out_size - 1);
+  if (vibe_preset_at_row(row) >= 0) {
+    strncpy(out, VIBE_PRESETS[vibe_preset_at_row(row)].pattern, out_size - 1);
     out[out_size - 1] = '\0';
     return;
   }
@@ -4286,18 +4340,16 @@ static void pattern_select_select(MenuLayer *ml, MenuIndex *cell_index, void *ct
                                              pattern_kb_live_text);
       return;
     }
-    int preset_idx = (row >= 1 && row <= VIBE_PRESET_COUNT) ? row - 1 : -1;
+    int preset_idx = vibe_preset_at_row(row);
     if (preset_idx >= 0) {
-      uint8_t parsed[AC_VIBE_PATTERN_MAX_SEGMENTS], len;
-      if (ac_vibe_pattern_parse(VIBE_PRESETS[preset_idx].pattern, AC_VIBE_PATTERN_MAX_SEGMENTS, parsed, &len)) {
-        a->vibe_pattern_kind = 1;
-        a->vibe_pattern_len = len;
-        memcpy(a->vibe_pattern_custom, parsed, len);
-        a->vibration_enabled = true;
-        persist_all();
-        window_stack_pop(true);   // back to Signal
-        if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
-      }
+      // Stored as the preset's INDEX (not a copy of its bytes): see VIBE_PRESETS.
+      a->vibe_pattern_kind = 0;
+      a->vibe_pattern = (uint8_t)preset_idx;
+      a->custom_vibe_id = 0;
+      a->vibration_enabled = true;
+      persist_all();
+      window_stack_pop(true);   // back to Signal
+      if (s_signal_menu) { menu_layer_reload_data(s_signal_menu); }
       return;
     }
   }
@@ -4368,6 +4420,26 @@ static void pattern_select_select_click(ClickRecognizerRef r, void *ctx) {
 // already-current default is a harmless no-op overwrite, same as this
 // picker's other commit branches never guard against redundant writes.
 static void pattern_select_select_long(ClickRecognizerRef r, void *ctx) {
+  if (s_pattern_select_kind == PATTERN_SELECT_VIBE) {
+    // Same gesture for vibrations: mark a preset or a library vibration as the
+    // default new alarms are seeded with ("+ Custom", Off and Help have none).
+    MenuIndex vidx = menu_layer_get_selected_index(s_pattern_select_menu);
+    int vrow = vidx.row;
+    if (vrow == 0 || vrow == pattern_select_vibe_new_row() || vrow == pattern_select_vibe_help_row()) { return; }
+    int vpreset = vibe_preset_at_row(vrow);
+    if (vpreset >= 0) {
+      s_default_vibe_pattern_kind = 0;
+      s_default_vibe_pattern = vpreset;
+    } else if (vrow >= PATTERN_SELECT_VIBES_BASE && vrow < pattern_select_vibe_new_row()) {
+      s_default_vibe_pattern_kind = 2;
+      s_default_custom_vibe_id = s_vibes[vrow - PATTERN_SELECT_VIBES_BASE].id;
+    } else {
+      return;
+    }
+    persist_all();
+    menu_layer_reload_data(s_pattern_select_menu);
+    return;
+  }
   if (s_pattern_select_kind != PATTERN_SELECT_SOUND) { return; }
   MenuIndex idx = menu_layer_get_selected_index(s_pattern_select_menu);
   int row = idx.row;
@@ -4482,7 +4554,7 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
       if (!a->vibration_enabled) {
         row = 0;   // "Off"
       } else if (a->vibe_pattern_kind == 0) {
-        row = (a->vibe_pattern < VIBE_PRESET_COUNT ? a->vibe_pattern : 0) + 1;
+        row = vibe_row_for_preset(a->vibe_pattern < VIBE_PRESET_COUNT ? a->vibe_pattern : 0);
       } else if (a->vibe_pattern_kind == 2) {
         // Library reference -- land on that vibration's own row (falling back
         // to "+ Custom" if the id is somehow stale).
@@ -4490,7 +4562,7 @@ static void pattern_select_window_push(PatternSelectKind kind, bool show_invalid
         row = (vi >= 0) ? PATTERN_SELECT_VIBES_BASE + vi : pattern_select_vibe_new_row();
       } else {
         int match = vibe_preset_match(a);
-        row = (match >= 0) ? match + 1 : pattern_select_vibe_new_row();
+        row = (match >= 0) ? vibe_row_for_preset(match) : pattern_select_vibe_new_row();
       }
     } else if (!a->sound_enabled) {
       row = 0;   // "Off"
@@ -5006,6 +5078,13 @@ static void custom_vibe_on_delete_choice(int choice, void *ctx) {
   remove_vibe_at(s_custom_vibe_idx);
   persist_vibes();
   revert_alarms_using_vibe(id);
+  // Like deleting the default tune: the default falls back to the preset, and is
+  // persisted here because revert_alarms_using_vibe() only persists when an
+  // alarm actually referenced it.
+  if (s_default_vibe_pattern_kind == 2 && s_default_custom_vibe_id == id) {
+    s_default_vibe_pattern_kind = 0;
+    persist_all();
+  }
   window_stack_pop(true);   // this screen -- back to the Vibration picker
   if (s_pattern_select_menu) {
     menu_layer_reload_data(s_pattern_select_menu);
@@ -5165,6 +5244,12 @@ static void start_new_alarm_flow(void) {
   s_draft.enabled = true;
   s_draft.vibration_enabled = s_default_vibration_enabled;
   s_draft.vibe_pattern = (uint8_t)s_default_vibe_pattern;
+  if (s_default_vibe_pattern_kind == 2 && find_vibe_by_id(s_default_custom_vibe_id) >= 0) {
+    // the default is one of the user's library vibrations (a stale id falls
+    // back to the preset, same as the tune default below)
+    s_draft.vibe_pattern_kind = 2;
+    s_draft.custom_vibe_id = s_default_custom_vibe_id;
+  }
   // Sound's own default mirrors vibe_pattern's role above, but needs a
   // kind/preset/tune-id triple instead of one field, since the watch-set
   // default (see pattern_select_select_long) can point at either a factory
@@ -5584,6 +5669,19 @@ static bool snapshot_send(uint32_t key, char *text) {
   return ok;
 }
 
+// Last stage: the new-alarm defaults for tune/vibration (the watch can change
+// them by long-pressing a picker row), so the config page shows the current ones.
+static bool defaults_send(void) {
+  DictionaryIterator *out;
+  if (app_message_outbox_begin(&out) != APP_MSG_OK) { return false; }
+  dict_write_int32(out, MESSAGE_KEY_DefaultTuneId,
+                   s_default_sound_pattern_kind == 2 ? (int32_t)s_default_custom_tune_id : 0);
+  dict_write_int32(out, MESSAGE_KEY_DefaultTunePreset, s_default_sound_preset);
+  dict_write_int32(out, MESSAGE_KEY_DefaultVibeId,
+                   s_default_vibe_pattern_kind == 2 ? (int32_t)s_default_custom_vibe_id : 0);
+  dict_write_int32(out, MESSAGE_KEY_AlarmVibePattern, s_default_vibe_pattern);
+  return app_message_outbox_send() == APP_MSG_OK;
+}
 static void snapshot_timer_cb(void *ctx) {
   s_snapshot_timer = NULL;
   if (s_snapshot_stage != 0) {   // previous snapshot still in flight: try again shortly
@@ -6164,7 +6262,32 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
   Tuple *t;
   if ((t = dict_find(iter, MESSAGE_KEY_FirstDayOfWeek))) { s_first_day_of_week = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DateFormat))) { s_date_format = (int)t->value->int32; changed = true; }
-  if ((t = dict_find(iter, MESSAGE_KEY_AlarmVibePattern))) { s_default_vibe_pattern = (int)t->value->int32; changed = true; }
+  if ((t = dict_find(iter, MESSAGE_KEY_AlarmVibePattern))) {
+    int vp = (int)t->value->int32;
+    s_default_vibe_pattern = (vp >= 0 && vp < VIBE_PRESET_COUNT) ? vp : 0;
+    changed = true;
+  }
+  // The default tune/vibration for new alarms, as the config page's "New alarm
+  // defaults" sets them: an id != 0 is one of the user's own library entries,
+  // otherwise the built-in preset index. (The watch also sets these itself, by
+  // long-pressing a picker row, and reports them back after its snapshots.)
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultTuneId))) {
+    uint32_t id = (uint32_t)t->value->int32;
+    s_default_sound_pattern_kind = id != 0 ? 2 : 0;
+    s_default_custom_tune_id = id;
+    changed = true;
+  }
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultTunePreset))) {
+    int tp = (int)t->value->int32;
+    s_default_sound_preset = (tp >= 0 && tp < SOUND_PRESET_COUNT) ? tp : 0;
+    changed = true;
+  }
+  if ((t = dict_find(iter, MESSAGE_KEY_DefaultVibeId))) {
+    uint32_t id = (uint32_t)t->value->int32;
+    s_default_vibe_pattern_kind = id != 0 ? 2 : 0;
+    s_default_custom_vibe_id = id;
+    changed = true;
+  }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultSnoozeMinutes))) { s_default_snooze_minutes = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_DefaultSnoozeMax))) { s_default_snooze_max = (int)t->value->int32; changed = true; }
   if ((t = dict_find(iter, MESSAGE_KEY_AudioVolume))) { s_audio_volume = (int)t->value->int32; changed = true; }
@@ -6201,6 +6324,9 @@ static void outbox_sent(DictionaryIterator *iter, void *ctx) {
   } else if (s_snapshot_stage == 2) {
     s_snapshot_stage = 3;
     if (!snapshot_send(MESSAGE_KEY_AlarmConfig, build_alarm_snapshot())) { s_snapshot_stage = 0; }
+  } else if (s_snapshot_stage == 3) {
+    s_snapshot_stage = 4;
+    if (!defaults_send()) { s_snapshot_stage = 0; }
   } else {
     s_snapshot_stage = 0;
   }
@@ -6243,6 +6369,8 @@ static void init(void) {
   s_default_sound_pattern_kind = store_load_default_sound_pattern_kind();
   s_default_sound_preset = store_load_default_sound_preset();
   s_default_custom_tune_id = store_load_default_custom_tune_id();
+  s_default_vibe_pattern_kind = store_load_default_vibe_pattern_kind();
+  s_default_custom_vibe_id = store_load_default_custom_vibe_id();
   migrate_inline_vibes();
 
   // If launched by a wakeup, the firing event was already consumed.

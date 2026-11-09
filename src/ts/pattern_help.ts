@@ -19,11 +19,20 @@ export const BUILTIN_TUNES: Builtin[] = [
   { name: 'March', pattern: 'A,,,4 z2 A,,,4 z2 A,,,4 z2 F,,,3 z2 C,, A,,,4 z2 F,,,3 z2 C,, A,,,6' },
 ];
 
+// Modelled on PebbleOS's simple vibe scores (Short/Long = its standard short/long
+// pulse, Double short = "Double Tap", Double long = "Double Pulse Medium") with
+// their timings. The ORDER is the stored index on the watch: append only.
 export const BUILTIN_VIBES: Builtin[] = [
   { name: 'Double', pattern: '2 z 2' },
-  { name: 'Short', pattern: '2' },
-  { name: 'Long', pattern: '8' },
+  { name: 'Short', pattern: '5/2' },
+  { name: 'Long', pattern: '5' },
+  { name: 'Double long', pattern: '4 z2 4' },
+  { name: 'Double short', pattern: '3/5 z3/5 3/5' },
 ];
+
+// Order the watch's pickers (and the config page) list the presets in, as
+// indices into BUILTIN_VIBES: double, double long, double short, long, short.
+export const VIBE_PRESET_DISPLAY_ORDER: number[] = [0, 3, 4, 2, 1];
 
 export const TUNE_HELP = `A tune is a list of notes and rests, separated by spaces.
 

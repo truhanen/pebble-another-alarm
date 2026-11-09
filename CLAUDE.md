@@ -125,7 +125,7 @@ than trusting a mental model of the numbering.
 | `TestAlarmCronDow` | 10027 | string | Raw cron day-of-week field (range 0-6), parsed into `repeat_days` (reused as the cron dow mask — see below). |
 | `TestAlarmCronFiredNow` | 10028 | int 0/1 | Minute-granularity sibling of `TestAlarmLastFiredToday`: stamps `cron_last_fired_min` with the current epoch-minute (simulates "already fired this exact minute") or clears it to "never". |
 | `TestAlarmAutoDismiss` | 10029 | int 0-2 | Sets `auto_dismiss_mode` directly (0=Off, 1=On, 2=On+hide — see "Key design points" below). |
-| `TestAlarmVibePattern` | 10030 | int 0-2 | 0=Double, 1=Short, 2=Long. Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
+| `TestAlarmVibePattern` | 10030 | int 0-4 | Index into `VIBE_PRESETS` (0=Double, 1=Short, 2=Long, 3=Double long, 4=Double short). Sets the per-alarm `vibe_pattern` (see "Key design points" below); defaults to 0/Double on a newly appended alarm regardless of the phone-configured default, same deterministic-defaults rationale as `TestAlarmIndex`'s other hardcoded fields. |
 | `TestAlarmIncreasingVolume` | 10031 | int 0/1 | Sets `increasing_volume` directly (see "Key design points" below). |
 | `TestAlarmCronDom` | 10032 | string | Raw cron day-of-month field (range 1-31), parsed into `cron_dom_mask`. See "Cron-syntax alarms" below. |
 | `TestAlarmCronMonth` | 10033 | string | Raw cron month field (range 1-12), parsed into `cron_month_mask`. See "Cron-syntax alarms" below. |
@@ -905,6 +905,24 @@ in this app at all, so every message key is now just an ordinary scalar at
   but has no UI row and no push logic — pushing a real Pebble timeline pin
   needs a server-side API key this repo doesn't have (see `SPEC.md` §9.2).
 
+- **Default tune/vibration for new alarms, and preset display order**: the
+  defaults are `s_default_sound_*` / `s_default_vibe_pattern_kind` +
+  `s_default_vibe_pattern` / `s_default_custom_vibe_id` (`main.c`; persist keys
+  17-19 for the tune, 26/27 for the vibration library kind/id), seeded into every
+  new alarm by `start_new_alarm_flow`. Long-press SELECT on a row of the Tune OR
+  Vibration picker (`pattern_select_select_long`) makes it the default and the row
+  then shows "default". The phone's "New alarm defaults" has matching Tune and
+  Vibration selects (built-ins then library entries); they travel as
+  `DefaultTuneId`/`DefaultTunePreset`/`DefaultVibeId` (+ `AlarmVibePattern`;
+  10053-10055 appended) in both directions: phone -> watch with the settings, and
+  watch -> phone as the last snapshot stage (4, `defaults_send`), which index.ts
+  merges into the stored `AlarmDefaults` (ignored while page edits are pending).
+  Built-in vibrations are stored by index in `VIBE_PRESETS` (append-only) but
+  listed in `VIBE_PRESET_DISPLAY_ORDER` = {0,3,4,2,1} (double, double long, double short,
+  long, short; Double, index 0, is the default default) on the watch picker and on the config page (`vibeOrder` /
+  `VIBE_PRESET_DISPLAY_ORDER` in `pattern_help.ts`; `tests/pattern_help.test.js`
+  keeps both in step).
+
 ## Cron-syntax alarms
 
 A third alarm schedule shape, alongside the fixed hour:minute+`repeat_days`
@@ -1146,9 +1164,10 @@ feature — see git history if curious):
     committed instantly (see `pattern_select_select`'s own comment: "on
     request, matching Tune's own presets below"). A selected Vibe preset
     (rows 1..`VIBE_PRESET_COUNT` into the `VIBE_PRESETS[]` table, below)
-    still commits as `vibe_pattern_kind=1` with that preset's exact bytes
-    rather than a separate stored index, which `vibe_preset_match()`
-    re-matches by byte-identity to display it by name. The Vibration picker is
+    commits as `vibe_pattern_kind=0` plus its INDEX (`Alarm.vibe_pattern`), so the
+    alarm follows the preset's definition (it used to copy the preset's bytes
+    inline as kind 1; `migrate_inline_vibes()` maps alarms still holding the OLD
+    presets' bytes onto the slot at the same index). The Vibration picker is
     laid out like the Tune picker: Off, presets, one row per library
     vibration, "+ Custom" (creation wizard), Help — see "Custom-vibration
     library" below (the old inline "Custom" row that opened the keyboard
@@ -1227,7 +1246,20 @@ feature — see git history if curious):
     on the multi-octave-marker support above — its low A/F/C notes are
     each written 2-3 octaves down, e.g. `"4A,,,"`, to land in a register
     that actually sounds like a real bassline instead of the base octave).
-    Vibe, currently: Double/Short/Long.
+    Vibe, currently (modelled on PebbleOS's simple vibe scores, with their
+    timings — coredevices/PebbleOS `resources/normal/snowy/vibes`): Double `2 z 2`
+    (the app's original Double, two 200 ms buzzes; stored index 0, the default),
+    Short `5/2` (the standard
+    short pulse, 250 ms), Long `5` (the standard long pulse, 500 ms), Double long
+    `4 z2 4` (= "Double Pulse Medium", two 400 ms buzzes), Double short
+    `3/5 z3/5 3/5` (= "Double Tap", two 60 ms taps). **The order is the stored
+    index and part of the on-disk format: append only.** Indices 0-2 were
+    "Double" (`2 z 2`), "Short" (`2`) and "Long" (`8`) in older versions
+    (Double is unchanged; Short/Long are now 250/500 ms); the phone's list
+    (`BUILTIN_VIBES`, `src/ts/pattern_help.ts`) must match, which
+    `tests/pattern_help.test.js` enforces. Deliberately NOT offered: PebbleOS
+    scores that need per-note strength (Pulse, Wave, ...) or more than the 8
+    segments a vibration may have (Jackhammer, Reveille, Gentle, ...).
     Sound resolves which preset is active via a plain stored index
     (`Alarm.sound_preset`, an index into this very table — see the Signal
     submenu design point above for why this is an index rather than a
