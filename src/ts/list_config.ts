@@ -9,9 +9,13 @@
 //                repeatDays US cron US snoozeMin US snoozeMax US vibration US
 //                sound US tuneId US autoDismiss US increasingVolume
 //
-// Ids >= PHONE_ID_MIN are phone-owned; the watch allocates its own ids far
-// below that, so the watch can tell which alarms/tunes a phone push may
-// delete (see main.c's apply_alarm_config/apply_tune_config).
+// The watch sends the SAME formats back (a full snapshot of everything it
+// has, after every change and at launch), so the page lists existing watch
+// alarms/tunes too. A record with a single field (just the id) in a push
+// means "delete this id" -- a tombstone for an item removed on the page.
+// Ids >= PHONE_ID_MIN are minted by the phone; the watch allocates its own
+// far below that, so the two can never collide (see main.c's
+// apply_alarm_config/apply_tune_config).
 
 export const RS = '\x1e';
 export const US = '\x1f';
@@ -109,7 +113,16 @@ function clampInt(v: any, lo: number, hi: number, fb: number): number {
   return n < lo ? lo : n > hi ? hi : n;
 }
 
-export function tunesToString(list: TuneRec[]): string {
+// Tombstone records: just the id. Skipped for ids still in `list`.
+function tombstones(removed: number[], present: number[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < removed.length; i++) {
+    if (removed[i] > 0 && present.indexOf(removed[i]) < 0 && out.indexOf(String(removed[i])) < 0) { out.push(String(removed[i])); }
+  }
+  return out;
+}
+
+export function tunesToString(list: TuneRec[], removed: number[] = []): string {
   const out: string[] = [];
   for (let i = 0; i < list.length && out.length < MAX_TUNES; i++) {
     const t = list[i];
@@ -118,10 +131,11 @@ export function tunesToString(list: TuneRec[]): string {
     if (!name || !validTunePattern(pat)) { continue; }
     out.push([t.id || genId(), name, pat].join(US));
   }
-  return out.join(RS);
+  const present = list.map((t) => t.id);
+  return out.concat(tombstones(removed, present)).join(RS);
 }
 
-export function alarmsToString(list: AlarmRec[], validTuneIds: number[]): string {
+export function alarmsToString(list: AlarmRec[], validTuneIds: number[], removed: number[] = []): string {
   const out: string[] = [];
   for (let i = 0; i < list.length && out.length < MAX_ALARMS; i++) {
     const a = list[i];
@@ -150,5 +164,55 @@ export function alarmsToString(list: AlarmRec[], validTuneIds: number[]): string
       b(a.increasingVolume),
     ].join(US));
   }
-  return out.join(RS);
+  const present = list.map((a) => a.id);
+  return out.concat(tombstones(removed, present)).join(RS);
+}
+
+// ---- parsing (watch snapshot -> page lists) ----
+
+function toInt(v: string, fb: number): number {
+  const n = parseInt(v, 10);
+  return isNaN(n) ? fb : n;
+}
+
+export function parseTunes(str: string): TuneRec[] {
+  const out: TuneRec[] = [];
+  if (!str) { return out; }
+  str.split(RS).forEach((rec) => {
+    const f = rec.split(US);
+    if (f.length < 3) { return; }
+    const id = toInt(f[0], 0);
+    if (id > 0 && f[1]) { out.push({ id: id, name: f[1], pattern: f[2] }); }
+  });
+  return out;
+}
+
+export function parseAlarms(str: string): AlarmRec[] {
+  const out: AlarmRec[] = [];
+  if (!str) { return out; }
+  str.split(RS).forEach((rec) => {
+    const f = rec.split(US);
+    if (f.length < 15) { return; }
+    const id = toInt(f[0], 0);
+    if (id <= 0) { return; }
+    const isCron = f[3] === '1';
+    out.push({
+      id: id,
+      name: f[1],
+      enabled: f[2] === '1',
+      isCron: isCron,
+      hour: toInt(f[4], 7),
+      minute: toInt(f[5], 0),
+      repeatDays: toInt(f[6], 0),
+      cron: isCron ? f[7] : '0 7 * * *',
+      snoozeMinutes: toInt(f[8], 10),
+      snoozeMax: toInt(f[9], 3),
+      vibration: f[10] === '1',
+      sound: f[11] === '1',
+      tuneId: toInt(f[12], 0),
+      autoDismiss: toInt(f[13], 0),
+      increasingVolume: f[14] === '1',
+    });
+  });
+  return out;
 }

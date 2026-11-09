@@ -12,8 +12,9 @@ test.after(async () => { await browser.close(); });
 
 // Opens a fresh page; returns { page, phone, save() } where save() clicks
 // Save, feeds the response to webviewclosed, and returns the sent dicts.
-async function open(initialStorage) {
+async function open(initialStorage, beforeOpen) {
   const phone = loadPhone(initialStorage);
+  if (beforeOpen) { beforeOpen(phone); }
   const html = openConfigPage(phone);
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const errors = [];
@@ -42,12 +43,14 @@ const visible = (page, sel) => page.locator(sel).first().isVisible();
 
 test('accordion: all sections closed on load, one open at a time', async () => {
   const { page, errors } = await open();
-  for (const name of ['Configuration', 'Alarms', 'Tunes']) {
-    assert.ok(await heading(page, name).isVisible(), name + ' heading visible');
-  }
+  // Order matters: defaults first, Other last.
+  const names = ['New alarm defaults', 'Alarms', 'Tunes', 'Other'];
+  const shown = (await page.locator('.component-heading').allInnerTexts()).map((t) => t.replace(/^\S+\s/, '').toLowerCase());
+  assert.deepStrictEqual(shown, names.map((n) => n.toLowerCase()));
   assert.ok(!(await visible(page, '.al-add')), 'Alarms closed');
   assert.ok(!(await visible(page, '.tu-add')), 'Tunes closed');
-  assert.ok(!(await page.getByText('Alarm volume').first().isVisible()), 'Configuration closed');
+  assert.ok(!(await page.getByText('Alarm volume').first().isVisible()), 'Other closed');
+  assert.ok(!(await page.getByText('Snooze enabled').first().isVisible()), 'New alarm defaults closed');
   assert.ok((await heading(page, 'Alarms').innerText()).includes('▸'), 'collapsed chevron');
 
   await heading(page, 'Alarms').click();
@@ -63,13 +66,22 @@ test('accordion: all sections closed on load, one open at a time', async () => {
   assert.deepStrictEqual(errors, []);
 });
 
-test('Configuration section holds the global settings; Save bar always visible', async () => {
+test('settings are split between "New alarm defaults" and "Other", without sub-header rows', async () => {
   const { page } = await open();
-  await heading(page, 'Configuration').click();
+  await heading(page, 'New alarm defaults').click();
+  assert.ok(await page.getByText('Snooze enabled').first().isVisible());
+  assert.ok(await page.getByText('Defaults for newly created alarms').first().isVisible());
+  assert.ok(!(await page.getByText('First day of week').first().isVisible()), 'Other content not in defaults');
+  assert.strictEqual(await page.locator('.component-text b').count(), 0, 'no bold header rows');
+  assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible while a section is open');
+
+  await heading(page, 'Other').click();
   assert.ok(await page.getByText('First day of week').first().isVisible());
   assert.ok(await page.getByText('Date format').first().isVisible());
-  assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible while a section is open');
-  await heading(page, 'Configuration').click();
+  assert.ok(await page.getByText('Alarm volume').first().isVisible());
+  assert.ok(!(await page.getByText('Snooze enabled').first().isVisible()), 'defaults closed');
+  assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible');
+  await heading(page, 'Other').click();
   assert.ok(await page.locator('.component-submit').isVisible(), 'Save bar visible with all closed');
 });
 
@@ -235,4 +247,97 @@ test('plain launch does not resend lists (would revert watch-side edits)', async
   t.phone.fire('ready');
   const keys = t.phone.sent.map((d) => Object.keys(d)[0]);
   assert.ok(!keys.includes('AlarmConfig') && !keys.includes('TuneConfig'), 'sent: ' + keys);
+});
+
+// ---- watch snapshot -> page ----
+
+const RS = '\x1e', US = '\x1f';
+const snapTunes = ['3', 'Watch tune', 'C z E', '4', 'Other tune', 'G A B'].reduce((acc, v, i, a) => (i % 3 === 0 ? acc.concat([a.slice(i, i + 3).join(US)]) : acc), []).join(RS);
+const snapAlarms = [
+  ['1', 'Wake', '1', '0', '6', '30', '62', '*', '10', '3', '1', '1', '3', '0', '0'],
+  ['2', 'Cronny', '0', '1', '7', '0', '0', '*/20 9-17 * * 1-5 *', '0', '0', '1', '0', '0', '1', '1'],
+].map((r) => r.join(US)).join(RS);
+const snapshot = (phone, alarms, tunes) => phone.fire('appmessage', { payload: { TuneConfig: tunes, AlarmConfig: alarms } });
+
+test('watch snapshot fills the page with existing alarms and tunes', async () => {
+  const { page, errors } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  assert.strictEqual(await page.locator('.al-row').count(), 2);
+  assert.strictEqual(await page.locator('.al-name').nth(0).inputValue(), 'Wake');
+  assert.strictEqual(await page.locator('.al-time').nth(0).inputValue(), '06:30');
+  assert.strictEqual(await page.locator('.al-d:checked').count(), 5, 'Mon-Fri ticked');
+  assert.strictEqual(await page.locator('.al-tune').nth(0).evaluate((e) => e.options[e.selectedIndex].text), 'Watch tune');
+  assert.strictEqual(await page.locator('.al-mode').nth(1).inputValue(), '1');
+  assert.strictEqual(await page.locator('.al-cronin').nth(1).inputValue(), '*/20 9-17 * * 1-5 *');
+  assert.strictEqual(await page.locator('.al-en').nth(1).isChecked(), false);
+  assert.strictEqual(await page.locator('.al-ad').nth(1).inputValue(), '1');
+  await heading(page, 'Tunes').click();
+  assert.strictEqual(await page.locator('.tu-row').count(), 2);
+  assert.strictEqual(await page.locator('.tu-pat').nth(0).inputValue(), 'C z E');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('a later snapshot replaces the stored lists', async () => {
+  const phone = loadPhone();
+  snapshot(phone, snapAlarms, snapTunes);
+  snapshot(phone, snapAlarms.split(RS)[0], '');
+  const cs = JSON.parse(phone.store['clay-settings']);
+  assert.strictEqual(cs.AlarmList.length, 1);
+  assert.strictEqual(cs.TuneList.length, 0);
+});
+
+test('snapshots are ignored while page edits are pending delivery', async () => {
+  const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-name').nth(0).fill('Edited');
+  t.phone.failSends = true;
+  await t.save();
+  assert.strictEqual(t.phone.store.lists_pending, '1');
+  snapshot(t.phone, snapAlarms.split(RS)[1], snapTunes);   // watch (stale) snapshot arrives
+  const cs = JSON.parse(t.phone.store['clay-settings']);
+  assert.strictEqual(cs.AlarmList.length, 2, 'unsent edits not overwritten');
+  assert.strictEqual(cs.AlarmList[0].name, 'Edited');
+});
+
+test('deleting a snapshot item on the page sends an id-only tombstone, kept until delivered', async () => {
+  const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-del').nth(0).click();   // alarm 1 ("Wake")
+  await heading(t.page, 'Tunes').click();
+  await t.page.locator('.tu-del').nth(1).click();   // tune 4
+  t.phone.failSends = true;
+  await t.save();
+  assert.deepStrictEqual(JSON.parse(t.phone.store.alarm_tombstones), [1]);
+  assert.deepStrictEqual(JSON.parse(t.phone.store.tune_tombstones), [4]);
+
+  t.phone.failSends = false;   // next launch: pending push goes out with the tombstones
+  t.phone.sent.length = 0;
+  t.phone.fire('ready');
+  const tunes = t.phone.sent.find((d) => 'TuneConfig' in d).TuneConfig.split(RS);
+  const alarms = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
+  assert.ok(tunes.includes('4'), 'tune tombstone is a bare id: ' + JSON.stringify(tunes));
+  assert.ok(alarms.includes('1'), 'alarm tombstone is a bare id: ' + JSON.stringify(alarms));
+  assert.strictEqual(alarms.length, 2, 'remaining alarm + tombstone');
+  assert.strictEqual(t.phone.store.alarm_tombstones, undefined, 'cleared after delivery');
+  assert.strictEqual(t.phone.store.tune_tombstones, undefined);
+});
+
+test('items that appear on the watch after the page opened are not tombstoned', async () => {
+  const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  const extra = ['9', 'New on watch', '1', '0', '8', '0', '2', '*', '10', '3', '1', '1', '0', '0', '0'].join(US);
+  snapshot(t.phone, snapAlarms + RS + extra, snapTunes);   // arrives while the page is open
+  await heading(t.page, 'Alarms').click();
+  await t.page.locator('.al-del').nth(1).click();   // delete alarm 2 on the page
+  await t.save();
+  const sent = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
+  assert.ok(sent.includes('2'), 'deleted alarm tombstoned');
+  assert.ok(!sent.includes('9'), 'watch-created alarm 9 not tombstoned');
+});
+
+test('a plain unchanged Save does not tombstone anything', async () => {
+  const t = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await t.save();
+  const alarms = t.phone.sent.find((d) => 'AlarmConfig' in d).AlarmConfig.split(RS);
+  assert.strictEqual(alarms.length, 2);
+  assert.ok(alarms.every((r) => r.split(US).length === 15));
 });

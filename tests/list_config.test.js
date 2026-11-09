@@ -59,3 +59,30 @@ test('alarmsToString basic + cron, tune id validation, separators scrubbed', () 
 test('genId is phone-owned range', () => {
   for (let i = 0; i < 50; i++) { assert.ok(L.genId() >= L.PHONE_ID_MIN); }
 });
+
+test('tombstones: bare-id records, only for ids no longer present', () => {
+  const a = { id: 70000, name: 'A', enabled: true, isCron: false, hour: 7, minute: 0, repeatDays: 0, cron: '',
+    snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true, tuneId: 0, autoDismiss: 0, increasingVolume: false };
+  const recs = L.alarmsToString([a], [], [70000, 5, 6, 5]).split('\x1e');
+  assert.strictEqual(recs.length, 3);
+  assert.deepStrictEqual(recs.slice(1), ['5', '6']);
+  assert.strictEqual(L.alarmsToString([], [], [7]), '7');
+  assert.strictEqual(L.tunesToString([], [3, 3]), '3');
+});
+
+test('parseAlarms/parseTunes round-trip what the phone sends', () => {
+  const base = { id: 3, name: 'W', enabled: false, isCron: false, hour: 6, minute: 30, repeatDays: 62, cron: '',
+    snoozeMinutes: 5, snoozeMax: 0, vibration: false, sound: true, tuneId: 4, autoDismiss: 2, increasingVolume: true };
+  const cron = Object.assign({}, base, { id: 8, isCron: true, cron: '*/20 9-17' });
+  const str = L.alarmsToString([base, cron], [4]);
+  const back = L.parseAlarms(str);
+  assert.strictEqual(back.length, 2);
+  // A basic alarm has no cron text of its own; the page seeds a default.
+  assert.deepStrictEqual(back[0], Object.assign({}, base, { cron: '0 7 * * *' }));
+  assert.strictEqual(back[1].isCron, true);
+  assert.strictEqual(back[1].cron, '*/20 9-17 * * * *');
+  const tunes = [{ id: 4, name: 'T', pattern: "^C,, z/2 E'3" }];
+  assert.deepStrictEqual(L.parseTunes(L.tunesToString(tunes)), tunes);
+  assert.deepStrictEqual(L.parseAlarms(''), []);
+  assert.deepStrictEqual(L.parseAlarms('7'), [], 'tombstone-only records are not alarms');
+});

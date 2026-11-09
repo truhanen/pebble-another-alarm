@@ -150,12 +150,16 @@ static uint32_t next_alarm_id(void) {
 // Kept separate from persist_all()'s triad -- tune mutations don't need
 // rearm_wakeup(), and every tune-mutating call site below already knows
 // exactly when to call this and whether to also reload a visible menu.
+static void schedule_snapshot(void);   // phone list snapshot, see the AppMessage section
+
 static void persist_tunes(void) {
   store_save_tunes(s_tunes, s_tune_count);
+  schedule_snapshot();
 }
 
 static void persist_all(void) {
   store_save(s_alarms, s_count);
+  schedule_snapshot();
   store_save_first_day_of_week(s_first_day_of_week);
   store_save_date_format(s_date_format);
   store_save_vibe_pattern(s_default_vibe_pattern);
@@ -5086,20 +5090,33 @@ static void handle_minute_tick(struct tm *tick_time, TimeUnits units_changed) {
 
 // ================================= AppMessage (phone settings) =================================
 
-// ---- phone-pushed Alarms / Tunes lists (AlarmConfig / TuneConfig) ----
+// ---- Alarms / Tunes lists shared with the phone config page ----
 //
-// The phone config page edits two lists and pushes each as one CString (see
-// src/ts/list_config.ts for the wire format: records split by RS, fields by
-// US). Ids >= PHONE_ID_MIN are phone-owned: a push creates/updates/deletes
-// exactly those and never touches watch-created ones (the watch allocates
-// small ids, see next_alarm_id()/store_alloc_tune_id()), so an alarm made on
-// the watch survives any Save. Runtime state (snooze, last-fired, pending)
-// and watch-only signal settings (custom vibe pattern/preset) are preserved
-// on update.
+// Both directions use the same CString formats (see src/ts/list_config.ts:
+// records split by RS, fields by US; keys AlarmConfig / TuneConfig):
+//
+//  * watch -> phone SNAPSHOT: the whole alarm list and tune library, sent at
+//    launch and (debounced) after every persist_all()/persist_tunes(), so
+//    the config page lists everything that exists here, including items
+//    created on the watch.
+//  * phone -> watch PUSH, sent when the user saves the config page: updates
+//    an existing alarm/tune by id (ANY id, watch-made or phone-made),
+//    creates one only for an unknown id >= PHONE_ID_MIN (the range the phone
+//    mints ids from; the watch's own ids are far below it, so a stale page
+//    can never resurrect something deleted here), and deletes only on an
+//    explicit tombstone -- a record holding just an id. Nothing is deleted
+//    merely for being absent from a push.
+//
+// Updates preserve runtime state (snooze, last-fired, pending) and
+// watch-only signal settings (custom vibe pattern, preset index); schedule or
+// enable changes re-derive the "already handled" markers.
 #define PHONE_ID_MIN 0x10000u
 #define LIST_RS '\x1e'
 #define LIST_US '\x1f'
 #define ALARM_REC_FIELDS 15
+#define SNAPSHOT_DEBOUNCE_MS 1500
+#define SNAPSHOT_LAUNCH_DELAY_MS 3000
+#define SNAPSHOT_TUNE_TEXT_MAX 200
 
 // Splits `s` in place at `sep`, returning the next piece and advancing *s
 // (NULL once exhausted).
@@ -5116,22 +5133,121 @@ static void copy_name(char *dst, const char *src) {
   dst[NAME_LEN] = '\0';
 }
 
+// ---- watch -> phone snapshot ----
+
+static AppTimer *s_snapshot_timer;
+static int s_snapshot_stage;   // 0 idle, 1 tunes in flight, 2 alarms in flight
+
+// Advances `used` by a snprintf() result; false if it was truncated/failed.
+// (vsnprintf isn't available in the Pebble SDK, so callers snprintf directly.)
+static bool snap_advance(int w, size_t cap, size_t *used) {
+  if (w < 0 || (size_t)w >= cap - *used) { return false; }
+  *used += (size_t)w;
+  return true;
+}
+
+// Name without the two list separators (a watch-typed name can't contain
+// them, but a snapshot must never be mis-split if it somehow did).
+static void snap_clean_name(char *out, const char *name) {
+  size_t i = 0;
+  for (; name[i] && i < NAME_LEN; i++) {
+    out[i] = (name[i] == LIST_RS || name[i] == LIST_US) ? ' ' : name[i];
+  }
+  out[i] = '\0';
+}
+
+static char *build_tune_snapshot(void) {
+  size_t cap = (size_t)s_tune_count * (16 + NAME_LEN + SNAPSHOT_TUNE_TEXT_MAX) + 1;
+  char *buf = malloc(cap);
+  if (!buf) { return NULL; }
+  size_t used = 0;
+  buf[0] = '\0';
+  for (int i = 0; i < s_tune_count; i++) {
+    const CustomTune *t = &s_tunes[i];
+    char name[NAME_LEN + 1], pat[SNAPSHOT_TUNE_TEXT_MAX];
+    snap_clean_name(name, t->name);
+    ac_sound_pattern_format(pat, sizeof(pat), t->pattern, t->pattern_note, t->pattern_len);
+    if (!snap_advance(snprintf(buf + used, cap - used, "%s%lu%c%s%c%s", used ? "\x1e" : "",
+                               (unsigned long)t->id, LIST_US, name, LIST_US, pat), cap, &used)) { break; }
+  }
+  return buf;
+}
+
+static char *build_alarm_snapshot(void) {
+  size_t cap = (size_t)s_count * (96 + NAME_LEN + 6 * CRON_FIELD_LEN) + 1;
+  char *buf = malloc(cap);
+  if (!buf) { return NULL; }
+  size_t used = 0;
+  buf[0] = '\0';
+  for (int i = 0; i < s_count; i++) {
+    const Alarm *a = &s_alarms[i];
+    char name[NAME_LEN + 1];
+    snap_clean_name(name, a->name);
+    char cron[6 * CRON_FIELD_LEN + 6];
+    if (a->is_cron) {
+      snprintf(cron, sizeof(cron), "%s %s %s %s %s %s", a->cron_min, a->cron_hour, a->cron_dom,
+               a->cron_month, a->cron_dow, a->cron_week);
+    } else {
+      strcpy(cron, "*");
+    }
+    uint32_t tune_id = (a->sound_pattern_kind == 2 && find_tune_by_id(a->custom_tune_id) >= 0)
+        ? a->custom_tune_id : 0;
+    // For a cron alarm repeat_days holds the dow mask, which the cron string
+    // already carries -- send 0 so the page doesn't read it as weekdays.
+    if (!snap_advance(snprintf(buf + used, cap - used,
+        "%s%lu%c%s%c%d%c%d%c%d%c%d%c%d%c%s%c%d%c%d%c%d%c%d%c%lu%c%d%c%d",
+        used ? "\x1e" : "", (unsigned long)a->id, LIST_US, name, LIST_US,
+        a->enabled ? 1 : 0, LIST_US, a->is_cron ? 1 : 0, LIST_US,
+        a->is_cron ? 7 : a->hour, LIST_US, a->is_cron ? 0 : a->minute, LIST_US,
+        a->is_cron ? 0 : a->repeat_days, LIST_US, cron, LIST_US,
+        (int)a->snooze_minutes, LIST_US, (int)a->snooze_max, LIST_US,
+        a->vibration_enabled ? 1 : 0, LIST_US, a->sound_enabled ? 1 : 0, LIST_US,
+        (unsigned long)tune_id, LIST_US, (int)a->auto_dismiss_mode, LIST_US,
+        a->increasing_volume ? 1 : 0), cap, &used)) { break; }
+  }
+  return buf;
+}
+
+// Takes ownership of `text`. False if the message could not be queued.
+static bool snapshot_send(uint32_t key, char *text) {
+  if (!text) { return false; }
+  DictionaryIterator *out;
+  bool ok = false;
+  if (app_message_outbox_begin(&out) == APP_MSG_OK) {
+    if (dict_write_cstring(out, key, text) == DICT_OK) {
+      ok = app_message_outbox_send() == APP_MSG_OK;
+    } else {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "snapshot too large for the outbox (%u bytes)", (unsigned)strlen(text));
+    }
+  }
+  free(text);
+  return ok;
+}
+
+static void snapshot_timer_cb(void *ctx) {
+  s_snapshot_timer = NULL;
+  if (s_snapshot_stage != 0) {   // previous snapshot still in flight: try again shortly
+    s_snapshot_timer = app_timer_register(SNAPSHOT_DEBOUNCE_MS, snapshot_timer_cb, NULL);
+    return;
+  }
+  s_snapshot_stage = 1;
+  if (!snapshot_send(MESSAGE_KEY_TuneConfig, build_tune_snapshot())) { s_snapshot_stage = 0; }
+}
+
+static void schedule_snapshot_in(uint32_t ms) {
+  if (s_snapshot_timer && app_timer_reschedule(s_snapshot_timer, ms)) { return; }
+  s_snapshot_timer = app_timer_register(ms, snapshot_timer_cb, NULL);
+}
+
+static void schedule_snapshot(void) { schedule_snapshot_in(SNAPSHOT_DEBOUNCE_MS); }
+
+// ---- phone -> watch push ----
+
 static void apply_tune_config(const char *text) {
   size_t len = strlen(text);
   char *buf = malloc(len + 1);
   if (!buf) { return; }
   memcpy(buf, text, len + 1);
-
-  // Drop every phone-owned tune (compacting in place), then re-add the
-  // phone's current list. Watch-created tunes stay put.
-  uint32_t dropped[MAX_CUSTOM_TUNES];
-  int ndropped = 0, w = 0;
-  for (int i = 0; i < s_tune_count; i++) {
-    if (s_tunes[i].id >= PHONE_ID_MIN) { dropped[ndropped++] = s_tunes[i].id; continue; }
-    if (w != i) { s_tunes[w] = s_tunes[i]; }
-    w++;
-  }
-  s_tune_count = w;
 
   char *rest = buf;
   while (rest && *rest) {
@@ -5139,33 +5255,39 @@ static void apply_tune_config(const char *text) {
     char *id_s = list_next(&rec, LIST_US);
     char *name = list_next(&rec, LIST_US);
     char *pat = list_next(&rec, LIST_US);
-    if (!id_s || !name || !pat || !*name) { continue; }
+    if (!id_s || !*id_s) { continue; }
     uint32_t id = (uint32_t)strtoul(id_s, NULL, 10);
-    if (id < PHONE_ID_MIN) { continue; }
+    int idx = find_tune_by_id(id);
+
+    if (!name) {   // tombstone: the page deleted this tune
+      if (idx >= 0) {
+        remove_tune_at(idx);
+        revert_alarms_using_tune(id);
+      }
+      continue;
+    }
+    if (!pat || !*name) { continue; }
     uint8_t flags[AC_SOUND_PATTERN_MAX_SEGMENTS], notes[AC_SOUND_PATTERN_MAX_SEGMENTS], plen;
     if (!ac_sound_pattern_parse(pat, AC_SOUND_PATTERN_MAX_SEGMENTS, flags, notes, &plen)) {
       APP_LOG(APP_LOG_LEVEL_WARNING, "TuneConfig: invalid pattern for tune %lu", (unsigned long)id);
       continue;
     }
-    if (s_tune_count >= MAX_CUSTOM_TUNES) {
-      APP_LOG(APP_LOG_LEVEL_WARNING, "TuneConfig: library full, skipping tune %lu", (unsigned long)id);
-      continue;
+    CustomTune *t;
+    if (idx >= 0) {
+      t = &s_tunes[idx];
+    } else if (id >= PHONE_ID_MIN && s_tune_count < MAX_CUSTOM_TUNES) {
+      t = &s_tunes[s_tune_count++];
+      memset(t, 0, sizeof(*t));
+      t->id = id;
+    } else {
+      continue;   // unknown watch-range id (deleted here since the page opened) or library full
     }
-    CustomTune *t = &s_tunes[s_tune_count++];
-    memset(t, 0, sizeof(*t));
-    t->id = id;
     copy_name(t->name, name);
     t->pattern_len = plen;
     memcpy(t->pattern, flags, plen);
     memcpy(t->pattern_note, notes, plen);
   }
   free(buf);
-
-  // Alarms that referenced a tune that no longer exists fall back to the
-  // preset (same fallback as deleting a tune on the watch).
-  for (int i = 0; i < ndropped; i++) {
-    if (find_tune_by_id(dropped[i]) < 0) { revert_alarms_using_tune(dropped[i]); }
-  }
   persist_tunes();
 }
 
@@ -5207,8 +5329,7 @@ static bool set_alarm_cron(Alarm *a, const char *cron) {
 }
 
 // Applies one AlarmConfig record (already split into its fields) to `a`.
-// Returns false (leaving `a` possibly partially defaulted only if it was
-// new -- the caller discards a new slot on false) if the record is invalid.
+// Returns false if the record is invalid (the caller discards a new slot).
 static bool apply_alarm_record(Alarm *a, char **f, bool is_new) {
   bool is_cron = f[3][0] == '1';
   int hour = atoi(f[4]), minute = atoi(f[5]), days = atoi(f[6]);
@@ -5222,10 +5343,16 @@ static bool apply_alarm_record(Alarm *a, char **f, bool is_new) {
     a->repeats = false;
   } else {
     a->is_cron = false;
+    // The page can't express the legacy "fire once on one specific weekday"
+    // state (repeats=false with a single repeat_days bit), and a snapshot
+    // round trip would turn it into a weekly repeat. So `repeats` is only
+    // re-derived when the schedule actually differs from what's stored.
+    bool same_schedule = !is_new && !before.is_cron && before.hour == hour &&
+        before.minute == minute && before.repeat_days == (uint8_t)(days & AC_DAY_ALL);
     a->hour = (uint8_t)hour;
     a->minute = (uint8_t)minute;
     a->repeat_days = (uint8_t)(days & AC_DAY_ALL);
-    a->repeats = a->repeat_days != 0;
+    if (!same_schedule) { a->repeats = a->repeat_days != 0; }
   }
   copy_name(a->name, f[1]);
   a->enabled = enabled;
@@ -5238,7 +5365,7 @@ static bool apply_alarm_record(Alarm *a, char **f, bool is_new) {
     a->sound_pattern_kind = 2;
     a->custom_tune_id = tune_id;
   } else if (a->sound_pattern_kind == 2) {
-    // The phone says "default tune" (or its tune is gone): back to a preset.
+    // The page says "default tune" (or its tune is gone): back to a preset.
     // sound_preset itself is a watch-side choice and is left as it was.
     a->sound_pattern_kind = 0;
     a->custom_tune_id = 0;
@@ -5273,55 +5400,30 @@ static void apply_alarm_config(const char *text) {
   if (!buf) { return; }
   memcpy(buf, text, len + 1);
 
-  // Pass 1: which phone ids are present in this push?
-  uint32_t present[MAX_ALARMS];
-  int npresent = 0;
-  {
-    // Scan a second copy: list_next() splits in place, and pass 2 below
-    // needs the original records intact.
-    char *tmp = malloc(len + 1);
-    if (!tmp) { free(buf); return; }
-    memcpy(tmp, buf, len + 1);
-    char *scan = tmp;
-    while (scan && *scan && npresent < MAX_ALARMS) {
-      char *rec = list_next(&scan, LIST_RS);
-      char *id_s = list_next(&rec, LIST_US);
-      if (id_s) { present[npresent++] = (uint32_t)strtoul(id_s, NULL, 10); }
-    }
-    free(tmp);
-  }
-
-  // Drop phone-owned alarms the phone no longer lists (in-place compaction).
-  int w = 0;
-  for (int i = 0; i < s_count; i++) {
-    bool keep = true;
-    if (s_alarms[i].id >= PHONE_ID_MIN) {
-      keep = false;
-      for (int j = 0; j < npresent; j++) { if (present[j] == s_alarms[i].id) { keep = true; break; } }
-    }
-    if (!keep) { continue; }
-    if (w != i) { s_alarms[w] = s_alarms[i]; }
-    w++;
-  }
-  s_count = w;
-
-  // Pass 2: create/update.
   char *rest = buf;
   while (rest && *rest) {
     char *rec = list_next(&rest, LIST_RS);
     char *f[ALARM_REC_FIELDS];
     int n = 0;
     while (rec && n < ALARM_REC_FIELDS) { f[n++] = list_next(&rec, LIST_US); }
-    if (n < ALARM_REC_FIELDS) { continue; }
+    if (n == 0 || !f[0] || !*f[0]) { continue; }
     uint32_t id = (uint32_t)strtoul(f[0], NULL, 10);
-    if (id < PHONE_ID_MIN) { continue; }
     int idx = -1;
     for (int i = 0; i < s_count; i++) { if (s_alarms[i].id == id) { idx = i; break; } }
+
+    if (n == 1) {   // tombstone: the page deleted this alarm
+      if (idx >= 0) {
+        for (int i = idx; i < s_count - 1; i++) { s_alarms[i] = s_alarms[i + 1]; }
+        s_count--;
+      }
+      continue;
+    }
+    if (n < ALARM_REC_FIELDS) { continue; }
     if (idx >= 0) {
       if (!apply_alarm_record(&s_alarms[idx], f, false)) {
         APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: invalid record for alarm %lu", (unsigned long)id);
       }
-    } else if (s_count < MAX_ALARMS) {
+    } else if (id >= PHONE_ID_MIN && s_count < MAX_ALARMS) {
       Alarm *a = &s_alarms[s_count];
       memset(a, 0, sizeof(*a));
       a->id = id;
@@ -5334,9 +5436,9 @@ static void apply_alarm_config(const char *text) {
       } else {
         APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: invalid record for new alarm %lu", (unsigned long)id);
       }
-    } else {
-      APP_LOG(APP_LOG_LEVEL_WARNING, "AlarmConfig: alarm list full, skipping %lu", (unsigned long)id);
     }
+    // else: an unknown watch-range id (deleted on the watch since the page
+    // opened) is deliberately not resurrected; or the alarm list is full.
   }
   free(buf);
   rebuild_order();
@@ -5595,9 +5697,18 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
 #endif
 }
 
-static void outbox_sent(DictionaryIterator *iter, void *ctx) {}
+static void outbox_sent(DictionaryIterator *iter, void *ctx) {
+  // Snapshot sequence: tunes just went out, now the alarms.
+  if (s_snapshot_stage == 1) {
+    s_snapshot_stage = 2;
+    if (!snapshot_send(MESSAGE_KEY_AlarmConfig, build_alarm_snapshot())) { s_snapshot_stage = 0; }
+  } else {
+    s_snapshot_stage = 0;
+  }
+}
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult reason, void *ctx) {
   APP_LOG(APP_LOG_LEVEL_WARNING, "outbox send failed: %d", (int)reason);
+  s_snapshot_stage = 0;   // the next change/launch sends a fresh snapshot
 }
 
 // ================================= init / deinit =================================
@@ -5654,6 +5765,10 @@ static void init(void) {
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(app_message_inbox_size_maximum(), app_message_outbox_size_maximum());
+  // Tell the phone what's here (the config page lists it). Delayed so the
+  // phone-side JS has had time to start; its settings push right after
+  // launch also triggers one via persist_all().
+  schedule_snapshot_in(SNAPSHOT_LAUNCH_DELAY_MS);
 
   if (fired) { show_next_pending_alarm(); }
 }

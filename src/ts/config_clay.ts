@@ -3,10 +3,10 @@ const config = [
     type: 'section',
     items: [
       // Each top-level section starts with the one `heading` the accordion
-      // (config_clay_custom.ts) keys on -- sub-labels inside a section must
-      // therefore be `text` items, never extra headings.
-      { type: 'heading', defaultValue: 'Configuration' },
-      { type: 'text', defaultValue: '<b>New alarm defaults</b><br>Defaults for newly created alarms. Can be changed per alarm from the watch\'s alarm edit menu.'},
+      // (config_clay_custom.ts) keys on -- anything else inside a section
+      // must be a non-heading item.
+      { type: 'heading', defaultValue: 'New alarm defaults' },
+      { type: 'text', defaultValue: 'Defaults for newly created alarms. Can be changed per alarm from the watch\'s alarm edit menu.'},
       { type: 'toggle', messageKey: 'DefaultSnoozeEnabled', label: 'Snooze enabled',
         defaultValue: true },
       { type: 'input', messageKey: 'DefaultSnoozeMinutes', label: 'Snooze duration (minutes)',
@@ -27,29 +27,6 @@ const config = [
           { label: 'Short', value: '1' },
           { label: 'Long', value: '2' },
         ] },
-      { type: 'text', defaultValue: '<b>Other</b>' },
-      { type: 'radiogroup', messageKey: 'FirstDayOfWeek', label: 'First day of week',
-        defaultValue: '1', options: [
-          { label: 'Monday', value: '1' },
-          { label: 'Sunday', value: '0' },
-        ] },
-      // Used in the "next occurrence" text (main list bottom bar, cron
-      // editor's Apply-row preview) whenever it falls back to showing a
-      // bare date -- Pebble's C API exposes a 12h/24h time-format query
-      // (clock_is_24h_style()) but nothing equivalent for date order, so
-      // unlike time this needs its own manual setting.
-      { type: 'select', messageKey: 'DateFormat', label: 'Date format',
-        defaultValue: '0', options: [
-          { label: 'day.month.', value: '0' },
-          { label: 'month/day', value: '1' },
-        ] },
-      // Unlike everything in "New alarm defaults" below, this isn't a
-      // default copied at creation time -- it's read live by every alarm's
-      // ring screen (an alarm's own Sound toggle is an additional gate on
-      // top of this, not a replacement for it).
-      { type: 'slider', messageKey: 'AudioVolume',
-        label: 'Alarm volume. Set to 0 to disable sound for all alarms. Used as maximum for alarms with increasing volume.',
-        defaultValue: 50, min: 0, max: 100, step: 5 },
     ],
   },
   {
@@ -66,6 +43,34 @@ const config = [
     items: [
       { type: 'heading', defaultValue: 'Tunes' },
       { type: 'tuneList', messageKey: 'TuneList', defaultValue: [] },
+    ],
+  },
+  {
+    type: 'section',
+    items: [
+      { type: 'heading', defaultValue: 'Other' },
+      { type: 'radiogroup', messageKey: 'FirstDayOfWeek', label: 'First day of week',
+        defaultValue: '1', options: [
+          { label: 'Monday', value: '1' },
+          { label: 'Sunday', value: '0' },
+        ] },
+      // Used in the "next occurrence" text (main list bottom bar, cron
+      // editor's Apply-row preview) whenever it falls back to showing a
+      // bare date -- Pebble's C API exposes a 12h/24h time-format query
+      // (clock_is_24h_style()) but nothing equivalent for date order, so
+      // unlike time this needs its own manual setting.
+      { type: 'select', messageKey: 'DateFormat', label: 'Date format',
+        defaultValue: '0', options: [
+          { label: 'day.month.', value: '0' },
+          { label: 'month/day', value: '1' },
+        ] },
+      // Unlike everything in "New alarm defaults", this isn't a
+      // default copied at creation time -- it's read live by every alarm's
+      // ring screen (an alarm's own Sound toggle is an additional gate on
+      // top of this, not a replacement for it).
+      { type: 'slider', messageKey: 'AudioVolume',
+        label: 'Alarm volume. Set to 0 to disable sound for all alarms. Used as maximum for alarms with increasing volume.',
+        defaultValue: 50, min: 0, max: 100, step: 5 },
     ],
   },
   { type: 'submit', defaultValue: 'Save' },

@@ -219,28 +219,42 @@ library" below.
   in sync.
 - **`index.ts`** — entry point; wires `Pebble.addEventListener` for
   `showConfiguration`/`webviewclosed`, opens the Clay URL, and sends the
-  built dict on save. The config page has three accordion sections
+  built dict on save. The config page has four accordion sections
   (`config_clay_custom.ts`, ported from pebble-aika-watchface; only one open
   at a time, all closed on load; every top-level section must start with
-  exactly one `heading`, sub-labels are `text` items): **Configuration**
-  (the global settings above), **Alarms** (`alarmList` component,
+  exactly one `heading`): **New alarm defaults** (first), **Alarms**,
+  **Tunes**, and **Other** (last; the live global settings). Sections carry
+  no extra bold header rows. **Alarms** (`alarmList` component,
   `config_alarm_list.ts`: per-alarm Basic/Cron toggle, cron = ONE text field
   of 6 space-separated fields, short patterns padded with `*`) and **Tunes**
-  (`tuneList`, `config_tune_list.ts`, ABC patterns). Both lists are
-  phone-edit, push-to-watch only (no watch→phone mirroring), serialized by
-  `list_config.ts` (RS/US-delimited CStrings, keys `AlarmConfig`/
-  `TuneConfig`; `list_config.ts` holds the authoritative, unit-tested cron/ABC
-  validators, the components carry self-contained copies because Clay
-  `toSource()`s them). They are pushed only after a Save (pending flag
-  `lists_pending` in localStorage, retried on `ready`) — NOT on every launch
-  like the plain settings, which would revert watch-side edits (e.g.
-  short-press enable/disable). Ids >= `PHONE_ID_MIN` (0x10000) are
-  phone-owned: `apply_alarm_config`/`apply_tune_config` (`main.c`) create/
-  update/delete exactly those and never touch watch-created ones (small
-  ids). Updates preserve runtime state (snooze, last-fired) and watch-only
-  signal settings; schedule/enable changes re-derive last-fired markers.
-  Known limitation: the phone list is not refreshed from the watch, so
-  saving after editing a phone-owned alarm on the watch overwrites that edit.
+  (`tuneList`, `config_tune_list.ts`, ABC patterns). Both lists use one
+  RS/US-delimited CString format in both directions (`list_config.ts`, keys
+  `AlarmConfig`/`TuneConfig`; it holds the authoritative, unit-tested cron/ABC
+  validators — the components carry self-contained copies because Clay
+  `toSource()`s them):
+  - **Watch → phone snapshot**: the watch sends everything it has (tunes, then
+    alarms; `build_tune_snapshot`/`build_alarm_snapshot`, `main.c`) at launch
+    and, debounced 1.5s, after every `persist_all()`/`persist_tunes()`. The
+    phone's `appmessage` handler stores it as `clay-settings.AlarmList`/
+    `TuneList`, which is what the config page is built from — so alarms/tunes
+    made on the watch show up. (Another Timer only mirrors items the watch
+    sends at creation and never sends pre-existing ones; this sends all.)
+    Snapshots are ignored while an unsent page edit is pending.
+  - **Phone → watch push**, only after the user Saves (pending flag
+    `lists_pending`, retried on `ready`; NOT on every launch like the plain
+    settings, which would revert watch-side edits): `apply_alarm_config`/
+    `apply_tune_config` update an existing item by id (ANY id, watch- or
+    phone-made), create one only for an unknown id >= `PHONE_ID_MIN` (0x10000,
+    the range the phone mints; watch ids are far below, so a stale page can't
+    resurrect something deleted on the watch), and delete ONLY on a tombstone
+    (a record holding just an id; the phone computes them from the ids
+    present when the page opened vs. at Save, persisted until delivered).
+    Nothing is deleted merely for being absent. Updates preserve runtime state
+    (snooze, last-fired) and watch-only signal settings; `repeats` is only
+    re-derived when the schedule actually differs (the page can't express the
+    legacy "once on one weekday" state).
+  Known limitation: a Save from a page opened before a watch-side edit
+  overwrites that item's fields with the page's older values.
 
 AppMessage keys (`package.json`'s `pebble.messageKeys`, used as
 `MESSAGE_KEY_*` in C): `FirstDayOfWeek`, `AlarmVibePattern`,
