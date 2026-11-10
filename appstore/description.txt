@@ -1,4 +1,4 @@
-Yet another alarms app, with cron mode for maximum flexibility, and many other useful features.
+Yet another alarms app, with cron mode for maximum flexibility, and many other (more & less) useful features.
 
 Features:
 - Alarm sound & vibration
@@ -6,9 +6,14 @@ Features:
 - Snooze
 - Multiple alarms
 - Labeled alarms
+- Discreet hidden alarms
+- Built-in tunes & vibration patterns
+- Custom tunes (Seriously?? See below.)
+- Custom vibration patterns
 - Weekday-based repeat scheduling
 - Cron-based repeat scheduling
 - Quick disable / enable / skip next occurrence
+- Configure alarms on the watch or on the phone
 - High configurability
 
 The alternative cron mode makes it possible to define very versatile alarm repeat schedules. E.g., an alarm can be configured as "*/25 9-17 * * 1-5 *" to fire every 25 minutes between 9-17 o'clock on Mon-Fri for an automated work-time pomodoro interval timer.
@@ -21,6 +26,10 @@ Cron mode allows scheduling configuration for
 - day of week, and
 - week number (ISO).
 
+The tune composing feature uses a subset of the ABC notation, supporting 7 diatonic notes, 10 octaves, sharps/flats, rests, and fractional durations. A helptext is included in the app. Admittedly a bit overkill of a feature for an alarm app, but fun, & makes it possible to distinguish an alarm without even glancing at the screen. The feature is experimental, so don't use it as a tune vault.
+
 The user interface follows the design of the Another Timer app. Use them both to feel familiar.
 
-Alarms can be labeled on the watch using the builtin touchscreen keyboard. The keyboard is adopted from metuuu's brilliant Mölkky Scorekeeper app, https://apps.repebble.com/m-lkky-scorekeeper_bb6ffbee520f4c4cafc2b424.
+Alarms can be labeled, tunes can be composed, and vibration patterns can be defined on the watch using the builtin touchscreen keyboard, or alternatively on the phone's config page, where all the alarms, tunes and vibration patterns can be edited.
+
+The on-watch keyboard is adopted from metuuu's brilliant Mölkky Scorekeeper app, https://apps.repebble.com/m-lkky-scorekeeper_bb6ffbee520f4c4cafc2b424.
