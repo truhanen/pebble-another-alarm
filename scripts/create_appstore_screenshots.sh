@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Generates reference screenshots of the app's key screens, via
 # tests/functional_framework's containerized emulator driving (see
-# scripts/create_screenshots.seq for the actual walkthrough) instead of
+# scripts/create_appstore_screenshots.seq for the actual walkthrough) instead of
 # this script's own former hand-rolled `pebble` CLI calls and sed-based
 # message_key() lookup (see git history for that version).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="$REPO_ROOT/screenshots"
-RUN_BASE="$REPO_ROOT/scripts/create_screenshots_out"
+OUT_DIR="$REPO_ROOT/appstore/screenshots"
+RUN_BASE="$REPO_ROOT/scripts/create_appstore_screenshots_out"
 
 usage() {
   cat <<EOF
@@ -35,13 +35,13 @@ rm -rf "$RUN_BASE"
 mkdir -p "$OUT_DIR" "$RUN_BASE"
 
 "$REPO_ROOT/tests/functional_framework/run_sequence.sh" \
-  --conf "$REPO_ROOT/scripts/create_screenshots.conf" \
-  --seq "$REPO_ROOT/scripts/create_screenshots.seq" \
+  --conf "$REPO_ROOT/scripts/create_appstore_screenshots.conf" \
+  --seq "$REPO_ROOT/scripts/create_appstore_screenshots.seq" \
   --out-dir "$RUN_BASE"
 
 # run_sequence.sh always nests output as <out-dir>/<RUN_ID>/<sequence-name>/
 # - there's exactly one such directory here since RUN_BASE is wiped above.
-RUN_DIR="$(find "$RUN_BASE" -mindepth 2 -maxdepth 2 -type d -name create_screenshots)"
+RUN_DIR="$(find "$RUN_BASE" -mindepth 2 -maxdepth 2 -type d -name create_appstore_screenshots)"
 if [ -z "$RUN_DIR" ]; then
   echo "Could not find run output under $RUN_BASE" >&2
   exit 1

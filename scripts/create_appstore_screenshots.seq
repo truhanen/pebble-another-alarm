@@ -1,15 +1,15 @@
 # Generates reference screenshots of the app's key screens via
-# tests/functional_framework, replacing the old scripts/create_screenshots.sh's
+# tests/functional_framework, replacing the old scripts/create_appstore_screenshots.sh's
 # own hand-rolled `pebble` CLI driving and its sed-based message_key()
 # key-ID lookup (see git history for that version) - this app has no touch
 # dial or on-screen-keyboard step to script around (unlike pebble-another-
-# timer's own create_screenshots.seq), since every screen captured here is
+# timer's own create_appstore_screenshots.seq), since every screen captured here is
 # reachable purely through APP_TEST_HOOKS AppMessages plus ordinary button
-# navigation. Run via scripts/create_screenshots.sh, which invokes this
-# through run_sequence.sh and copies the resulting PNGs into screenshots/.
+# navigation. Run via scripts/create_appstore_screenshots.sh, which invokes this
+# through run_sequence.sh and copies the resulting PNGs into appstore/screenshots/.
 #
 # Requires an APP_TEST_HOOKS=1 build (see CLAUDE.md's "Test hooks" section)
-# for every Test* AppMessage below - scripts/create_screenshots.conf already
+# for every Test* AppMessage below - scripts/create_appstore_screenshots.conf already
 # sets BUILD_ENV=APP_TEST_HOOKS=1 for container builds, and container mode
 # builds automatically before running any instructions below (no explicit
 # BUILD step needed here). That conf is its own file, separate from

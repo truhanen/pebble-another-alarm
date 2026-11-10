@@ -5,6 +5,8 @@
 # a copy of the indexed reference image from the Pebble iconography repo —
 # see journal.md's "2025-11-30 App icon" entry) and alpha is posterized to
 # Pebble's 2-bit (4-level) alpha channel. Requires ImageMagick (`magick`).
+# Source SVG: scripts/icon.svg. The 25x25 menu icon goes to
+# resources/images/; the 80x80/144x144 store icons go to appstore/.
 #
 # The 25x25 menu icon keeps its transparency (it's composited over the
 # system menu's own background on-watch). The 80x80/144x144 app-store icons
@@ -16,21 +18,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PALETTE="$SCRIPT_DIR/pebble_colors_64.gif"
 
-SVG="${1:-resources/icon.svg}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SVG="${1:-$SCRIPT_DIR/icon.svg}"
 
 if [ ! -f "$SVG" ]; then
   echo "SVG file not found: $SVG" >&2
   exit 1
 fi
 
-OUTDIR="$(dirname "$SVG")"
-MENU_ICON_OUT="resources/images/menuicon.png"
+STORE_OUTDIR="$REPO_ROOT/appstore"
+MENU_ICON_OUT="$REPO_ROOT/resources/images/menuicon.png"
+mkdir -p "$STORE_OUTDIR"
 
 for size in 25 80 144; do
   if [ "$size" -eq 25 ]; then
     OUT="$MENU_ICON_OUT"
   else
-    OUT="$OUTDIR/icon_${size}x${size}.png"
+    OUT="$STORE_OUTDIR/icon_${size}x${size}.png"
   fi
   RAW="$(mktemp -t icon_raw).png"
   MASK="$(mktemp -t icon_mask).png"

@@ -1,0 +1,15 @@
+- Custom tunes, ABC notation, dedicated keyboard layout
+- Custom vibration patterns
+- Edit alarms on the phone config page, as well as tunes & vibrations
+- Auto-dismiss option to have silent alarms that hide the alarm screen
+- Current time on the alarm screen
+- Vertical button labels on the alarm screen
+- Backlight stays on while the alarm screen is showing
+- "+ New alarm" moved to the top
+- Reorganized, collapsible config page
+- New built-in vibrations include some PebbleOS patterns
+- Long-press a tune or vibration to set it as default
+- Text cursor navigation on the watch keyboard
+- Alarms still ring when the system delays their wakeup
+- More robust alarm schedule storage across app updates
+- Other minor improvements

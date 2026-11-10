@@ -43,9 +43,9 @@ build_and_install_emulator_test: build_test install_emulator
 .PHONY: build_and_install_cloudpebble
 build_and_install_cloudpebble: build install_cloudpebble
 
-.PHONY: create_screenshots
-create_screenshots:
-	scripts/create_screenshots.sh
+.PHONY: create_appstore_screenshots
+create_appstore_screenshots:
+	scripts/create_appstore_screenshots.sh
 
 # Rebuild whenever tests/functional_framework/container/Containerfile or
 # entrypoint.sh change - NOT needed for app source changes, since every

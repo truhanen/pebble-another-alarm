@@ -1,6 +1,6 @@
 # pebble-another-alarm
 
-![Main alarm list](screenshots/01_main_view.png)
+![Main alarm list](appstore/screenshots/01_main_view.png)
 
 A multi-alarm watchapp for Pebble (emery/Pebble Time 2 only). See `CLAUDE.md`
 for architecture details.
@@ -52,7 +52,7 @@ can create or edit an alarm directly — including states that aren't
 reachable through the on-watch UI at all — instead of driving the "+ New
 alarm" wizard button-by-button. Never installed by a plain `pebble build`.
 See `CLAUDE.md`'s "Test hooks (APP_TEST_HOOKS)" section for the full message
-key reference, and `scripts/create_screenshots.sh`/`.seq` (driven through
+key reference, and `scripts/create_appstore_screenshots.sh`/`.seq` (driven through
 `tests/functional_framework`, see CLAUDE.md's "Tests" section) for a
 working example that drives this to capture this README's own screenshots.
 
@@ -91,7 +91,8 @@ src/ts/                   Phone-side TypeScript (Clay config + AppMessage),
                           compiled to src/pkjs/ on build
 src/pkjs/                 Generated PebbleKit JS (gitignored, do not edit directly)
 resources/                Images, fonts, and other bundled resources
-scripts/                  Dev tooling (icon generation, screenshot capture)
+appstore/                 App store assets: icons, screenshots, description, release notes
+scripts/                  Dev tooling (icon generation, app store screenshot capture, icon.svg source)
 tests/                    C (gcc, manual run) and node:test (npm test) tests
 package.json              Project metadata (UUID, platforms, resources, message keys)
 wscript                   Build rules — compiles TypeScript, then bundles as usual

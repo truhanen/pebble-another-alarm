@@ -20,7 +20,7 @@ compile_commands.json
 
 # Per-run output (screenshots, logs) from tests/functional_framework
 tests/functional/out/
-scripts/create_screenshots_out/
+scripts/create_appstore_screenshots_out/
 
 # Built release bundles don't belong in the repo
 Releases/

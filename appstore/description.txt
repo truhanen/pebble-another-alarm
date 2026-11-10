@@ -1,0 +1,26 @@
+Yet another alarms app, with cron mode for maximum flexibility, and many other useful features.
+
+Features:
+- Alarm sound & vibration
+- Increasing alarm volume
+- Snooze
+- Multiple alarms
+- Labeled alarms
+- Weekday-based repeat scheduling
+- Cron-based repeat scheduling
+- Quick disable / enable / skip next occurrence
+- High configurability
+
+The alternative cron mode makes it possible to define very versatile alarm repeat schedules. E.g., an alarm can be configured as "*/25 9-17 * * 1-5 *" to fire every 25 minutes between 9-17 o'clock on Mon-Fri for an automated work-time pomodoro interval timer.
+
+Cron mode allows scheduling configuration for
+- minute,
+- hour,
+- day of month,
+- month,
+- day of week, and
+- week number (ISO).
+
+The user interface follows the design of the Another Timer app. Use them both to feel familiar.
+
+Alarms can be labeled on the watch using the builtin touchscreen keyboard. The keyboard is adopted from metuuu's brilliant Mölkky Scorekeeper app, https://apps.repebble.com/m-lkky-scorekeeper_bb6ffbee520f4c4cafc2b424.
