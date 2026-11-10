@@ -192,7 +192,7 @@ test('alarm cards are collapsed summaries that expand on tap', async () => {
   assert.ok(!(await visible(page, '.al-body')), 'collapsed by default');
   const mains = await page.locator('.al-sum-main').allInnerTexts();
   const subs = await page.locator('.al-sum-sub').allInnerTexts();
-  assert.deepStrictEqual(mains, ['06:30 \u00b7 Wake', 'Cronny']);
+  assert.deepStrictEqual(mains, ['06:30 \u00b7 Wake', '09:00+ Cronny']);
   assert.deepStrictEqual(subs, ['Mon\u2013Fri', '*/20 9-17 * * 1-5 *']);
 
   await page.locator('.al-sum').nth(0).click();
@@ -1213,4 +1213,32 @@ test('a watch snapshot of the defaults preselects the default tune and vibration
   await heading(page, 'New alarm defaults').click();
   assert.strictEqual(await page.locator('.ad-tn').inputValue(), 'p4');
   assert.strictEqual(await page.locator('.ad-vp').inputValue(), 'p3');
+});
+
+test('a cron alarm is headlined like the watch\'s main list: first time, "+" for a pattern, then the label', async () => {
+  const { page, errors } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  const main = () => page.locator('.al-sum-main').nth(1).innerText();
+  assert.strictEqual(await main(), '09:00+ Cronny');
+  await page.locator('.al-sum').nth(1).click();
+  await page.locator('.al-cronin').nth(1).fill('30 7 * * *');
+  assert.strictEqual(await main(), '07:30 Cronny', 'plain minute and hour: no plus');
+  await page.locator('.al-cronin').nth(1).fill('5 9-17 * * *');
+  assert.strictEqual(await main(), '09:05+ Cronny', 'a pattern field: first match and a plus');
+  await page.locator('.al-name').nth(1).fill('');
+  assert.strictEqual(await main(), '09:05+', 'no label: just the time');
+  await page.locator('.al-cronin').nth(1).fill('bogus');
+  assert.strictEqual(await main(), 'Cron alarm', 'an invalid pattern falls back to the label text');
+  assert.deepStrictEqual(errors, []);
+});
+
+test('the cron field has a hint above it naming the six components', async () => {
+  const { page } = await open(undefined, (phone) => snapshot(phone, snapAlarms, snapTunes));
+  await heading(page, 'Alarms').click();
+  await page.locator('.al-sum').nth(1).click();
+  const hint = page.locator('.al-cronhint').nth(1);
+  assert.strictEqual(await hint.innerText(), 'min hour dom month dow week');
+  const [hb, ib] = await Promise.all([hint.boundingBox(), page.locator('.al-cronin').nth(1).boundingBox()]);
+  assert.ok(hb.y + hb.height <= ib.y + 1, 'the hint sits above the field');
+  assert.ok(hb.height < 24, 'and is small');
 });

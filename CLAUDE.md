@@ -290,6 +290,11 @@ library" below.
     away mid-edit and a new alarm stays last until collapsed. Clay's global
     `label` CSS adds padding to any `<label>`, so custom chips/switches must
     reset `padding`.
+  - **Cron alarm headline and field hint**: a collapsed cron card's summary line is headlined
+    like the watch's main list — the day's first matching `HH:MM` (lowest set bit of the hour/
+    minute masks), a trailing `+` unless both fields are plain numbers, then the label
+    (`09:00+ Gym`); an invalid pattern falls back to the label (or "Cron alarm"). A small
+    monospace hint, `min hour dom month dow week`, sits above the cron field.
   - **Alarm card panels** (`config_alarm_list.ts`): An expanded card's settings are grouped into three labelled panels below the
     Label field (`.al-group`, white caption, outlined and tinted differently from
     the card): **Schedule** (everything that decides when it fires: Basic/Cron

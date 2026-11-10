@@ -339,6 +339,7 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
             '<div class="al-chips al-days">' + days + '</div>' +
           '</div>' +
           '<div class="al-cron">' +
+            '<div class="al-cronhint">min hour dom month dow week</div>' +
             '<input class="al-cronin" type="text" spellcheck="false" placeholder="*/20 9-17 * * 1-5" value="' + esc(a.cron) + '">' +
             '<div class="al-err"></div>' +
           '</div>' +
@@ -469,7 +470,18 @@ function alarmListInitialize(this: any, _minified: any, clayConfig: any): void {
     const masks = isCron ? parseCron(cronText) : null;
     let main: string, sub: string;
     if (isCron) {
-      main = (label || 'Cron alarm');
+      // Same headline as the watch's main list: the day's first matching time, with a
+      // trailing "+" when the hour or minute is a pattern, then the label.
+      let head = '';
+      if (masks !== null) {
+        const toks = cronText.trim().split(/\s+/);
+        const plain = /^[0-9]+$/.test(toks[0] || '') && /^[0-9]+$/.test(toks[1] || '');
+        let hour = 0, minute = 0, v: number;
+        for (v = 0; v < 24; v++) { if (masks[1][v]) { hour = v; break; } }
+        for (v = 0; v < 60; v++) { if (masks[0][v]) { minute = v; break; } }
+        head = pad2(hour) + ':' + pad2(minute) + (plain ? '' : '+');
+      }
+      main = head === '' ? (label || 'Cron alarm') : head + (label ? ' ' + label : '');
       sub = cronText.trim() === '' ? 'No pattern' : cronText.trim();
     } else {
       const t = q(r, '.al-time').value || '07:00';
@@ -763,6 +775,7 @@ const alarmListComponent = {
     '.al-chip input:checked + span{background:#ff4700;color:#fff}' +
     // cron block
     '.al-cronin{width:100%;font-family:monospace}' +
+    '.al-cronhint{color:#bbb;font-family:monospace;font-size:0.75rem;margin:0 0 0.25rem 0.6rem;white-space:nowrap}' +
     // the schedule footer: the schedule in words + when it next rings
     '.al-next{color:#9fd8a0;font-size:0.85rem;margin:0.6rem 0 0 0;padding-top:0.45rem;border-top:1px dashed #666}' +
     '.al-next:empty{display:none}' +
