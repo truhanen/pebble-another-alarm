@@ -188,7 +188,7 @@ library" below.
 
 ### Phone side (`src/ts/`)
 
-- **`config_clay.ts`** — five accordion sections, in order: **New alarm
+- **`config_clay.ts`** — five accordion sections, in order: **Alarms** (first), then **New alarm
   defaults** — one `alarmDefaults` component (`config_alarm_defaults.ts`)
   laid out like an alarm card's signal/snooze block (chips for Vibration/
   Sound/Increasing, aligned Vibration-preset/"Snooze (min)"/"Max snoozes"
@@ -201,7 +201,7 @@ library" below.
   and `migrateSavedSettings()` seeds it from those flat keys for users who
   saved before it existed. Everything here only pre-fills a NEWLY created alarm
   (on the watch, and for an alarm added on the config page) and never touches
-  existing ones; **Alarms**, **Tunes**, **Vibration patterns** (below); and
+  existing ones; **Tunes**, **Vibration patterns** (below); and
   **Other** (last) — `FirstDayOfWeek` (radiogroup, Sunday/Monday), `DateFormat` (select,
   Day.Month/Month.Day, right after `FirstDayOfWeek` — read live by
   `format_relative_fire_time()`'s date-only tier, `main.c`, since Pebble's C
@@ -231,8 +231,8 @@ library" below.
   built dict on save. The config page has four accordion sections
   (`config_clay_custom.ts`, ported from pebble-aika-watchface; only one open
   at a time, all closed on load; every top-level section must start with
-  exactly one `heading`): **New alarm defaults** (first), **Alarms**,
-  **Tunes**, and **Other** (last; the live global settings). Sections carry
+  exactly one `heading`): **Alarms** (first), **New alarm defaults**,
+  **Tunes**, **Vibration patterns** and **Other** (last; the live global settings). Sections carry
   no extra bold header rows. **Alarms** (`alarmList` component,
   `config_alarm_list.ts`: per-alarm Basic/Cron toggle, cron = ONE text field
   of 6 space-separated fields, short patterns padded with `*`) and **Tunes**
@@ -652,6 +652,10 @@ in this app at all, so every message key is now just an ordinary scalar at
   it into the derived model. `ac_next_offset_days` scans `repeat_days` the
   same way regardless of `repeats`; only `ac_mark_fired` (disable vs. keep
   recurring) and `skip_next` (repeats-only) branch on it.
+- **The ring screen holds the backlight on**: `trigger_alarm()` calls
+  `light_enable(true)` and `alarm_window_unload()` calls `light_enable(false)`, so the
+  backlight stays lit for exactly as long as the ring window exists (including when
+  it is dismissed by Stop/Snooze/auto-dismiss) and returns to the system timeout after.
 - **Ring screen click config is intentionally asymmetric**: DOWN needs
   `window_multi_click_subscribe` (double-click to stop) while UP is a plain
   single-click (snooze). BACK is explicitly subscribed to a no-op handler —

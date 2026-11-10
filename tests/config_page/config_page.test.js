@@ -43,8 +43,8 @@ const visible = (page, sel) => page.locator(sel).first().isVisible();
 
 test('accordion: all sections closed on load, one open at a time', async () => {
   const { page, errors } = await open();
-  // Order matters: defaults first, Vibration patterns right after Tunes, Other last.
-  const names = ['New alarm defaults', 'Alarms', 'Tunes', 'Vibration patterns', 'Other'];
+  // Order matters: Alarms first, then the defaults, Vibration patterns right after Tunes, Other last.
+  const names = ['Alarms', 'New alarm defaults', 'Tunes', 'Vibration patterns', 'Other'];
   const shown = (await page.locator('.component-heading').allInnerTexts()).map((t) => t.replace(/^\S+\s/, '').toLowerCase());
   assert.deepStrictEqual(shown, names.map((n) => n.toLowerCase()));
   assert.ok(!(await visible(page, '.al-add')), 'Alarms closed');

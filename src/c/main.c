@@ -2049,6 +2049,7 @@ static void alarm_window_load(Window *w) {
 }
 
 static void alarm_window_unload(Window *w) {
+  light_enable(false);   // back to the system's normal backlight timeout
   alarm_buzz_stop();
   alarm_cancel_auto_dismiss();
   text_layer_destroy(s_alarm_title); s_alarm_title = NULL;
@@ -2062,7 +2063,7 @@ static void trigger_alarm(int idx, int count) {
   if (idx < 0 || idx >= s_count) { return; }
   const Alarm *a = &s_alarms[idx];
   s_alarm_idx = idx;
-  // Force the backlight on, same as a real button press would -- otherwise
+  // Force the backlight on (and keep it on while the ring screen is up) -- otherwise
   // an alarm firing while the watch's screen is already asleep (the normal
   // idle-timeout case, not just a wakeup-driven relaunch) never lights it,
   // leaving a ringing alarm silently invisible until the user manually
@@ -2072,7 +2073,7 @@ static void trigger_alarm(int idx, int count) {
   // "already open, wakeup fires while foregrounded" path at all (see
   // handle_wakeup_event's own history) and isn't guaranteed even on the
   // relaunch path either.
-  light_enable_interaction();
+  light_enable(true);   // held on until the ring screen goes away (alarm_window_unload)
   // auto_dismiss_mode==2 ("On, hide") follows the exact same ring-window +
   // one-shot-signal + fixed-timer flow as mode 1 now -- it used to skip
   // creating/pushing the ring window entirely and call alarm_do_stop()

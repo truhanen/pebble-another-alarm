@@ -4,6 +4,21 @@ const config = [
   {
     type: 'section',
     items: [
+      { type: 'heading', defaultValue: 'Alarms' },
+      // Phone-edited list, pushed to the watch on Save (see list_config.ts).
+      // Clay-only key: index.ts serializes it into the real `AlarmConfig` key.
+      // `help` and `soundPresets` are read by the component (this.config): the
+      // watch's full cron help (collapsible under each cron alarm's Basic/Cron
+      // selector) and the names of its built-in tunes (the Tune dropdown's first entries).
+      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP,
+        soundPresets: BUILTIN_TUNES.map((b) => b.name),
+        vibePresets: BUILTIN_VIBES.map((b) => b.name),
+        vibeOrder: VIBE_PRESET_DISPLAY_ORDER },
+    ],
+  },
+  {
+    type: 'section',
+    items: [
       // Each top-level section starts with the one `heading` the accordion
       // (config_clay_custom.ts) keys on -- anything else inside a section
       // must be a non-heading item.
@@ -19,21 +34,6 @@ const config = [
         soundPresets: BUILTIN_TUNES.map((b) => b.name),
         defaultValue: { snoozeMinutes: 10, snoozeMax: 3, vibration: true, sound: true,
                         increasing: false, vibePattern: 0, vibeId: 0, tuneId: 0, soundPreset: 0 } },
-    ],
-  },
-  {
-    type: 'section',
-    items: [
-      { type: 'heading', defaultValue: 'Alarms' },
-      // Phone-edited list, pushed to the watch on Save (see list_config.ts).
-      // Clay-only key: index.ts serializes it into the real `AlarmConfig` key.
-      // `help` and `soundPresets` are read by the component (this.config): the
-      // watch's full cron help (collapsible under each cron alarm's Basic/Cron
-      // selector) and the names of its built-in tunes (the Tune dropdown's first entries).
-      { type: 'alarmList', messageKey: 'AlarmList', defaultValue: [], help: CRON_HELP,
-        soundPresets: BUILTIN_TUNES.map((b) => b.name),
-        vibePresets: BUILTIN_VIBES.map((b) => b.name),
-        vibeOrder: VIBE_PRESET_DISPLAY_ORDER },
     ],
   },
   {
