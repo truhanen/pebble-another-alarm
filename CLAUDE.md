@@ -653,9 +653,10 @@ in this app at all, so every message key is now just an ordinary scalar at
   same way regardless of `repeats`; only `ac_mark_fired` (disable vs. keep
   recurring) and `skip_next` (repeats-only) branch on it.
 - **The ring screen holds the backlight on**: `trigger_alarm()` calls
-  `light_enable(true)` and `alarm_window_unload()` calls `light_enable(false)`, so the
-  backlight stays lit for exactly as long as the ring window exists (including when
-  it is dismissed by Stop/Snooze/auto-dismiss) and returns to the system timeout after.
+  `light_enable(true)` and `alarm_window_unload()` calls `light_enable(false)` and then
+  `light_enable_interaction()`, so the backlight stays lit for exactly as long as the
+  ring window exists (including when it is dismissed by Stop/Snooze/auto-dismiss) and
+  then runs the system's usual timeout, as after a button press.
 - **Ring screen click config is intentionally asymmetric**: DOWN needs
   `window_multi_click_subscribe` (double-click to stop) while UP is a plain
   single-click (snooze). BACK is explicitly subscribed to a no-op handler —

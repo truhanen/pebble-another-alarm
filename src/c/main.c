@@ -2049,7 +2049,8 @@ static void alarm_window_load(Window *w) {
 }
 
 static void alarm_window_unload(Window *w) {
-  light_enable(false);   // back to the system's normal backlight timeout
+  light_enable(false);   // back to the system's normal backlight handling...
+  light_enable_interaction();   // ...and restart its usual timeout, as after a button press
   alarm_buzz_stop();
   alarm_cancel_auto_dismiss();
   text_layer_destroy(s_alarm_title); s_alarm_title = NULL;
